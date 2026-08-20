@@ -1,7 +1,9 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js'
-import { cliName } from './defaults.js'
+import {
+	Client,
+	StreamableHTTPClientTransport,
+	UnauthorizedError,
+} from '@modelcontextprotocol/client'
+import { cliName, modernMcpProtocolVersion } from './defaults.js'
 import { ensureFreshCredentials, refreshStoredCredentials } from './auth.js'
 import { readPackageVersion } from './package-info.js'
 import { redactError } from './redact.js'
@@ -21,34 +23,6 @@ export type ToolCallResult = {
 	isError?: boolean
 }
 
-function requestMethod(
-	input: Parameters<typeof fetch>[0],
-	init?: Parameters<typeof fetch>[1],
-) {
-	if (init?.method) return init.method.toUpperCase()
-	if (typeof Request !== 'undefined' && input instanceof Request) {
-		return input.method.toUpperCase()
-	}
-	return 'GET'
-}
-
-/**
- * Streamable HTTP clients open an optional GET SSE after initialize. Kody's
- * sessionful `/mcp` GET holds that session until the stream ends, so the
- * follow-up POST (`tools/list`, `search`, `execute`) never completes. The
- * spec treats GET SSE as optional; 405 tells the SDK to stay on POST.
- */
-export function createMcpFetch(fetchFn: typeof fetch = fetch): typeof fetch {
-	return (input, init) => {
-		if (requestMethod(input, init) === 'GET') {
-			return Promise.resolve(
-				new Response('Method Not Allowed', { status: 405 }),
-			)
-		}
-		return fetchFn(input, init)
-	}
-}
-
 async function connect(
 	mcpUrl: string,
 	accessToken: string,
@@ -60,12 +34,15 @@ async function connect(
 				Authorization: `Bearer ${accessToken}`,
 			},
 		},
-		fetch: createMcpFetch(fetchFn ?? fetch),
+		...(fetchFn ? { fetch: fetchFn } : {}),
 	})
-	const client = new Client({
-		name: cliName,
-		version: readPackageVersion(),
-	})
+	const client = new Client(
+		{
+			name: cliName,
+			version: readPackageVersion(),
+		},
+		{ versionNegotiation: { mode: { pin: modernMcpProtocolVersion } } },
+	)
 	await client.connect(transport)
 	return { client, transport }
 }
@@ -168,5 +145,8 @@ export function formatToolResult(
 function isUnauthorized(error: unknown): boolean {
 	if (!error || typeof error !== 'object') return false
 	const status = 'code' in error ? error.code : undefined
-	return status === 401 || (error instanceof Error && /401|unauthorized/i.test(error.message))
+	return (
+		status === 401 ||
+		(error instanceof Error && /401|unauthorized/i.test(error.message))
+	)
 }

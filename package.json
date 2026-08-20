@@ -47,6 +47,7 @@
 		"access": "public"
 	},
 	"dependencies": {
+		"@modelcontextprotocol/client": "2.0.0",
 		"@modelcontextprotocol/sdk": "^1.30.0",
 		"@napi-rs/keyring": "^1.3.0"
 	},
