@@ -21,6 +21,34 @@ export type ToolCallResult = {
 	isError?: boolean
 }
 
+function requestMethod(
+	input: Parameters<typeof fetch>[0],
+	init?: Parameters<typeof fetch>[1],
+) {
+	if (init?.method) return init.method.toUpperCase()
+	if (typeof Request !== 'undefined' && input instanceof Request) {
+		return input.method.toUpperCase()
+	}
+	return 'GET'
+}
+
+/**
+ * Streamable HTTP clients open an optional GET SSE after initialize. Kody's
+ * sessionful `/mcp` GET holds that session until the stream ends, so the
+ * follow-up POST (`tools/list`, `search`, `execute`) never completes. The
+ * spec treats GET SSE as optional; 405 tells the SDK to stay on POST.
+ */
+export function createMcpFetch(fetchFn: typeof fetch = fetch): typeof fetch {
+	return (input, init) => {
+		if (requestMethod(input, init) === 'GET') {
+			return Promise.resolve(
+				new Response('Method Not Allowed', { status: 405 }),
+			)
+		}
+		return fetchFn(input, init)
+	}
+}
+
 async function connect(
 	mcpUrl: string,
 	accessToken: string,
@@ -32,7 +60,7 @@ async function connect(
 				Authorization: `Bearer ${accessToken}`,
 			},
 		},
-		fetch: fetchFn,
+		fetch: createMcpFetch(fetchFn ?? fetch),
 	})
 	const client = new Client({
 		name: cliName,
