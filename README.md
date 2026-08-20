@@ -45,7 +45,7 @@ Credentials are stored in the OS secret store:
 - Linux: Secret Service / libsecret
 
 If the keychain is unavailable (common on headless Linux), the CLI writes a
-`0600` file under `$XDG_CONFIG_HOME/kody` (or `%APPDATA%\kody` on Windows,
+`0600` file under `$XDG_CONFIG_HOME/kody` (or `%APPDATA%\\kody` on Windows,
 `~/Library/Application Support/kody` on macOS). Tokens are never printed.
 
 Access tokens refresh automatically on expiry or HTTP 401.
@@ -58,8 +58,6 @@ conventional commits on `main` publish `@kodycodes/cli` with npm provenance
 (`id-token: write`). Version in `package.json` stays `0.0.0-semantically-released`.
 
 Trusted publishing for `@kodycodes/cli` is attached to this GitHub repository.
-Until that is connected, the release job may fail at npm publish — the workflow
-is still the source of truth.
 
 ## License
 
