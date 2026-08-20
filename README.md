@@ -2,7 +2,8 @@
 
 Turn one-off agent work into something you can rerun: a local MCP client for
 [Kody](https://kody.codes) with login, OS keychain token storage, `search`, and
-`execute`. Talks MCP `2026-07-28` (Kody's stateless `/mcp` lane).
+`execute`. Talks MCP `2026-07-28` (Kody's stateless `/mcp` lane) and logs in
+with Client ID Metadata Documents (SEP-991).
 
 ```bash
 npx @kodycodes/cli login
@@ -25,7 +26,7 @@ Or run via `npx @kodycodes/cli` without a global install.
 
 | Command | Purpose |
 | --- | --- |
-| `kody login` | Browser OAuth (DCR + PKCE). Stores access and refresh tokens. |
+| `kody login` | Browser OAuth (CIMD + PKCE). Stores access and refresh tokens. |
 | `kody logout` | Deletes stored credentials. |
 | `kody status` | Shows login state without printing secrets. |
 | `kody whoami` | Confirms the MCP connection and lists tools. |

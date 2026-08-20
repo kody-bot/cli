@@ -5,24 +5,18 @@ import {
 	type ServerResponse,
 } from 'node:http'
 import {
-	discoverOAuthServerInfo,
-	exchangeAuthorization,
-	refreshAuthorization,
-	registerClient,
-	startAuthorization,
-} from '@modelcontextprotocol/sdk/client/auth.js'
-import type {
-	AuthorizationServerMetadata,
-	OAuthClientInformationMixed,
-	OAuthTokens,
-} from '@modelcontextprotocol/sdk/shared/auth.js'
+	auth,
+	type OAuthClientInformationMixed,
+	type OAuthTokens,
+} from '@modelcontextprotocol/client'
 import {
 	accessTokenSkewMs,
+	cliRedirectUrl,
 	defaultMcpUrl,
 	defaultScopes,
 	loginTimeoutMs,
 } from './defaults.js'
-import { openUrl } from './open-url.js'
+import { createCliOAuthProvider } from './oauth-provider.js'
 import { redactError } from './redact.js'
 import {
 	loadCredentials,
@@ -39,17 +33,6 @@ export type LoginOptions = {
 	now?: () => number
 	fetchFn?: typeof fetch
 	onAuthorizationUrl?: (url: URL) => void
-}
-
-function clientInformationFrom(
-	credentials: StoredCredentials,
-): OAuthClientInformationMixed {
-	return {
-		client_id: credentials.clientId,
-		...(credentials.clientSecret
-			? { client_secret: credentials.clientSecret }
-			: {}),
-	}
 }
 
 export function isAccessTokenExpired(
@@ -92,6 +75,37 @@ export function credentialsFromTokens(input: {
 	}
 }
 
+async function persistAuthorizedSession(input: {
+	mcpUrl: string
+	provider: ReturnType<typeof createCliOAuthProvider>
+	backend?: SecretBackend
+	previous?: StoredCredentials
+	now?: number
+}): Promise<{
+	credentials: StoredCredentials
+	saved: ReturnType<typeof saveCredentials>
+}> {
+	const tokens = await input.provider.tokens()
+	const client = await input.provider.clientInformation()
+	if (!tokens || !client) {
+		throw new Error('OAuth completed without tokens. Run `kody login`.')
+	}
+	const credentials = credentialsFromTokens({
+		mcpUrl: input.mcpUrl,
+		resource: input.mcpUrl,
+		authorizationServerUrl:
+			tokens.issuer ??
+			input.previous?.authorizationServerUrl ??
+			new URL(input.mcpUrl).origin,
+		client,
+		tokens,
+		previous: input.previous,
+		now: input.now,
+	})
+	const saved = saveCredentials(credentials, input.backend)
+	return { credentials, saved }
+}
+
 export async function refreshStoredCredentials(input: {
 	credentials: StoredCredentials
 	backend?: SecretBackend
@@ -102,26 +116,29 @@ export async function refreshStoredCredentials(input: {
 	if (!credentials.refreshToken) {
 		throw new Error('No refresh token is stored. Run `kody login`.')
 	}
-	const info = await discoverOAuthServerInfo(credentials.mcpUrl, {
-		fetchFn: input.fetchFn,
-	})
-	const tokens = await refreshAuthorization(info.authorizationServerUrl, {
-		metadata: info.authorizationServerMetadata,
-		clientInformation: clientInformationFrom(credentials),
-		refreshToken: credentials.refreshToken,
-		resource: new URL(credentials.resource),
-		fetchFn: input.fetchFn,
-	})
-	const next = credentialsFromTokens({
+	const provider = createCliOAuthProvider({
 		mcpUrl: credentials.mcpUrl,
-		resource: credentials.resource,
-		authorizationServerUrl: credentials.authorizationServerUrl,
-		client: clientInformationFrom(credentials),
-		tokens,
+		redirectUri: cliRedirectUrl(),
+		existing: credentials,
+		loadStoredTokens: true,
+		openBrowser: false,
+		expectedState: crypto.randomUUID(),
+	})
+	const result = await auth(provider, {
+		serverUrl: credentials.mcpUrl,
+		scope: defaultScopes.join(' '),
+		fetchFn: input.fetchFn,
+	})
+	if (result !== 'AUTHORIZED') {
+		throw new Error('Token refresh requires a new `kody login`.')
+	}
+	const { credentials: next } = await persistAuthorizedSession({
+		mcpUrl: credentials.mcpUrl,
+		provider,
+		backend: input.backend,
 		previous: credentials,
 		now: input.now,
 	})
-	saveCredentials(next, input.backend)
 	return next
 }
 
@@ -147,22 +164,22 @@ export async function ensureFreshCredentials(input: {
 	})
 }
 
-function startCallbackServer(): Promise<{ server: Server; redirectUri: URL }> {
+function startCallbackServer(redirectUri: URL): Promise<Server> {
 	return new Promise((resolve, reject) => {
 		const server = createServer()
-		server.listen(0, '127.0.0.1', () => {
-			const address = server.address()
-			if (!address || typeof address === 'string') {
-				server.close()
-				reject(new Error('Could not bind a localhost callback port.'))
+		const port = Number(redirectUri.port)
+		server.listen(port, redirectUri.hostname, () => resolve(server))
+		server.on('error', (error) => {
+			if ('code' in error && error.code === 'EADDRINUSE') {
+				reject(
+					new Error(
+						`Login callback port ${port} is in use. Stop the other listener and retry.`,
+					),
+				)
 				return
 			}
-			resolve({
-				server,
-				redirectUri: new URL(`http://127.0.0.1:${address.port}/callback`),
-			})
+			reject(error)
 		})
-		server.on('error', reject)
 	})
 }
 
@@ -171,13 +188,13 @@ function waitForCallback(input: {
 	redirectUri: URL
 	expectedState: string
 	timeoutMs: number
-}): Promise<string> {
+}): Promise<{ code: string; iss?: string }> {
 	return new Promise((resolve, reject) => {
-		const finish = (error: Error | null, code?: string) => {
+		const finish = (error: Error | null, result?: { code: string; iss?: string }) => {
 			clearTimeout(timer)
 			input.server.close()
 			if (error) reject(error)
-			else resolve(code ?? '')
+			else resolve(result ?? { code: '' })
 		}
 		const timer = setTimeout(() => {
 			finish(new Error('Timed out waiting for the browser login.'))
@@ -201,6 +218,7 @@ function waitForCallback(input: {
 				}
 				const state = url.searchParams.get('state')
 				const code = url.searchParams.get('code')
+				const iss = url.searchParams.get('iss') ?? undefined
 				if (state !== input.expectedState || !code) {
 					response
 						.writeHead(400, { 'Content-Type': 'text/html' })
@@ -211,7 +229,7 @@ function waitForCallback(input: {
 				response
 					.writeHead(200, { 'Content-Type': 'text/html' })
 					.end('<p>Kody CLI is signed in. You can close this window.</p>')
-				finish(null, code)
+				finish(null, { code, ...(iss ? { iss } : {}) })
 			} catch (error) {
 				finish(redactError(error))
 			}
@@ -226,70 +244,53 @@ export async function login(options: LoginOptions = {}): Promise<{
 	backendPath?: string
 }> {
 	const mcpUrl = options.mcpUrl ?? defaultMcpUrl
-	const fetchFn = options.fetchFn
-	const info = await discoverOAuthServerInfo(mcpUrl, { fetchFn })
-	const resource =
-		info.resourceMetadata?.resource ??
-		`${new URL(mcpUrl).origin}${new URL(mcpUrl).pathname}`
-	const { server, redirectUri } = await startCallbackServer()
+	const redirectUri = cliRedirectUrl()
+	const expectedState = crypto.randomUUID()
+	const server = await startCallbackServer(redirectUri)
+	let authorizationUrl = redirectUri
+	const provider = createCliOAuthProvider({
+		mcpUrl,
+		redirectUri,
+		loadStoredTokens: false,
+		openBrowser: options.openBrowser !== false,
+		expectedState,
+		onAuthorizationUrl: (url) => {
+			authorizationUrl = url
+			options.onAuthorizationUrl?.(url)
+		},
+	})
 	try {
-		const metadata = info.authorizationServerMetadata as
-			| AuthorizationServerMetadata
-			| undefined
-		const client = await registerClient(info.authorizationServerUrl, {
-			metadata,
-			clientMetadata: {
-				redirect_uris: [redirectUri.href],
-				client_name: 'Kody CLI',
-				client_uri: 'https://github.com/kody-bot/cli',
-				grant_types: ['authorization_code', 'refresh_token'],
-				response_types: ['code'],
-				token_endpoint_auth_method: 'none',
-				scope: defaultScopes.join(' '),
-			},
+		const first = await auth(provider, {
+			serverUrl: mcpUrl,
 			scope: defaultScopes.join(' '),
-			fetchFn,
+			fetchFn: options.fetchFn,
 		})
-		const state = crypto.randomUUID()
-		const { authorizationUrl, codeVerifier } = await startAuthorization(
-			info.authorizationServerUrl,
-			{
-				metadata,
-				clientInformation: client,
-				redirectUrl: redirectUri,
+		if (first !== 'AUTHORIZED') {
+			const callback = await waitForCallback({
+				server,
+				redirectUri,
+				expectedState,
+				timeoutMs: options.timeoutMs ?? loginTimeoutMs,
+			})
+			const exchanged = await auth(provider, {
+				serverUrl: mcpUrl,
+				authorizationCode: callback.code,
+				...(callback.iss ? { iss: callback.iss } : {}),
 				scope: defaultScopes.join(' '),
-				state,
-				resource: new URL(resource),
-			},
-		)
-		options.onAuthorizationUrl?.(authorizationUrl)
-		if (options.openBrowser !== false) {
-			await openUrl(authorizationUrl.href)
+				fetchFn: options.fetchFn,
+			})
+			if (exchanged !== 'AUTHORIZED') {
+				throw new Error('OAuth redirect completed without tokens.')
+			}
+		} else {
+			server.close()
 		}
-		const code = await waitForCallback({
-			server,
-			redirectUri,
-			expectedState: state,
-			timeoutMs: options.timeoutMs ?? loginTimeoutMs,
-		})
-		const tokens = await exchangeAuthorization(info.authorizationServerUrl, {
-			metadata,
-			clientInformation: client,
-			authorizationCode: code,
-			codeVerifier,
-			redirectUri,
-			resource: new URL(resource),
-			fetchFn,
-		})
-		const credentials = credentialsFromTokens({
+		const { credentials, saved } = await persistAuthorizedSession({
 			mcpUrl,
-			resource,
-			authorizationServerUrl: info.authorizationServerUrl,
-			client,
-			tokens,
+			provider,
+			backend: options.backend,
 			now: options.now?.(),
 		})
-		const saved = saveCredentials(credentials, options.backend)
 		return {
 			credentials,
 			authorizationUrl,
