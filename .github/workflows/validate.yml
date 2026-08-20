@@ -26,18 +26,18 @@ jobs:
         node: [lts/-1, lts/*, latest]
     runs-on: ubuntu-latest
     steps:
-      - name: ⬇️ Checkout repo
+      - name: â¬ï¸ Checkout repo
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
-      - name: ⎔ Setup node
+      - name: â Setup node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ matrix.node }}
 
-      - name: 📥 Download deps
-        run: npm ci
+      - name: ð¥ Download deps
+        run: npm install
 
-      - name: ▶️ Run validate script
+      - name: â¶ï¸ Run validate script
         run: npm run validate
 
   build-release-artifact:
@@ -47,19 +47,19 @@ jobs:
       contents: read
     if: ${{ github.repository == 'kody-bot/cli' && github.event_name == 'push' }}
     steps:
-      - name: ⬇️ Checkout repo
+      - name: â¬ï¸ Checkout repo
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
-      - name: ⎔ Setup node
+      - name: â Setup node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: lts/*
           package-manager-cache: false
 
       - name: Install deps
-        run: npm ci
+        run: npm install
 
-      - name: 🏗 Run build script
+      - name: ð Run build script
         run: npm run build
 
       - name: Upload package artifact
@@ -80,10 +80,10 @@ jobs:
       pull-requests: write
     if: ${{ github.repository == 'kody-bot/cli' && github.event_name == 'push' }}
     steps:
-      - name: ⬇️ Checkout repo
+      - name: â¬ï¸ Checkout repo
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
-      - name: ⎔ Setup node
+      - name: â Setup node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: lts/*
@@ -96,7 +96,7 @@ jobs:
           name: npm-package-dist
           path: dist
 
-      - name: 🚀 Release
+      - name: ð Release
         uses: cycjimmy/semantic-release-action@ba330626c4750c19d8299de843f05c7aa5574f62 # v5.0.2
         with:
           semantic_version: 25
