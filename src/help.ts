@@ -1,4 +1,5 @@
-import { defaultMcpUrl } from './defaults.js'
+import { defaultMcpUrl, onboardingUrl } from './defaults.js'
+import { hostIds } from './host-catalog.js'
 import { readPackageVersion } from './package-info.js'
 
 export const usage = `Kody CLI ${readPackageVersion()}
@@ -12,7 +13,14 @@ Usage:
   kody whoami [--mcp-url <url>] [--json]
   kody search [query] [--entity <ref>] [--domain <id>] [--limit <n>] [--json]
   kody execute [--code <esm>] [--file <path>] [--params <json>] [--conversation-id <id>] [--json]
+  kody install [--mcp-url <url>] [--clients <ids>] [--yes] [--project] [--json]
   kody skill install [--project]
+
+  kody install configures running local MCP clients (Cursor, Claude Desktop,
+  VS Code, Goose, and others). For web-based clients (ChatGPT, Claude.ai, Grok),
+  see ${onboardingUrl(defaultMcpUrl)}
+
+  --clients  Comma-separated ids: ${hostIds.join(', ')}
 
 Environment:
   KODY_MCP_URL   Override the default MCP URL (${defaultMcpUrl})

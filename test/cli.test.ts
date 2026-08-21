@@ -11,6 +11,7 @@ import { createFileBackend, saveCredentials } from '../src/store.js'
 
 test('resolveCommand maps subcommands and flags', () => {
 	assert.equal(resolveCommand(['search', 'what can you do']).command, 'search')
+	assert.equal(resolveCommand(['install', '--yes']).command, 'install')
 	assert.equal(resolveCommand(['--help']).command, 'help')
 	assert.equal(resolveCommand(['--version']).command, 'version')
 	assert.equal(

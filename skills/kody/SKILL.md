@@ -25,6 +25,16 @@ Then install this skill into the current host if it is not already present:
 npx @kodycodes/cli skill install
 ```
 
+To add Kody as a remote MCP server in running local agents:
+
+```bash
+npx @kodycodes/cli install
+```
+
+That command only lists local clients that are currently running. For web-based
+clients (ChatGPT, Claude.ai, Grok), point the user at
+https://kody.codes/onboarding.
+
 ## Login
 
 ```bash

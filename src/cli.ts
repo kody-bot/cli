@@ -5,6 +5,7 @@ import { usage } from './help.js'
 import { ensureFreshCredentials, login } from './auth.js'
 import { deleteCredentials, loadCredentials } from './store.js'
 import { callKodyTool, formatToolResult, listKodyTools } from './mcp.js'
+import { runInstall } from './install.js'
 import { installSkill } from './skill.js'
 import { readPackageVersion } from './package-info.js'
 import { redactError } from './redact.js'
@@ -16,6 +17,7 @@ export type CommandName =
 	| 'whoami'
 	| 'search'
 	| 'execute'
+	| 'install'
 	| 'skill'
 	| 'help'
 	| 'version'
@@ -43,6 +45,8 @@ function parseKnown(args: Array<string>) {
 			'conversation-id': { type: 'string' },
 			project: { type: 'boolean' },
 			'no-browser': { type: 'boolean' },
+			clients: { type: 'string' },
+			yes: { type: 'boolean', short: 'y' },
 		},
 	})
 }
@@ -68,6 +72,7 @@ export function resolveCommand(argv: Array<string>): {
 		case 'whoami':
 		case 'search':
 		case 'execute':
+		case 'install':
 		case 'skill':
 		case 'help':
 		case 'version':
@@ -213,6 +218,20 @@ async function dispatch(
 			const result = await callKodyTool({ name: 'execute', args, mcpUrl })
 			write(formatToolResult(result, json))
 			return result.isError ? 1 : 0
+		}
+		case 'install': {
+			const result = await runInstall(
+				{
+					mcpUrl,
+					clients:
+						typeof parsed.values.clients === 'string' ? parsed.values.clients : undefined,
+					yes: parsed.values.yes === true,
+					project: parsed.values.project === true,
+					json,
+				},
+				{ stdout: write },
+			)
+			return result.code
 		}
 		case 'skill': {
 			const action = parsed.positionals[0] ?? 'install'
