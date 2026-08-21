@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util'
 import { readFile } from 'node:fs/promises'
-import { defaultMcpUrl } from './defaults.js'
+import { defaultMcpUrl, modernMcpProtocolVersion } from './defaults.js'
 import { usage } from './help.js'
 import { ensureFreshCredentials, login } from './auth.js'
 import { deleteCredentials, loadCredentials } from './store.js'
@@ -165,6 +165,7 @@ async function dispatch(
 					`${JSON.stringify(
 						{
 							mcpUrl: credentials.mcpUrl,
+							protocol: modernMcpProtocolVersion,
 							scope: credentials.scope ?? null,
 							tools: tools.map((tool) => tool.name),
 						},
@@ -175,7 +176,7 @@ async function dispatch(
 				return 0
 			}
 			write(
-				`Connected to ${credentials.mcpUrl}\nTools: ${tools.map((tool) => tool.name).join(', ') || '(none)'}\n`,
+				`Connected to ${credentials.mcpUrl} (${modernMcpProtocolVersion})\nTools: ${tools.map((tool) => tool.name).join(', ') || '(none)'}\n`,
 			)
 			return 0
 		}
@@ -198,7 +199,7 @@ async function dispatch(
 						? parsed.values.file === '-'
 							? await readStdin()
 							: await readFile(parsed.values.file, 'utf8')
-					: parsed.positionals.join('\n').trim()
+						: parsed.positionals.join('\n').trim()
 			if (!code) {
 				throw new Error('Provide --code, --file, or a module string.')
 			}

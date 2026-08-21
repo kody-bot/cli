@@ -1,7 +1,9 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js'
-import { cliName } from './defaults.js'
+import {
+	Client,
+	StreamableHTTPClientTransport,
+	UnauthorizedError,
+} from '@modelcontextprotocol/client'
+import { cliName, modernMcpProtocolVersion } from './defaults.js'
 import { ensureFreshCredentials, refreshStoredCredentials } from './auth.js'
 import { readPackageVersion } from './package-info.js'
 import { redactError } from './redact.js'
@@ -32,12 +34,15 @@ async function connect(
 				Authorization: `Bearer ${accessToken}`,
 			},
 		},
-		fetch: fetchFn,
+		...(fetchFn ? { fetch: fetchFn } : {}),
 	})
-	const client = new Client({
-		name: cliName,
-		version: readPackageVersion(),
-	})
+	const client = new Client(
+		{
+			name: cliName,
+			version: readPackageVersion(),
+		},
+		{ versionNegotiation: { mode: { pin: modernMcpProtocolVersion } } },
+	)
 	await client.connect(transport)
 	return { client, transport }
 }
@@ -140,5 +145,8 @@ export function formatToolResult(
 function isUnauthorized(error: unknown): boolean {
 	if (!error || typeof error !== 'object') return false
 	const status = 'code' in error ? error.code : undefined
-	return status === 401 || (error instanceof Error && /401|unauthorized/i.test(error.message))
+	return (
+		status === 401 ||
+		(error instanceof Error && /401|unauthorized/i.test(error.message))
+	)
 }

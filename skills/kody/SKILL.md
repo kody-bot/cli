@@ -31,7 +31,7 @@ npx @kodycodes/cli skill install
 kody login
 ```
 
-The CLI opens a browser for Kody OAuth (PKCE + dynamic client registration).
+The CLI opens a browser for Kody OAuth (PKCE + Client ID Metadata Documents).
 If a browser cannot open, it prints the URL. Tokens (access + refresh) are
 stored in the OS keychain on macOS, Windows, and Linux. Linux without Secret
 Service falls back to a `0600` file under `$XDG_CONFIG_HOME/kody`.

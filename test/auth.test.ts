@@ -4,6 +4,15 @@ import {
 	credentialsFromTokens,
 	isAccessTokenExpired,
 } from '../src/auth.js'
+import {
+	cliClientMetadataUrl,
+	cliRedirectUrl,
+	modernMcpProtocolVersion,
+} from '../src/defaults.js'
+import {
+	buildCliClientMetadata,
+	createCliOAuthProvider,
+} from '../src/oauth-provider.js'
 import type { StoredCredentials } from '../src/store.js'
 
 const previous: StoredCredentials = {
@@ -72,4 +81,31 @@ test('credentialsFromTokens stores a rotated refresh token', () => {
 	assert.equal(next.refreshToken, 'rotated')
 	assert.equal(next.clientSecret, 'secret')
 	assert.equal(next.expiresAt, 10_000)
+})
+
+test('CLI OAuth identity is CIMD with a fixed loopback redirect', async () => {
+	const mcpUrl = 'https://kody.codes/mcp'
+	const metadata = buildCliClientMetadata()
+	const provider = createCliOAuthProvider({
+		mcpUrl,
+		redirectUri: cliRedirectUrl(),
+		loadStoredTokens: false,
+		openBrowser: false,
+		expectedState: 'state',
+	})
+	assert.equal(
+		cliClientMetadataUrl(mcpUrl),
+		'https://kody.codes/oauth/cli-client-metadata.json',
+	)
+	assert.equal(metadata.client_name, '@kodycodes/cli')
+	assert.deepEqual(metadata.redirect_uris, [cliRedirectUrl().href])
+	assert.equal(metadata.token_endpoint_auth_method, 'none')
+	assert.equal(metadata.application_type, 'native')
+	assert.equal(modernMcpProtocolVersion, '2026-07-28')
+	assert.equal(
+		provider.clientMetadataUrl,
+		'https://kody.codes/oauth/cli-client-metadata.json',
+	)
+	const client = await provider.clientInformation()
+	assert.equal(client?.client_id, provider.clientMetadataUrl)
 })

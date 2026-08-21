@@ -2,7 +2,8 @@
 
 Turn one-off agent work into something you can rerun: a local MCP client for
 [Kody](https://kody.codes) with login, OS keychain token storage, `search`, and
-`execute`.
+`execute`. Talks MCP `2026-07-28` (Kody's stateless `/mcp` lane) and logs in
+with Client ID Metadata Documents (SEP-991).
 
 ```bash
 npx @kodycodes/cli login
@@ -25,7 +26,7 @@ Or run via `npx @kodycodes/cli` without a global install.
 
 | Command | Purpose |
 | --- | --- |
-| `kody login` | Browser OAuth (DCR + PKCE). Stores access and refresh tokens. |
+| `kody login` | Browser OAuth (CIMD + PKCE). Stores access and refresh tokens. |
 | `kody logout` | Deletes stored credentials. |
 | `kody status` | Shows login state without printing secrets. |
 | `kody whoami` | Confirms the MCP connection and lists tools. |
@@ -45,7 +46,7 @@ Credentials are stored in the OS secret store:
 - Linux: Secret Service / libsecret
 
 If the keychain is unavailable (common on headless Linux), the CLI writes a
-`0600` file under `$XDG_CONFIG_HOME/kody` (or `%APPDATA%\\kody` on Windows,
+`0600` file under `$XDG_CONFIG_HOME/kody` (or `%APPDATA%\kody` on Windows,
 `~/Library/Application Support/kody` on macOS). Tokens are never printed.
 
 Access tokens refresh automatically on expiry or HTTP 401.
