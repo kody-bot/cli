@@ -67,8 +67,7 @@ export async function runInstall(
 		write(
 			[
 				'Multiple local agents are running. Re-run with --yes or --clients <ids>.',
-			
-`Detected: ${detected.map((host) => host.id).join(', ')}`,
+				`Detected: ${detected.map((host) => host.id).join(', ')}`,
 				'',
 			].join('\n'),
 		)
@@ -101,7 +100,7 @@ export async function runInstall(
 	return { code: 0, results }
 }
 
-export function noRunningAgentsMessage(mcpUrl: string {
+export function noRunningAgentsMessage(mcpUrl: string): string {
 	return [
 		'No local MCP agents are running.',
 		'Start Cursor, Claude Desktop, VS Code, Goose, or another local client, then run kody install again.',
