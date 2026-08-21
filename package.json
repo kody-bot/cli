@@ -47,8 +47,11 @@
 		"access": "public"
 	},
 	"dependencies": {
+		"@inquirer/checkbox": "^5.2.2",
 		"@modelcontextprotocol/client": "2.0.0",
-		"@napi-rs/keyring": "^1.3.0"
+		"@napi-rs/keyring": "^1.3.0",
+		"add-mcp": "^2.0.0",
+		"ps-list": "^9.0.0"
 	},
 	"devDependencies": {
 		"@types/node": "^24.5.2",

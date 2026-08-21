@@ -18,3 +18,9 @@ export function cliClientMetadataUrl(mcpUrl: string): string {
 export function cliRedirectUrl(port: number = oauthCallbackPort): URL {
 	return new URL(`http://127.0.0.1:${port}/callback`)
 }
+
+export const onboardingPath = '/onboarding'
+
+export function onboardingUrl(mcpUrl: string): string {
+	return new URL(onboardingPath, mcpUrl).href
+}
