@@ -4,7 +4,7 @@ import { readPackageVersion } from './package-info.js'
 
 export const usage = `Kody CLI ${readPackageVersion()}
 
-A local MCP client for https://kody.codes — login once, then search and execute.
+Install Kody as a remote MCP server in local agents, or use this CLI as a local client.
 
 Usage:
   kody login [--mcp-url <url>] [--no-browser]

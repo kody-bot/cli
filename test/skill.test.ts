@@ -15,7 +15,10 @@ test('installSkill writes the bundled skill to user host directories', async () 
 	const targets = await installSkill({ home, sourcePath })
 	assert.equal(targets.length, userSkillTargets(home).length)
 	for (const target of targets) {
-		assert.match(readFileSync(target.path, 'utf8'), /kody login/)
+		const body = readFileSync(target.path, 'utf8')
+		assert.match(body, /Install the MCP server \(recommended\)/)
+		assert.match(body, /npx @kodycodes\/cli install/)
+		assert.match(body, /kody login/)
 	}
 })
 
