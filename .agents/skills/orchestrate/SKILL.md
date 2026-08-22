@@ -4,7 +4,8 @@ description: >
   Orchestrate sub-agents for large tasks inside a single environment: plan,
   delegate coding to cheap/fast models, parallelize the critical path, keep
   reviews lean, and close every loop. Use when acting as an orchestrator or
-  writing a kickoff for one. Prefer implement when fan-out does not clearly pay.
+  writing a kickoff for one. Prefer implement when fan-out does not clearly
+  pay. For multi-environment fleets, use conduct instead.
 ---
 
 # Orchestrate
@@ -12,7 +13,7 @@ description: >
 This is the kody `orchestrate` skill, scoped to `@kodycodes/cli`.
 
 Fan out **sub-agents inside one environment** (shared checkout). This repo is
-one package; multi-environment fleets are out of scope here.
+one package; multi-environment fleets (`conduct`) are out of scope here.
 
 Two modes: **be** the orchestrator, or **spawn** one (smarter model) if you are
 optimized for cheap/fast execution.
@@ -46,5 +47,5 @@ optimized for cheap/fast execution.
 ## Kickoff (when spawning an orchestrator)
 
 Keep it short: goals + constraints + out-of-scope; "you orchestrate, don't bulk
-code"; preferred implementer model; single-environment; done = falsifiable.
-Point at this skill.
+code"; preferred implementer model; single-environment (not conduct); done =
+falsifiable. Point at this skill.
