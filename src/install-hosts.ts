@@ -318,8 +318,14 @@ export async function applyHost(input: {
 		case 'antigravity':
 		case 'cline':
 		case 'cline-cli':
+		case 'fx':
 		case 'grok-build':
+		case 'kilo-code':
+		case 'kimi-code':
+		case 'kiro-cli':
+		case 'mastracode':
 		case 'mcporter':
+		case 'pi':
 			return addMcpResult(input, [
 				`Restart ${host.label} if the new server does not appear.`,
 				oauthNote,

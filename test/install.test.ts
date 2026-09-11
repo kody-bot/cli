@@ -77,6 +77,28 @@ test('runInstall does not list web clients when nothing local is running', async
 	assert.doesNotMatch(output, /chatgpt/)
 })
 
+test('runInstall writes Kilo Code config through add-mcp', async () => {
+	const upserts: Array<{ agent: string; local?: boolean }> = []
+	const result = await runInstall(
+		{ mcpUrl, clients: 'kilo-code' },
+		{
+			stdout: () => undefined,
+			home: '/home/me',
+			cwd: '/proj',
+			isTTY: false,
+			listProcesses: async () => [],
+			runtime: {
+				upsertServer: (agent, _name, _config, options) => {
+					upserts.push({ agent, local: options?.local })
+					return { success: true, path: '/home/me/.config/kilo/kilo.json' }
+				},
+			},
+		},
+	)
+	assert.equal(result.results[0]?.status, 'wrote')
+	assert.deepEqual(upserts, [{ agent: 'kilo-code', local: false }])
+})
+
 test('runInstall writes leftover VS Code Insiders config without add-mcp', async () => {
 	const files = new Map<string, string>()
 	const upserts: Array<string> = []
