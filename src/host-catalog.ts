@@ -11,12 +11,18 @@ export const hostIds = [
 	'codex',
 	'copilot-cli',
 	'cursor',
+	'fx',
 	'gemini-cli',
 	'goose',
 	'grok-build',
 	'jetbrains',
+	'kilo-code',
+	'kimi-code',
+	'kiro-cli',
+	'mastracode',
 	'mcporter',
 	'opencode',
+	'pi',
 	'qwen-code',
 	'visual-studio',
 	'vscode',
@@ -42,6 +48,12 @@ const hostAliases: Record<string, HostId> = {
 	cascade: 'windsurf',
 	gemini: 'gemini-cli',
 	'github-copilot-cli': 'copilot-cli',
+	kilo: 'kilo-code',
+	kilocode: 'kilo-code',
+	kimi: 'kimi-code',
+	kiro: 'kiro-cli',
+	mastra: 'mastracode',
+	'pi-agent': 'pi',
 }
 
 function isClaudeDesktop(process: ProcessInfo): boolean {
@@ -231,6 +243,45 @@ export const hostCatalog: ReadonlyArray<HostDefinition> = [
 		matches: (process) => nameEquals(process, 'mcporter'),
 	},
 	{
+		id: 'kilo-code',
+		label: 'Kilo Code',
+		kind: 'file',
+		matches: (process) =>
+			nameEquals(process, 'kilo') ||
+			haystackMatches(process, /Kilo\.app|kilocode\.kilo-code|kilo-code/iu),
+	},
+	{
+		id: 'kimi-code',
+		label: 'Kimi Code',
+		kind: 'command',
+		matches: (process) => nameEquals(process, 'kimi'),
+	},
+	{
+		id: 'kiro-cli',
+		label: 'Kiro CLI',
+		kind: 'file',
+		matches: (process) =>
+			nameEquals(process, 'kiro') || haystackMatches(process, /Kiro\.app/iu),
+	},
+	{
+		id: 'mastracode',
+		label: 'Mastra Code',
+		kind: 'file',
+		matches: (process) => nameEquals(process, 'mastra', 'mastracode'),
+	},
+	{
+		id: 'fx',
+		label: 'fx',
+		kind: 'file',
+		matches: (process) => nameEquals(process, 'fx'),
+	},
+	{
+		id: 'pi',
+		label: 'Pi',
+		kind: 'file',
+		matches: (process) => nameEquals(process, 'pi'),
+	},
+	{
 		id: 'visual-studio',
 		label: 'Visual Studio',
 		kind: 'file',
@@ -303,10 +354,21 @@ export function hostConfigPath(input: {
 				return join(input.cwd, '.grok', 'config.toml')
 			case 'mcporter':
 				return join(input.cwd, 'config', 'mcporter.json')
+			case 'kilo-code':
+				return join(input.cwd, 'kilo.json')
+			case 'kimi-code':
+				return join(input.cwd, '.kimi-code', 'mcp.json')
+			case 'kiro-cli':
+				return join(input.cwd, '.kiro', 'settings', 'mcp.json')
+			case 'mastracode':
+				return join(input.cwd, '.mastracode', 'mcp.json')
+			case 'pi':
+				return join(input.cwd, '.pi', 'mcp.json')
 			case 'antigravity':
 			case 'claude-desktop':
 			case 'cline':
 			case 'cline-cli':
+			case 'fx':
 			case 'goose':
 			case 'windsurf':
 			case 'visual-studio':
@@ -362,6 +424,18 @@ export function hostConfigPath(input: {
 			return join(input.home, '.grok', 'config.toml')
 		case 'mcporter':
 			return join(input.home, '.mcporter', 'mcporter.json')
+		case 'kilo-code':
+			return join(configHome(input.home, platform), 'kilo', 'kilo.json')
+		case 'kimi-code':
+			return join(input.home, '.kimi-code', 'mcp.json')
+		case 'kiro-cli':
+			return join(input.home, '.kiro', 'settings', 'mcp.json')
+		case 'mastracode':
+			return join(input.home, '.mastracode', 'mcp.json')
+		case 'fx':
+			return join(input.home, '.fx', 'mcp.json')
+		case 'pi':
+			return join(input.home, '.pi', 'agent', 'mcp.json')
 		case 'visual-studio':
 			return join(input.home, '.mcp.json')
 		case 'claude-desktop':

@@ -13,6 +13,13 @@ import {
 test('parseHostIds rejects web clients and accepts local aliases', () => {
 	assert.deepEqual(parseHostIds('cursor,vscode'), ['cursor', 'vscode'])
 	assert.deepEqual(parseHostIds('github-copilot-cli,gemini'), ['copilot-cli', 'gemini-cli'])
+	assert.deepEqual(parseHostIds('kilo,kimi,kiro,mastra,pi-agent'), [
+		'kilo-code',
+		'kimi-code',
+		'kiro-cli',
+		'mastracode',
+		'pi',
+	])
 	assert.throws(() => parseHostIds('chatgpt'), /web client/)
 	assert.throws(() => parseHostIds('grok'), /grok-build/)
 	assert.throws(() => parseHostIds('claude.ai'), /web client/)
@@ -32,6 +39,22 @@ test('detectRunningHosts only matches local process names', () => {
 	assert.deepEqual(
 		detected.map((host) => host.id).sort(),
 		['claude-code', 'claude-desktop', 'cursor', 'goose', 'grok-build', 'vscode'],
+	)
+})
+
+test('add-mcp hosts added after 2.0 match local process names', () => {
+	const detected = detectRunningHosts([
+		{ name: 'kilo', cmd: '/usr/local/bin/kilo' },
+		{ name: 'kimi', cmd: '/usr/local/bin/kimi' },
+		{ name: 'Kiro', cmd: '/Applications/Kiro.app/Contents/MacOS/Kiro' },
+		{ name: 'mastra', cmd: '/usr/local/bin/mastra' },
+		{ name: 'fx', cmd: '/usr/local/bin/fx' },
+		{ name: 'pi', cmd: '/usr/local/bin/pi' },
+		{ name: 'Safari', cmd: '/Applications/Safari.app/Contents/MacOS/Safari' },
+	])
+	assert.deepEqual(
+		detected.map((host) => host.id).sort(),
+		['fx', 'kilo-code', 'kimi-code', 'kiro-cli', 'mastracode', 'pi'],
 	)
 })
 
@@ -76,6 +99,32 @@ test('hostConfigPath uses user-level files by default', () => {
 	assert.equal(
 		hostConfigPath({ id: 'cursor', home: '/home/me', cwd: '/proj', project: true }),
 		'/proj/.cursor/mcp.json',
+	)
+	assert.equal(
+		hostConfigPath({
+			id: 'kilo-code',
+			home: '/home/me',
+			cwd: '/proj',
+			project: false,
+			platform: 'linux',
+		}),
+		'/home/me/.config/kilo/kilo.json',
+	)
+	assert.equal(
+		hostConfigPath({ id: 'kilo-code', home: '/home/me', cwd: '/proj', project: true }),
+		'/proj/kilo.json',
+	)
+	assert.equal(
+		hostConfigPath({ id: 'fx', home: '/home/me', cwd: '/proj', project: true }),
+		null,
+	)
+	assert.equal(
+		hostConfigPath({ id: 'fx', home: '/home/me', cwd: '/proj', project: false }),
+		'/home/me/.fx/mcp.json',
+	)
+	assert.equal(
+		hostConfigPath({ id: 'pi', home: '/home/me', cwd: '/proj', project: false }),
+		'/home/me/.pi/agent/mcp.json',
 	)
 })
 
