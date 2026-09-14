@@ -74,7 +74,7 @@ CLI credentials are stored in the OS secret store:
 
 - macOS: Keychain
 - Windows: Credential Manager
-- Linux: Secret Service / libsecret
+- Linux: Secret Service / libsecret (not the in-memory kernel keyring)
 
 If the keychain is unavailable (common on headless Linux), the CLI writes a
 `0600` file under `$XDG_CONFIG_HOME/kody` (or `%APPDATA%\kody` on Windows,
