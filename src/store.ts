@@ -32,6 +32,16 @@ export type SecretBackend = {
 	delete(): boolean
 }
 
+/** Linux-only: require Secret Service. Ignored on macOS and Windows. */
+export const secretServiceKeyringOptions = {
+	linux: { store: 'secret-service' },
+} as const
+
+export type StoreResolution = {
+	createKeyring?: (mcpUrl: string) => SecretBackend
+	fileStorePath?: (mcpUrl: string) => string
+}
+
 export function accountForMcpUrl(mcpUrl: string): string {
 	return `cli:${new URL(mcpUrl).origin}`
 }
@@ -82,7 +92,11 @@ export function createFileBackend(path: string): SecretBackend {
 }
 
 export function createKeyringBackend(mcpUrl: string): SecretBackend {
-	const entry = new Entry(keyringService, accountForMcpUrl(mcpUrl))
+	const entry = new Entry(
+		keyringService,
+		accountForMcpUrl(mcpUrl),
+		secretServiceKeyringOptions,
+	)
 	return {
 		kind: 'keyring',
 		get() {
@@ -105,15 +119,24 @@ export function createKeyringBackend(mcpUrl: string): SecretBackend {
 	}
 }
 
+function fileBackendFor(
+	mcpUrl: string,
+	resolution?: StoreResolution,
+): SecretBackend {
+	const path = resolution?.fileStorePath?.(mcpUrl) ?? fileStorePath(mcpUrl)
+	return createFileBackend(path)
+}
+
 export function resolveBackend(
 	mcpUrl: string,
 	preferred?: SecretBackend,
+	resolution?: StoreResolution,
 ): SecretBackend {
 	if (preferred) return preferred
 	try {
-		return createKeyringBackend(mcpUrl)
+		return (resolution?.createKeyring ?? createKeyringBackend)(mcpUrl)
 	} catch {
-		return createFileBackend(fileStorePath(mcpUrl))
+		return fileBackendFor(mcpUrl, resolution)
 	}
 }
 
@@ -125,36 +148,42 @@ export function parseCredentials(raw: string): StoredCredentials {
 	return parsed
 }
 
+function readParsed(store: SecretBackend): StoredCredentials | null {
+	const raw = store.get()
+	if (!raw) return null
+	return parseCredentials(raw)
+}
+
 export function loadCredentials(
 	mcpUrl: string = defaultMcpUrl,
 	backend?: SecretBackend,
+	resolution?: StoreResolution,
 ): StoredCredentials | null {
-	const store = resolveBackend(mcpUrl, backend)
+	const store = resolveBackend(mcpUrl, backend, resolution)
 	try {
-		const raw = store.get()
-		if (!raw) return null
-		return parseCredentials(raw)
+		const loaded = readParsed(store)
+		if (loaded) return loaded
 	} catch (error) {
-		if (store.kind === 'keyring' && !backend) {
-			const fallback = createFileBackend(fileStorePath(mcpUrl))
-			const raw = fallback.get()
-			return raw ? parseCredentials(raw) : null
-		}
-		throw error
+		if (!(store.kind === 'keyring' && !backend)) throw error
 	}
+	if (store.kind === 'keyring' && !backend) {
+		return readParsed(fileBackendFor(mcpUrl, resolution))
+	}
+	return null
 }
 
 export function saveCredentials(
 	credentials: StoredCredentials,
 	backend?: SecretBackend,
+	resolution?: StoreResolution,
 ): { backend: SecretBackend } {
-	const store = resolveBackend(credentials.mcpUrl, backend)
+	const store = resolveBackend(credentials.mcpUrl, backend, resolution)
 	try {
 		store.set(JSON.stringify(credentials))
 		return { backend: store }
 	} catch (error) {
 		if (store.kind === 'keyring' && !backend) {
-			const fallback = createFileBackend(fileStorePath(credentials.mcpUrl))
+			const fallback = fileBackendFor(credentials.mcpUrl, resolution)
 			fallback.set(JSON.stringify(credentials))
 			return { backend: fallback }
 		}
@@ -165,8 +194,9 @@ export function saveCredentials(
 export function deleteCredentials(
 	mcpUrl: string = defaultMcpUrl,
 	backend?: SecretBackend,
+	resolution?: StoreResolution,
 ): { deleted: boolean; backend: SecretBackend } {
-	const store = resolveBackend(mcpUrl, backend)
+	const store = resolveBackend(mcpUrl, backend, resolution)
 	let deleted = false
 	try {
 		deleted = store.delete()
@@ -174,7 +204,7 @@ export function deleteCredentials(
 		deleted = false
 	}
 	if (store.kind === 'keyring' && !backend) {
-		const file = createFileBackend(fileStorePath(mcpUrl))
+		const file = fileBackendFor(mcpUrl, resolution)
 		deleted = file.delete() || deleted
 	}
 	return { deleted, backend: store }

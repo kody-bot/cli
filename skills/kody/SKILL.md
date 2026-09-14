@@ -60,8 +60,10 @@ kody logout
 
 The CLI opens a browser for Kody OAuth (PKCE + Client ID Metadata Documents).
 If a browser cannot open, it prints the URL. Tokens (access + refresh) are
-stored in the OS keychain on macOS, Windows, and Linux. Linux without Secret
-Service falls back to a `0600` file under `$XDG_CONFIG_HOME/kody`.
+stored in the OS keychain on macOS, Windows, and Linux (Secret Service).
+Linux without Secret Service — including headless machines that only have an
+in-memory kernel keyring — falls back to a `0600` file under
+`$XDG_CONFIG_HOME/kody`.
 
 Never ask the user to paste tokens into chat.
 
