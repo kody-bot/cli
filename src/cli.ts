@@ -41,6 +41,7 @@ function parseKnown(args: Array<string>) {
 			limit: { type: 'string' },
 			code: { type: 'string' },
 			file: { type: 'string' },
+			invoke: { type: 'string' },
 			params: { type: 'string' },
 			'conversation-id': { type: 'string' },
 			project: { type: 'boolean' },
@@ -197,24 +198,36 @@ async function dispatch(
 			return result.isError ? 1 : 0
 		}
 		case 'execute': {
+			const invoke =
+				typeof parsed.values.invoke === 'string' ? parsed.values.invoke : undefined
+			const hasCodeFlag = typeof parsed.values.code === 'string'
+			const hasFileFlag = typeof parsed.values.file === 'string'
+			const positionalModule = parsed.positionals.join('\n').trim()
+			if (executeSourcesConflict({ invoke, hasCodeFlag, hasFileFlag, positionalModule })) {
+				throw new Error(
+					'--invoke cannot be combined with --code, --file, or a module string.',
+				)
+			}
 			const code =
-				typeof parsed.values.code === 'string'
-					? parsed.values.code
-					: typeof parsed.values.file === 'string'
-						? parsed.values.file === '-'
-							? await readStdin()
-							: await readFile(parsed.values.file, 'utf8')
-						: parsed.positionals.join('\n').trim()
-			if (!code) {
-				throw new Error('Provide --code, --file, or a module string.')
-			}
-			const args: Record<string, unknown> = { code }
-			if (typeof parsed.values.params === 'string') {
-				args.params = JSON.parse(parsed.values.params)
-			}
-			if (typeof parsed.values['conversation-id'] === 'string') {
-				args.conversationId = parsed.values['conversation-id']
-			}
+				invoke !== undefined
+					? undefined
+					: hasCodeFlag
+						? parsed.values.code
+						: hasFileFlag
+							? parsed.values.file === '-'
+								? await readStdin()
+								: await readFile(parsed.values.file as string, 'utf8')
+							: positionalModule || undefined
+			const args = buildExecuteToolArgs({
+				invoke,
+				code: typeof code === 'string' ? code : undefined,
+				paramsJson:
+					typeof parsed.values.params === 'string' ? parsed.values.params : undefined,
+				conversationId:
+					typeof parsed.values['conversation-id'] === 'string'
+						? parsed.values['conversation-id']
+						: undefined,
+			})
 			const result = await callKodyTool({ name: 'execute', args, mcpUrl })
 			write(formatToolResult(result, json))
 			return result.isError ? 1 : 0
@@ -257,4 +270,57 @@ async function readStdin(): Promise<string> {
 		chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
 	}
 	return Buffer.concat(chunks).toString('utf8')
+}
+
+/** True when --invoke is set alongside any code source (--code, --file, or positional). */
+export function executeSourcesConflict(input: {
+	invoke?: string
+	hasCodeFlag: boolean
+	hasFileFlag: boolean
+	positionalModule: string
+}): boolean {
+	return (
+		input.invoke !== undefined &&
+		(input.hasCodeFlag || input.hasFileFlag || input.positionalModule.length > 0)
+	)
+}
+
+/**
+ * Build MCP `execute` tool args from CLI inputs.
+ * Pass either `invoke` or resolved `code` (from --code, --file, or a module string).
+ */
+export function buildExecuteToolArgs(input: {
+	invoke?: string
+	code?: string
+	paramsJson?: string
+	conversationId?: string
+}): Record<string, unknown> {
+	const invoke = input.invoke
+	const code = input.code
+	if (invoke !== undefined && code !== undefined && code.length > 0) {
+		throw new Error('--invoke cannot be combined with --code, --file, or a module string.')
+	}
+	if (invoke !== undefined) {
+		if (!invoke) {
+			throw new Error('Provide a non-empty --invoke value.')
+		}
+		return attachExecuteCommonArgs({ invoke }, input)
+	}
+	if (code) {
+		return attachExecuteCommonArgs({ code }, input)
+	}
+	throw new Error('Provide --invoke, --code, --file, or a module string.')
+}
+
+function attachExecuteCommonArgs(
+	args: Record<string, unknown>,
+	input: { paramsJson?: string; conversationId?: string },
+): Record<string, unknown> {
+	if (input.paramsJson !== undefined) {
+		args.params = JSON.parse(input.paramsJson)
+	}
+	if (input.conversationId !== undefined) {
+		args.conversationId = input.conversationId
+	}
+	return args
 }

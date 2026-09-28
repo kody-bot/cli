@@ -12,7 +12,7 @@ Usage:
   kody status [--mcp-url <url>]
   kody whoami [--mcp-url <url>] [--json]
   kody search [query] [--entity <ref>] [--domain <id>] [--limit <n>] [--json]
-  kody execute [--code <esm>] [--file <path>] [--params <json>] [--conversation-id <id>] [--json]
+  kody execute [--invoke <ref> | --code <esm> | --file <path>] [--params <json>] [--conversation-id <id>] [--json]
   kody install [--mcp-url <url>] [--clients <ids>] [--yes] [--project] [--json]
   kody skill install [--project]
 
