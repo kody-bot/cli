@@ -3,7 +3,11 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { resolveCommand } from '../src/cli.js'
+import {
+	buildExecuteToolArgs,
+	executeSourcesConflict,
+	resolveCommand,
+} from '../src/cli.js'
 import { modernMcpProtocolVersion } from '../src/defaults.js'
 import { formatToolResult, listKodyTools } from '../src/mcp.js'
 import { redact } from '../src/redact.js'
@@ -18,7 +22,76 @@ test('resolveCommand maps subcommands and flags', () => {
 		resolveCommand(['execute', '--file', 'mod.js']).values.file,
 		'mod.js',
 	)
+	assert.equal(
+		resolveCommand(['execute', '--invoke', 'kody:@scope/pkg/export']).values.invoke,
+		'kody:@scope/pkg/export',
+	)
 	assert.throws(() => resolveCommand(['explode']), /Unknown command/)
+})
+
+test('buildExecuteToolArgs passes invoke without code and keeps params', () => {
+	assert.deepEqual(
+		buildExecuteToolArgs({
+			invoke: 'kody:@cameronpak/skills/skill-get',
+			paramsJson: '{"name":"demo"}',
+			conversationId: 'conv-1',
+		}),
+		{
+			invoke: 'kody:@cameronpak/skills/skill-get',
+			params: { name: 'demo' },
+			conversationId: 'conv-1',
+		},
+	)
+})
+
+test('buildExecuteToolArgs rejects invoke combined with code', () => {
+	assert.throws(
+		() =>
+			buildExecuteToolArgs({
+				invoke: 'kody:@scope/pkg/export',
+				code: 'export default async function main() {}',
+			}),
+		/--invoke cannot be combined/,
+	)
+})
+
+test('executeSourcesConflict rejects invoke with code or file flags', () => {
+	assert.equal(
+		executeSourcesConflict({
+			invoke: 'kody:@scope/pkg/export',
+			hasCodeFlag: true,
+			hasFileFlag: false,
+			positionalModule: '',
+		}),
+		true,
+	)
+	assert.equal(
+		executeSourcesConflict({
+			invoke: 'kody:@scope/pkg/export',
+			hasCodeFlag: false,
+			hasFileFlag: true,
+			positionalModule: '',
+		}),
+		true,
+	)
+	assert.equal(
+		executeSourcesConflict({
+			invoke: 'kody:@scope/pkg/export',
+			hasCodeFlag: false,
+			hasFileFlag: false,
+			positionalModule: '',
+		}),
+		false,
+	)
+})
+
+test('buildExecuteToolArgs errors when neither invoke nor code is provided', () => {
+	assert.throws(() => buildExecuteToolArgs({}), /Provide --invoke, --code, --file/)
+	assert.throws(() => buildExecuteToolArgs({ code: '' }), /Provide --invoke, --code, --file/)
+	assert.throws(
+		() => buildExecuteToolArgs({ invoke: '' }),
+		/Provide a non-empty --invoke value/,
+	)
 })
 
 test('formatToolResult prefers text content unless --json', () => {

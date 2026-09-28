@@ -64,7 +64,7 @@ Or run via `npx @kodycodes/cli` without a global install.
 | `kody status` | Shows CLI login state without printing secrets. |
 | `kody whoami` | Confirms the CLI MCP connection and lists tools. |
 | `kody search [query]` | Calls Kody `search` from the CLI (prefer the host MCP tool). |
-| `kody execute` | Calls Kody `execute` from the CLI (`--code`, `--file`, or stdin via `--file -`). |
+| `kody execute` | Calls Kody `execute` from the CLI (`--invoke`, `--code`, `--file`, or stdin via `--file -`). |
 
 `--json` prints structured MCP results.
 
