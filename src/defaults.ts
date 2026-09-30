@@ -1,4 +1,7 @@
 export const defaultMcpUrl = 'https://kody.codes/mcp'
+/** Kody Open API origin; hosts CapabilityProxy for `execute --local`. */
+export const defaultApiUrl = 'https://api.kody.codes'
+export const apiTokenEnvVar = 'KODY_API_TOKEN'
 /** Pin to Kody's stateless `/mcp` lane. */
 export const modernMcpProtocolVersion = '2026-07-28'
 export const defaultScopes = ['profile', 'email'] as const

@@ -1,0 +1,124 @@
+import { createHash } from 'node:crypto'
+import { createReadStream, createWriteStream, existsSync } from 'node:fs'
+import { chmod, mkdir, rename, rm } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { Readable, Transform } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+import { createGunzip } from 'node:zlib'
+
+/** Matches the workerd the Kody platform runs; bump together with the digests. */
+export const workerdVersion = '1.20260815.1'
+
+/** sha256 of each gzipped release asset on github.com/cloudflare/workerd. */
+export const workerdAssetDigests = {
+	'linux-64': '05099ec6f50832fcbc327490e5a971d682c97231fb01943b61726db07677e559',
+	'linux-arm64': '0331597b53771170df2ab8344d9ae81d38bad4959e47152dd86592eedd9264c7',
+	'darwin-64': '752ec91c01dfc44d660de6e3a654879cfc1277caa7f3c5312871c608c4c2d6df',
+	'darwin-arm64': 'c189fc08f691739c37d8784945e943e33b66cbd4e14635a061fe516dc95f2b39',
+} as const
+
+export type WorkerdTarget = keyof typeof workerdAssetDigests
+
+export function workerdTargetFor(
+	platform: NodeJS.Platform = process.platform,
+	arch: string = process.arch,
+): WorkerdTarget {
+	const os = platform === 'linux' ? 'linux' : platform === 'darwin' ? 'darwin' : null
+	const cpu = arch === 'x64' ? '64' : arch === 'arm64' ? 'arm64' : null
+	if (!os || !cpu) {
+		throw new Error(
+			`execute --local supports Linux and macOS on x64 or arm64 (this machine is ${platform}-${arch}).`,
+		)
+	}
+	return `${os}-${cpu}`
+}
+
+export function workerdAssetUrl(target: WorkerdTarget, version: string = workerdVersion): string {
+	return `https://github.com/cloudflare/workerd/releases/download/v${version}/workerd-${target}.gz`
+}
+
+export function userCacheDir(
+	env: NodeJS.ProcessEnv = process.env,
+	platform: NodeJS.Platform = process.platform,
+	home: string = homedir(),
+): string {
+	if (env.KODY_CACHE_DIR) return env.KODY_CACHE_DIR
+	if (platform === 'darwin') return join(home, 'Library', 'Caches', 'kody')
+	return join(env.XDG_CACHE_HOME || join(home, '.cache'), 'kody')
+}
+
+export function cachedWorkerdPath(cacheDir: string, target: WorkerdTarget): string {
+	return join(cacheDir, 'workerd', `${workerdVersion}-${target}`, 'workerd')
+}
+
+/**
+ * Returns a runnable workerd path: `KODY_WORKERD_PATH` when set, otherwise the
+ * pinned release under the user cache dir (downloaded and verified on first use).
+ */
+export async function ensureWorkerdBinary(
+	input: {
+		env?: NodeJS.ProcessEnv
+		cacheDir?: string
+		target?: WorkerdTarget
+		fetchFn?: typeof fetch
+		onDownload?: (url: string) => void
+	} = {},
+): Promise<string> {
+	const env = input.env ?? process.env
+	if (env.KODY_WORKERD_PATH) return env.KODY_WORKERD_PATH
+	const target = input.target ?? workerdTargetFor()
+	const binaryPath = cachedWorkerdPath(input.cacheDir ?? userCacheDir(env), target)
+	if (existsSync(binaryPath)) return binaryPath
+
+	const url = workerdAssetUrl(target)
+	input.onDownload?.(url)
+	await downloadVerifiedGzip({
+		url,
+		sha256: workerdAssetDigests[target],
+		destination: binaryPath,
+		fetchFn: input.fetchFn ?? fetch,
+	})
+	return binaryPath
+}
+
+export async function downloadVerifiedGzip(input: {
+	url: string
+	sha256: string
+	destination: string
+	fetchFn: typeof fetch
+}): Promise<void> {
+	const response = await input.fetchFn(input.url)
+	if (!response.ok || !response.body) {
+		throw new Error(`Could not download workerd from ${input.url} (HTTP ${response.status}).`)
+	}
+	await mkdir(dirname(input.destination), { recursive: true })
+	const gzipPath = `${input.destination}.${process.pid}.gz`
+	const partialPath = `${input.destination}.${process.pid}.partial`
+	const hash = createHash('sha256')
+	const hashing = new Transform({
+		transform(chunk: Buffer, _encoding, callback) {
+			hash.update(chunk)
+			callback(null, chunk)
+		},
+	})
+	try {
+		await pipeline(
+			Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]),
+			hashing,
+			createWriteStream(gzipPath),
+		)
+		const digest = hash.digest('hex')
+		if (digest !== input.sha256) {
+			throw new Error(
+				`workerd download from ${input.url} failed verification (sha256 ${digest}, expected ${input.sha256}).`,
+			)
+		}
+		await pipeline(createReadStream(gzipPath), createGunzip(), createWriteStream(partialPath))
+		await chmod(partialPath, 0o755)
+		await rename(partialPath, input.destination)
+	} finally {
+		await rm(gzipPath, { force: true })
+		await rm(partialPath, { force: true })
+	}
+}
