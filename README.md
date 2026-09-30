@@ -64,9 +64,43 @@ Or run via `npx @kodycodes/cli` without a global install.
 | `kody status` | Shows CLI login state without printing secrets. |
 | `kody whoami` | Confirms the CLI MCP connection and lists tools. |
 | `kody search [query]` | Calls Kody `search` from the CLI (prefer the host MCP tool). |
-| `kody execute` | Calls Kody `execute` from the CLI (`--invoke`, `--code`, `--file`, or stdin via `--file -`). |
+| `kody execute` | Calls Kody `execute` from the CLI (`--invoke`, `--code`, `--file`, or stdin via `--file -`). Add `--local` to run the module on this machine. |
 
 `--json` prints structured MCP results.
+
+## Local execute
+
+`kody execute --local` runs the same execute module (default export called
+with `--params`) on this machine instead of in Kody's cloud sandbox. Local CPU
+is free; every `kody:runtime` call (`kody.*`, `kody.mcp.*`, `workflows`,
+`packages`) is proxied to Kody's CapabilityProxy and metered like a cloud hop.
+
+```bash
+export KODY_API_TOKEN=…   # scoped token minted through the Kody `api` tool
+npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.com"}'
+```
+
+- **Auth:** a scoped API token from `--token` or `KODY_API_TOKEN` (prefer the
+  env var so the token stays out of shell history and `ps`). No `kody login`,
+  and the CLI never reads MCP OAuth tokens from other hosts. The token stays in
+  the CLI process; the sandbox only talks to a loopback bridge.
+- **Runtime:** a pinned [workerd](https://github.com/cloudflare/workerd)
+  release, downloaded once from GitHub, sha256-verified, and cached under
+  `~/.cache/kody` (Linux, or `$XDG_CACHE_HOME/kody`) or
+  `~/Library/Caches/kody` (macOS). Override with `KODY_CACHE_DIR`, or point
+  `KODY_WORKERD_PATH` at your own binary. No Docker required. Linux and macOS
+  (x64/arm64) only for now.
+- **API:** `https://api.kody.codes` by default (`--api-url` or `KODY_API_URL`
+  to override). The CLI calls `GET /v1/capability-proxy/session` before
+  starting workerd and `POST /v1/capability-proxy/call` with
+  `{ path, args, conversationId? }` for each runtime call.
+- **Errors:** an expired/revoked token or an account without the
+  `local-execute` flag fails fast with a clear message before any code runs.
+- **Not yet:** static `kody:@scope/package/export` imports and `--invoke`
+  (use cloud execute or `packages.invoke`). `packageStorage()`,
+  `packageSecrets`, `email`, and `events` stay unbound like ad hoc cloud
+  execute. Outbound `fetch` goes straight from this machine, including to
+  local-network hosts.
 
 ## Token storage
 
@@ -81,6 +115,9 @@ If the keychain is unavailable (common on headless Linux), the CLI writes a
 `~/Library/Application Support/kody` on macOS). Tokens are never printed.
 
 Access tokens refresh automatically on expiry or HTTP 401.
+
+`execute --local` does not use stored CLI credentials; it only reads
+`--token` / `KODY_API_TOKEN`.
 
 ## Releases
 

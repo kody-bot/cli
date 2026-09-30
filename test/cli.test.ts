@@ -4,9 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import {
+	apiUrlFrom,
 	buildExecuteToolArgs,
 	executeSourcesConflict,
+	resolveApiToken,
 	resolveCommand,
+	runCli,
 } from '../src/cli.js'
 import { modernMcpProtocolVersion } from '../src/defaults.js'
 import { formatToolResult, listKodyTools } from '../src/mcp.js'
@@ -27,6 +30,48 @@ test('resolveCommand maps subcommands and flags', () => {
 		'kody:@scope/pkg/export',
 	)
 	assert.throws(() => resolveCommand(['explode']), /Unknown command/)
+})
+
+test('resolveCommand parses execute --local flags', () => {
+	const { values } = resolveCommand([
+		'execute',
+		'--local',
+		'--token',
+		'tok',
+		'--api-url',
+		'http://localhost:8787',
+		'--file',
+		'mod.js',
+	])
+	assert.equal(values.local, true)
+	assert.equal(values.token, 'tok')
+	assert.equal(values['api-url'], 'http://localhost:8787')
+})
+
+test('resolveApiToken prefers --token, falls back to KODY_API_TOKEN, and requires one', () => {
+	assert.equal(resolveApiToken({ token: 'flag' }, { KODY_API_TOKEN: 'env' }), 'flag')
+	assert.equal(resolveApiToken({}, { KODY_API_TOKEN: ' env ' }), 'env')
+	assert.throws(() => resolveApiToken({}, {}), /pass --token or set KODY_API_TOKEN/)
+})
+
+test('apiUrlFrom defaults to api.kody.codes', () => {
+	assert.equal(apiUrlFrom({}, {}), 'https://api.kody.codes')
+	assert.equal(apiUrlFrom({}, { KODY_API_URL: 'http://localhost:8787' }), 'http://localhost:8787')
+	assert.equal(apiUrlFrom({ apiUrl: 'http://x' }, { KODY_API_URL: 'http://y' }), 'http://x')
+})
+
+test('execute rejects --token without --local and --invoke with --local', async () => {
+	const run = async (argv: Array<string>) => {
+		let stderr = ''
+		const code = await runCli(argv, { stdout: () => {}, stderr: (text) => (stderr += text) })
+		return { code, stderr }
+	}
+	const tokenOnly = await run(['execute', '--token', 'tok', '--code', 'export default () => 1'])
+	assert.equal(tokenOnly.code, 1)
+	assert.match(tokenOnly.stderr, /--token is only used with execute --local/)
+	const invokeLocal = await run(['execute', '--local', '--invoke', 'kody:@me/pkg/export'])
+	assert.equal(invokeLocal.code, 1)
+	assert.match(invokeLocal.stderr, /--local runs a module you provide/)
 })
 
 test('buildExecuteToolArgs passes invoke without code and keeps params', () => {

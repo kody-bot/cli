@@ -1,11 +1,17 @@
 import { parseArgs } from 'node:util'
 import { readFile } from 'node:fs/promises'
-import { defaultMcpUrl, modernMcpProtocolVersion } from './defaults.js'
+import {
+	apiTokenEnvVar,
+	defaultApiUrl,
+	defaultMcpUrl,
+	modernMcpProtocolVersion,
+} from './defaults.js'
 import { usage } from './help.js'
 import { ensureFreshCredentials, login } from './auth.js'
 import { deleteCredentials, loadCredentials } from './store.js'
 import { callKodyTool, formatToolResult, listKodyTools } from './mcp.js'
 import { runInstall } from './install.js'
+import { runLocalExecute } from './local-execute.js'
 import { installSkill } from './skill.js'
 import { readPackageVersion } from './package-info.js'
 import { redactError } from './redact.js'
@@ -26,6 +32,27 @@ function mcpUrlFrom(values: { mcpUrl?: string }): string {
 	return values.mcpUrl || process.env.KODY_MCP_URL || defaultMcpUrl
 }
 
+export function apiUrlFrom(
+	values: { apiUrl?: string },
+	env: NodeJS.ProcessEnv = process.env,
+): string {
+	return values.apiUrl || env.KODY_API_URL || defaultApiUrl
+}
+
+/** `execute --local` authenticates only with a scoped API token, never stored CLI OAuth. */
+export function resolveApiToken(
+	values: { token?: string },
+	env: NodeJS.ProcessEnv = process.env,
+): string {
+	const token = (values.token ?? env[apiTokenEnvVar] ?? '').trim()
+	if (!token) {
+		throw new Error(
+			`execute --local needs a scoped Kody API token: pass --token or set ${apiTokenEnvVar}. Mint one with the Kody \`api\` tool (tokens) or the Kody API.`,
+		)
+	}
+	return token
+}
+
 function parseKnown(args: Array<string>) {
 	return parseArgs({
 		args,
@@ -44,6 +71,9 @@ function parseKnown(args: Array<string>) {
 			invoke: { type: 'string' },
 			params: { type: 'string' },
 			'conversation-id': { type: 'string' },
+			local: { type: 'boolean' },
+			token: { type: 'string' },
+			'api-url': { type: 'string' },
 			project: { type: 'boolean' },
 			'no-browser': { type: 'boolean' },
 			clients: { type: 'string' },
@@ -95,7 +125,7 @@ export async function runCli(
 			write(usage)
 			return 0
 		}
-		return await dispatch(parsed, write)
+		return await dispatch(parsed, write, writeErr)
 	} catch (error) {
 		writeErr(`${redactError(error).message}\n`)
 		return 1
@@ -105,6 +135,7 @@ export async function runCli(
 async function dispatch(
 	parsed: ReturnType<typeof resolveCommand>,
 	write: (text: string) => void,
+	writeErr: (text: string) => void,
 ): Promise<number> {
 	const mcpUrl = mcpUrlFrom({
 		mcpUrl: typeof parsed.values['mcp-url'] === 'string' ? parsed.values['mcp-url'] : undefined,
@@ -203,6 +234,15 @@ async function dispatch(
 			const hasCodeFlag = typeof parsed.values.code === 'string'
 			const hasFileFlag = typeof parsed.values.file === 'string'
 			const positionalModule = parsed.positionals.join('\n').trim()
+			const local = parsed.values.local === true
+			if (!local && typeof parsed.values.token === 'string') {
+				throw new Error('--token is only used with execute --local; cloud execute uses `kody login`.')
+			}
+			if (local && invoke !== undefined) {
+				throw new Error(
+					'--invoke runs a saved package export in Kody; --local runs a module you provide (--code, --file, or a module string).',
+				)
+			}
 			if (executeSourcesConflict({ invoke, hasCodeFlag, hasFileFlag, positionalModule })) {
 				throw new Error(
 					'--invoke cannot be combined with --code, --file, or a module string.',
@@ -228,7 +268,23 @@ async function dispatch(
 						? parsed.values['conversation-id']
 						: undefined,
 			})
-			const result = await callKodyTool({ name: 'execute', args, mcpUrl })
+			const result = local
+				? await runLocalExecute({
+						code: args.code as string,
+						params: args.params,
+						conversationId: args.conversationId as string | undefined,
+						token: resolveApiToken({
+							token: typeof parsed.values.token === 'string' ? parsed.values.token : undefined,
+						}),
+						apiUrl: apiUrlFrom({
+							apiUrl:
+								typeof parsed.values['api-url'] === 'string'
+									? parsed.values['api-url']
+									: undefined,
+						}),
+						onStatus: (message) => writeErr(`${message}\n`),
+					})
+				: await callKodyTool({ name: 'execute', args, mcpUrl })
 			write(formatToolResult(result, json))
 			return result.isError ? 1 : 0
 		}
