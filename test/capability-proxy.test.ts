@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+	assertTokenSafeApiUrl,
 	callCapabilityProxy,
 	capabilityProxyUrl,
 	openCapabilityProxySession,
@@ -84,14 +85,25 @@ test('openCapabilityProxySession reports a missing CapabilityProxy deployment', 
 	)
 })
 
-test('openCapabilityProxySession reports unreachable APIs', async () => {
+test('openCapabilityProxySession reports unreachable APIs with the network cause', async () => {
 	const fetchFn = (async () => {
-		throw new TypeError('fetch failed')
+		throw new TypeError('fetch failed', {
+			cause: Object.assign(new Error('connect'), { code: 'ECONNREFUSED' }),
+		})
 	}) as typeof fetch
 	await assert.rejects(
 		() => openCapabilityProxySession({ apiUrl: 'https://api.kody.codes', token, fetchFn }),
-		/Could not reach the Kody API at https:\/\/api\.kody\.codes \(fetch failed\)/,
+		/Could not reach the Kody API at https:\/\/api\.kody\.codes \(fetch failed: ECONNREFUSED\)/,
 	)
+})
+
+test('assertTokenSafeApiUrl allows https and loopback http only', () => {
+	assert.doesNotThrow(() => assertTokenSafeApiUrl('https://api.kody.codes'))
+	assert.doesNotThrow(() => assertTokenSafeApiUrl('http://localhost:8787'))
+	assert.doesNotThrow(() => assertTokenSafeApiUrl('http://127.0.0.1:8787/api'))
+	assert.doesNotThrow(() => assertTokenSafeApiUrl('http://[::1]:8787'))
+	assert.throws(() => assertTokenSafeApiUrl('http://api.kody.codes'), /Refusing to send the API token/)
+	assert.throws(() => assertTokenSafeApiUrl('not a url'), /Invalid Kody API URL/)
 })
 
 test('callCapabilityProxy posts the runtime path, args, and conversation id', async () => {
@@ -130,6 +142,20 @@ test('callCapabilityProxy surfaces capability errors from string or object bodie
 			/Unknown capability/,
 		)
 	}
+	const forbidden = respondWith(403, {
+		error: { code: 'capability_denied', message: 'emailSend needs a verified destination' },
+	})
+	await assert.rejects(
+		() =>
+			callCapabilityProxy({
+				apiUrl: 'https://api.kody.codes',
+				token,
+				fetchFn: forbidden.fetchFn,
+				path: ['kody', 'emailSend'],
+				args: [{}],
+			}),
+		(error: Error) => error.message === 'emailSend needs a verified destination',
+	)
 	const { fetchFn } = respondWith(422, { error: { code: 'invalid_args', message: 'to is required' } })
 	await assert.rejects(
 		() =>

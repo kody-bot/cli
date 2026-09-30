@@ -25,7 +25,7 @@ Usage:
 
   --local    Run the execute module on this machine (workerd, Linux/macOS).
              kody:runtime calls go to Kody with a scoped API token from
-             --token or ${apiTokenEnvVar}; no kody login needed.
+             ${apiTokenEnvVar} (preferred) or --token; no kody login needed.
 
 Environment:
   KODY_MCP_URL        Override the default MCP URL (${defaultMcpUrl})

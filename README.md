@@ -96,6 +96,9 @@ npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.
   `{ path, args, conversationId? }` for each runtime call.
 - **Errors:** an expired/revoked token or an account without the
   `local-execute` flag fails fast with a clear message before any code runs.
+  The token is only sent over https (plain http is allowed for localhost).
+- **Lifetime:** no execution time limit locally; Ctrl-C (or SIGTERM) stops
+  workerd and removes the temporary module.
 - **Not yet:** static `kody:@scope/package/export` imports and `--invoke`
   (use cloud execute or `packages.invoke`). `packageStorage()`,
   `packageSecrets`, `email`, and `events` stay unbound like ad hoc cloud

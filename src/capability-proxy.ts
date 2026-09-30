@@ -1,4 +1,5 @@
 import { apiTokenEnvVar, cliName } from './defaults.js'
+import { describeNetworkError } from './network-error.js'
 import { readPackageVersion } from './package-info.js'
 
 /**
@@ -35,6 +36,7 @@ export type CapabilityProxyClientInput = {
 	apiUrl: string
 	token: string
 	fetchFn?: typeof fetch
+	signal?: AbortSignal
 }
 
 export class CapabilityProxyError extends Error {
@@ -50,6 +52,23 @@ export class CapabilityProxyError extends Error {
 		this.status = options.status ?? null
 		this.code = options.code ?? null
 	}
+}
+
+const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+/** The bearer token must not cross the network in cleartext. */
+export function assertTokenSafeApiUrl(apiUrl: string): void {
+	let url: URL
+	try {
+		url = new URL(apiUrl)
+	} catch {
+		throw new Error(`Invalid Kody API URL: ${apiUrl}`)
+	}
+	if (url.protocol === 'https:') return
+	if (url.protocol === 'http:' && loopbackHosts.has(url.hostname)) return
+	throw new Error(
+		`Refusing to send the API token to ${url.origin}: use https (plain http is only allowed for localhost).`,
+	)
 }
 
 export function capabilityProxyUrl(apiUrl: string, path: string): URL {
@@ -106,6 +125,7 @@ async function send(
 	try {
 		return await fetchFn(url, {
 			...init,
+			signal: input.signal,
 			headers: {
 				...(init.headers as Record<string, string> | undefined),
 				accept: 'application/json',
@@ -114,7 +134,7 @@ async function send(
 			},
 		})
 	} catch (error) {
-		const reason = error instanceof Error ? error.message : String(error)
+		const reason = describeNetworkError(error)
 		throw new CapabilityProxyError(
 			`Could not reach the Kody API at ${url.origin} (${reason}). Check --api-url / KODY_API_URL and your network.`,
 		)
@@ -165,7 +185,7 @@ function describeFailure(
 			{ status, code },
 		)
 	}
-	if (status === 403) {
+	if (status === 403 && stage === 'session') {
 		return new CapabilityProxyError(
 			`The API token is not allowed to use local execute${code ? ` (${code})` : ''}. Mint a token with the local execute scope.${detail}`,
 			{ status, code },

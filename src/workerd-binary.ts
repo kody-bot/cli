@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createGunzip } from 'node:zlib'
+import { describeNetworkError } from './network-error.js'
 
 /** Matches the workerd the Kody platform runs; bump together with the digests. */
 export const workerdVersion = '1.20260815.1'
@@ -88,7 +89,14 @@ export async function downloadVerifiedGzip(input: {
 	destination: string
 	fetchFn: typeof fetch
 }): Promise<void> {
-	const response = await input.fetchFn(input.url)
+	let response: Response
+	try {
+		response = await input.fetchFn(input.url)
+	} catch (error) {
+		throw new Error(
+			`Could not download workerd from ${input.url} (${describeNetworkError(error)}).`,
+		)
+	}
 	if (!response.ok || !response.body) {
 		throw new Error(`Could not download workerd from ${input.url} (HTTP ${response.status}).`)
 	}
