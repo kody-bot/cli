@@ -37,6 +37,12 @@ jobs:
       - name: Download deps
         run: npm install
 
+      - name: Cache workerd for execute --local tests
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/kody/workerd
+          key: workerd-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/workerd-binary.ts') }}
+
       - name: Run validate script
         run: npm run validate
 
