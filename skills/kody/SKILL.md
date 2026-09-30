@@ -69,3 +69,13 @@ Never ask the user to paste tokens into chat.
 
 Override the MCP URL with `--mcp-url` or `KODY_MCP_URL` for preview or local
 servers. Default: `https://kody.codes/mcp`.
+
+To run an execute module on this machine (Linux/macOS) instead of Kody's
+cloud sandbox, add `--local` and supply a scoped API token through
+`KODY_API_TOKEN` (or `--token`). `kody:runtime` calls still go to Kody; no
+`kody login` is needed. Mint the token with Kody's `api` tool — never read MCP
+OAuth tokens from the host.
+
+```bash
+KODY_API_TOKEN=… npx @kodycodes/cli execute --local --file ./task.js --params '{"q":"email"}'
+```

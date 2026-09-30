@@ -1,4 +1,4 @@
-import { defaultMcpUrl, onboardingUrl } from './defaults.js'
+import { apiTokenEnvVar, defaultApiUrl, defaultMcpUrl, onboardingUrl } from './defaults.js'
 import { hostIds } from './host-catalog.js'
 import { readPackageVersion } from './package-info.js'
 
@@ -13,6 +13,7 @@ Usage:
   kody whoami [--mcp-url <url>] [--json]
   kody search [query] [--entity <ref>] [--domain <id>] [--limit <n>] [--json]
   kody execute [--invoke <ref> | --code <esm> | --file <path>] [--params <json>] [--conversation-id <id>] [--json]
+               [--local [--token <token>] [--api-url <url>]]
   kody install [--mcp-url <url>] [--clients <ids>] [--yes] [--project] [--json]
   kody skill install [--project]
 
@@ -22,6 +23,14 @@ Usage:
 
   --clients  Comma-separated ids: ${hostIds.join(', ')}
 
+  --local    Run the execute module on this machine (workerd, Linux/macOS).
+             kody:runtime calls go to Kody with a scoped API token from
+             ${apiTokenEnvVar} (preferred) or --token; no kody login needed.
+
 Environment:
-  KODY_MCP_URL   Override the default MCP URL (${defaultMcpUrl})
+  KODY_MCP_URL        Override the default MCP URL (${defaultMcpUrl})
+  ${apiTokenEnvVar}      Scoped API token for execute --local
+  KODY_API_URL        Override the Kody API URL for execute --local (${defaultApiUrl})
+  KODY_CACHE_DIR      Where execute --local caches workerd (default: user cache dir)
+  KODY_WORKERD_PATH   Use this workerd binary instead of the pinned download
 `
