@@ -19,7 +19,11 @@ import { runInstall } from './install.js'
 import { resolveLocalExecuteBearer } from './local-execute-auth.js'
 import { runLocalExecute } from './local-execute.js'
 import { assertLocalExecuteNodeEngine } from './node-engine.js'
-import { searchWithApiToken, whoamiWithApiToken } from './open-api-client.js'
+import {
+	callOpenApiOperation,
+	searchWithApiToken,
+	whoamiWithApiToken,
+} from './open-api-client.js'
 import { runRemoteExecuteWithToken } from './remote-execute.js'
 import { installSkill } from './skill.js'
 import { readPackageVersion } from './package-info.js'
@@ -40,6 +44,7 @@ export type CommandName =
 	| 'auth'
 	| 'whoami'
 	| 'search'
+	| 'api'
 	| 'execute'
 	| 'install'
 	| 'skill'
@@ -107,6 +112,7 @@ export function resolveCommand(argv: Array<string>): {
 		case 'auth':
 		case 'whoami':
 		case 'search':
+		case 'api':
 		case 'execute':
 		case 'install':
 		case 'skill':
@@ -260,7 +266,7 @@ async function dispatch(
 			const scopes = result.stored.scopes?.join(', ') || '(none)'
 			write(
 				[
-					`Bootstrap API token stored for execute --local, search, whoami, and token-auth cloud execute.`,
+					`Bootstrap API token stored for execute --local, search, whoami, api, and token-auth cloud execute.`,
 					`api: ${result.stored.apiUrl}`,
 					`token id: ${result.stored.tokenId}`,
 					`scopes: ${scopes}`,
@@ -462,6 +468,33 @@ async function dispatch(
 			write(formatToolResult(result, json))
 			return result.isError ? 1 : 0
 		}
+		case 'api': {
+			const operationId = parsed.positionals[0]?.trim() ?? ''
+			if (!operationId || parsed.positionals.length > 1) {
+				throw new Error(
+					'Usage: kody api <operationId> [--params <json>] [--token <token>] [--api-url <url>] [--json]',
+				)
+			}
+			const apiUrl = apiUrlFrom({
+				apiUrl:
+					typeof parsed.values['api-url'] === 'string'
+						? parsed.values['api-url']
+						: undefined,
+			})
+			const tokenValues = tokenFlagValues(parsed.values)
+			const params = parseApiParamsJson(
+				typeof parsed.values.params === 'string' ? parsed.values.params : undefined,
+			)
+			const result = await callOpenApiOperation({
+				operationId,
+				params,
+				token: requireApiToken(tokenValues, process.env, 'api', { apiUrl }),
+				apiUrl,
+			})
+			// Always JSON: mirrors MCP `api` structured results for agents/scripts.
+			write(`${JSON.stringify(result, null, 2)}\n`)
+			return 0
+		}
 		case 'install': {
 			const result = await runInstall(
 				{
@@ -561,6 +594,21 @@ function tokenFlagValues(values: ReturnType<typeof parseKnown>['values']): {
 	return {
 		token: typeof values.token === 'string' ? values.token : undefined,
 	}
+}
+
+/** Parse `--params` JSON for `kody api` (flat object, same as MCP `api`). */
+export function parseApiParamsJson(paramsJson?: string): Record<string, unknown> {
+	if (paramsJson === undefined) return {}
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(paramsJson)
+	} catch {
+		throw new Error('--params must be valid JSON (a flat object).')
+	}
+	if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		throw new Error('--params must be a JSON object (e.g. \'{"query":"email"}\').')
+	}
+	return parsed as Record<string, unknown>
 }
 
 /**

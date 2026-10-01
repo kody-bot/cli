@@ -7,6 +7,7 @@ import {
 	apiUrlFrom,
 	buildExecuteToolArgs,
 	executeSourcesConflict,
+	parseApiParamsJson,
 	resolveApiToken,
 	resolveCommand,
 	resolveLocalExecuteBearer,
@@ -16,6 +17,7 @@ import {
 import type { StoredApiToken } from '../src/api-token-store.js'
 import { modernMcpProtocolVersion } from '../src/defaults.js'
 import { formatToolResult, listKodyTools } from '../src/mcp.js'
+import { clearOpenApiRouteCache } from '../src/open-api-client.js'
 import { redact } from '../src/redact.js'
 import {
 	createFileBackend,
@@ -44,6 +46,8 @@ function sampleLoginCredentials(
 
 test('resolveCommand maps subcommands and flags', () => {
 	assert.equal(resolveCommand(['search', 'what can you do']).command, 'search')
+	assert.equal(resolveCommand(['api', 'usageGet']).command, 'api')
+	assert.equal(resolveCommand(['api', 'usageGet']).positionals[0], 'usageGet')
 	assert.equal(resolveCommand(['install', '--yes']).command, 'install')
 	assert.equal(resolveCommand(['auth', 'bootstrap', '--code', 'kody_bc_x']).command, 'auth')
 	assert.equal(resolveCommand(['auth', 'bootstrap']).positionals[0], 'bootstrap')
@@ -58,6 +62,14 @@ test('resolveCommand maps subcommands and flags', () => {
 		'kody:@scope/pkg/export',
 	)
 	assert.throws(() => resolveCommand(['explode']), /Unknown command/)
+})
+
+test('parseApiParamsJson requires a flat object', () => {
+	assert.deepEqual(parseApiParamsJson(undefined), {})
+	assert.deepEqual(parseApiParamsJson('{"query":"email"}'), { query: 'email' })
+	assert.throws(() => parseApiParamsJson('['), /valid JSON/)
+	assert.throws(() => parseApiParamsJson('[]'), /JSON object/)
+	assert.throws(() => parseApiParamsJson('"x"'), /JSON object/)
 })
 
 test('resolveCommand parses execute --local flags', () => {
@@ -214,6 +226,94 @@ test('resolveApiToken falls back to a stored bootstrap token', () => {
 		}),
 		'kody_at_stored',
 	)
+})
+
+test('api command calls Open API by operationId with scoped token', async () => {
+	clearOpenApiRouteCache()
+	const previousFetch = globalThis.fetch
+	const calls: Array<string> = []
+	globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+		const url = new URL(String(input))
+		calls.push(`${(init?.method ?? 'GET').toUpperCase()} ${url.pathname}`)
+		if (url.pathname === '/openapi.json') {
+			return new Response(
+				JSON.stringify({
+					paths: {
+						'/v1/account/usage': { get: { operationId: 'usageGet' } },
+					},
+				}),
+				{ status: 200, headers: { 'content-type': 'application/json' } },
+			)
+		}
+		if (url.pathname === '/v1/account/usage') {
+			assert.equal(
+				init?.headers && (init.headers as Record<string, string>).authorization,
+				'Bearer kody_at_test',
+			)
+			return new Response(JSON.stringify({ plan: 'pro' }), {
+				status: 200,
+				headers: { 'content-type': 'application/json' },
+			})
+		}
+		return new Response('nope', { status: 404 })
+	}) as typeof fetch
+	let stdout = ''
+	let stderr = ''
+	try {
+		const code = await runCli(
+			[
+				'api',
+				'usageGet',
+				'--params',
+				'{}',
+				'--token',
+				'kody_at_test',
+				'--api-url',
+				'https://api.kody.codes',
+			],
+			{
+				stdout: (text) => {
+					stdout += text
+				},
+				stderr: (text) => {
+					stderr += text
+				},
+			},
+		)
+		assert.equal(code, 0, stderr)
+		assert.match(stdout, /"plan": "pro"/)
+		assert.deepEqual(calls, ['GET /openapi.json', 'GET /v1/account/usage'])
+	} finally {
+		globalThis.fetch = previousFetch
+		clearOpenApiRouteCache()
+	}
+})
+
+test('api command refuses bootstrap redeem and documents auth bootstrap', async () => {
+	let stderr = ''
+	const code = await runCli(
+		['api', 'cliCredentialBootstrapRedeem', '--params', '{"code":"kody_bc_x"}', '--token', 'tok'],
+		{
+			stdout: () => undefined,
+			stderr: (text) => {
+				stderr += text
+			},
+		},
+	)
+	assert.equal(code, 1)
+	assert.match(stderr, /auth bootstrap --code/)
+})
+
+test('help documents the api command', async () => {
+	let stdout = ''
+	const code = await runCli(['help'], {
+		stdout: (text) => {
+			stdout += text
+		},
+	})
+	assert.equal(code, 0)
+	assert.match(stdout, /kody api <operationId>/)
+	assert.match(stdout, /usageGet/)
 })
 
 test('execute with --token (no --local) uses CapabilityProxy and never requires login', async () => {
