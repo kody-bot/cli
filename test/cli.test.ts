@@ -9,13 +9,37 @@ import {
 	executeSourcesConflict,
 	resolveApiToken,
 	resolveCommand,
+	resolveLocalExecuteBearer,
 	runCli,
 	shouldUseApiToken,
 } from '../src/cli.js'
 import { modernMcpProtocolVersion } from '../src/defaults.js'
 import { formatToolResult, listKodyTools } from '../src/mcp.js'
 import { redact } from '../src/redact.js'
-import { createFileBackend, saveCredentials } from '../src/store.js'
+import {
+	createFileBackend,
+	fileStorePath,
+	saveCredentials,
+	type StoredCredentials,
+} from '../src/store.js'
+
+function sampleLoginCredentials(
+	overrides: Partial<StoredCredentials> = {},
+): StoredCredentials {
+	return {
+		version: 1,
+		mcpUrl: 'https://kody.codes/mcp',
+		resource: 'https://kody.codes/mcp',
+		authorizationServerUrl: 'https://kody.codes',
+		clientId: 'client-1',
+		accessToken: 'oauth-access-from-login',
+		refreshToken: 'refresh-1',
+		tokenType: 'bearer',
+		expiresAt: Date.now() + 120_000,
+		scope: 'profile email',
+		...overrides,
+	}
+}
 
 test('resolveCommand maps subcommands and flags', () => {
 	assert.equal(resolveCommand(['search', 'what can you do']).command, 'search')
@@ -55,6 +79,40 @@ test('resolveApiToken prefers --token, falls back to KODY_API_TOKEN, and require
 	assert.throws(
 		() => resolveApiToken({}, {}),
 		/tokenCreate[\s\S]*local-execute[\s\S]*pass --token or set KODY_API_TOKEN/,
+	)
+})
+
+test('resolveLocalExecuteBearer prefers API token over login OAuth', async () => {
+	const token = await resolveLocalExecuteBearer({
+		tokenValues: { token: 'kody_at_flag' },
+		env: { KODY_API_TOKEN: 'kody_at_env' },
+		ensureCredentials: async () => {
+			throw new Error('login should not be consulted when a token is set')
+		},
+	})
+	assert.equal(token, 'kody_at_flag')
+})
+
+test('resolveLocalExecuteBearer uses login OAuth when no API token is set', async () => {
+	const token = await resolveLocalExecuteBearer({
+		tokenValues: {},
+		env: {},
+		ensureCredentials: async () => sampleLoginCredentials(),
+	})
+	assert.equal(token, 'oauth-access-from-login')
+})
+
+test('resolveLocalExecuteBearer fails clearly when neither login nor token is available', async () => {
+	await assert.rejects(
+		() =>
+			resolveLocalExecuteBearer({
+				tokenValues: {},
+				env: {},
+				ensureCredentials: async () => {
+					throw new Error('Not logged in')
+				},
+			}),
+		/execute --local needs auth[\s\S]*kody login[\s\S]*KODY_API_TOKEN/,
 	)
 })
 
@@ -179,8 +237,11 @@ test('execute without token or login prompts clearly', async () => {
 	assert.match(stderr, /--token/)
 })
 
-test('execute --local without a token names tokenCreate and does not pretend login is enough', async () => {
+test('execute --local without token or login fails clearly', async () => {
 	const previousToken = process.env.KODY_API_TOKEN
+	const previousXdg = process.env.XDG_CONFIG_HOME
+	const xdg = mkdtempSync(join(tmpdir(), 'kody-cli-no-login-'))
+	process.env.XDG_CONFIG_HOME = xdg
 	delete process.env.KODY_API_TOKEN
 	let stderr = ''
 	try {
@@ -192,13 +253,130 @@ test('execute --local without a token names tokenCreate and does not pretend log
 	} finally {
 		if (previousToken === undefined) delete process.env.KODY_API_TOKEN
 		else process.env.KODY_API_TOKEN = previousToken
+		if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME
+		else process.env.XDG_CONFIG_HOME = previousXdg
 	}
-	assert.match(stderr, /execute --local needs a scoped Kody API token/)
-	assert.match(stderr, /tokenCreate/)
-	assert.match(stderr, /local-execute/)
+	assert.match(stderr, /execute --local needs auth/)
+	assert.match(stderr, /kody login/)
+	assert.match(stderr, /tokenCreate|KODY_API_TOKEN/)
 	assert.match(stderr, /pass --token or set KODY_API_TOKEN/)
-	assert.match(stderr, /not used on this path/)
 	assert.doesNotMatch(stderr, /workerd did not start|Could not start workerd/)
+})
+
+test('execute --local with login (no API token) sends OAuth access token as Bearer', async () => {
+	const previousToken = process.env.KODY_API_TOKEN
+	const previousXdg = process.env.XDG_CONFIG_HOME
+	const previousMcpUrl = process.env.KODY_MCP_URL
+	const xdg = mkdtempSync(join(tmpdir(), 'kody-cli-login-local-'))
+	process.env.XDG_CONFIG_HOME = xdg
+	delete process.env.KODY_API_TOKEN
+	const mcpUrl = 'https://login-local.test/mcp'
+	process.env.KODY_MCP_URL = mcpUrl
+	const credentials = sampleLoginCredentials({ mcpUrl, resource: mcpUrl })
+	saveCredentials(credentials, createFileBackend(fileStorePath(mcpUrl)))
+
+	const bearers: Array<string> = []
+	const previousFetch = globalThis.fetch
+	globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+		const headers = new Headers(init?.headers)
+		bearers.push(headers.get('authorization') ?? '')
+		return new Response(
+			JSON.stringify({
+				error: { code: 'feature_disabled', message: 'local-execute is off' },
+			}),
+			{ status: 403 },
+		)
+	}) as typeof fetch
+
+	let stderr = ''
+	try {
+		const code = await runCli(
+			[
+				'execute',
+				'--local',
+				'--mcp-url',
+				mcpUrl,
+				'--api-url',
+				'https://api.kody.codes',
+				'--code',
+				'export default () => 1',
+			],
+			{ stdout: () => {}, stderr: (text) => (stderr += text) },
+		)
+		assert.equal(code, 1)
+	} finally {
+		globalThis.fetch = previousFetch
+		if (previousToken === undefined) delete process.env.KODY_API_TOKEN
+		else process.env.KODY_API_TOKEN = previousToken
+		if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME
+		else process.env.XDG_CONFIG_HOME = previousXdg
+		if (previousMcpUrl === undefined) delete process.env.KODY_MCP_URL
+		else process.env.KODY_MCP_URL = previousMcpUrl
+	}
+	assert.deepEqual(bearers, [`Bearer ${credentials.accessToken}`])
+	assert.match(stderr, /feature_disabled[\s\S]*local-execute/)
+	assert.equal(stderr.includes(credentials.accessToken), false)
+})
+
+test('execute --local prefers --token over a stored login session', async () => {
+	const previousToken = process.env.KODY_API_TOKEN
+	const previousXdg = process.env.XDG_CONFIG_HOME
+	const previousMcpUrl = process.env.KODY_MCP_URL
+	const xdg = mkdtempSync(join(tmpdir(), 'kody-cli-token-wins-'))
+	process.env.XDG_CONFIG_HOME = xdg
+	delete process.env.KODY_API_TOKEN
+	const mcpUrl = 'https://token-wins.test/mcp'
+	process.env.KODY_MCP_URL = mcpUrl
+	saveCredentials(
+		sampleLoginCredentials({
+			mcpUrl,
+			resource: mcpUrl,
+			accessToken: 'oauth-should-not-win',
+		}),
+		createFileBackend(fileStorePath(mcpUrl)),
+	)
+
+	const bearers: Array<string> = []
+	const previousFetch = globalThis.fetch
+	globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+		bearers.push(new Headers(init?.headers).get('authorization') ?? '')
+		return new Response(
+			JSON.stringify({
+				error: { code: 'feature_disabled', message: 'local-execute is off' },
+			}),
+			{ status: 403 },
+		)
+	}) as typeof fetch
+
+	let stderr = ''
+	try {
+		const code = await runCli(
+			[
+				'execute',
+				'--local',
+				'--token',
+				'kody_at_explicit',
+				'--mcp-url',
+				mcpUrl,
+				'--api-url',
+				'https://api.kody.codes',
+				'--code',
+				'export default () => 1',
+			],
+			{ stdout: () => {}, stderr: (text) => (stderr += text) },
+		)
+		assert.equal(code, 1)
+	} finally {
+		globalThis.fetch = previousFetch
+		if (previousToken === undefined) delete process.env.KODY_API_TOKEN
+		else process.env.KODY_API_TOKEN = previousToken
+		if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME
+		else process.env.XDG_CONFIG_HOME = previousXdg
+		if (previousMcpUrl === undefined) delete process.env.KODY_MCP_URL
+		else process.env.KODY_MCP_URL = previousMcpUrl
+	}
+	assert.deepEqual(bearers, ['Bearer kody_at_explicit'])
+	assert.match(stderr, /feature_disabled/)
 })
 
 test('execute token paths surface feature_disabled and insufficient_scope', async () => {

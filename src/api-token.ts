@@ -1,5 +1,9 @@
 import { apiTokenEnvVar } from './defaults.js'
 
+/** Platform tracking for login OAuth as CapabilityProxy / package-graph Bearer. */
+export const localExecuteOauthPlatformIssueUrl =
+	'https://github.com/kentcdodds/kody/issues/2812'
+
 /**
  * Scoped Open API / CapabilityProxy token (`kody_at_…`). Same source for
  * `execute --local`, token-only cloud execute, and Open API search/whoami.
@@ -12,6 +16,11 @@ export function readApiToken(
 	return token.length > 0 ? token : null
 }
 
+/** True when the bearer looks like a minted Open API token (not MCP OAuth). */
+export function isScopedApiToken(token: string): boolean {
+	return token.startsWith('kody_at_')
+}
+
 /**
  * How to mint the scoped token this CLI already accepts. There is no second
  * auth flow here — callers use the MCP `api` tool they already have.
@@ -20,14 +29,28 @@ export function apiTokenMintInstructions(): string {
 	return `Mint one with the Kody MCP \`api\` tool \`tokenCreate\` (include the \`local-execute\` scope plus the capability scopes this command needs) and pass --token or set ${apiTokenEnvVar}.`
 }
 
-/** `execute --local` never reads stored CLI OAuth, so login is not a substitute. */
+/** Token-only Open API paths (search / whoami / cloud token execute) with no token. */
 export function missingApiTokenMessage(purpose: string): string {
-	return `${purpose} needs a scoped Kody API token. ${apiTokenMintInstructions()} Stored \`kody login\` credentials are not used on this path.`
+	return `${purpose} needs a scoped Kody API token. ${apiTokenMintInstructions()}`
+}
+
+/**
+ * `execute --local` with neither `--token` / `KODY_API_TOKEN` nor `kody login`.
+ */
+export function missingLocalExecuteAuthMessage(
+	purpose: string = 'execute --local',
+): string {
+	return `${purpose} needs auth. Run \`kody login\`, or ${apiTokenMintInstructions()}`
 }
 
 /** Cloud search / whoami / execute when the process has neither a session nor a token. */
 export function missingCliAuthMessage(): string {
-	return `Not logged in, and no API token is set. ${apiTokenMintInstructions()} Or run \`kody login\` for browser OAuth (search, whoami, and cloud execute).`
+	return `Not logged in, and no API token is set. ${apiTokenMintInstructions()} Or run \`kody login\` for browser OAuth (search, whoami, cloud execute, and login-backed \`execute --local\`).`
+}
+
+/** 401 when CapabilityProxy rejected a non-`kody_at_` bearer (typically CLI OAuth). */
+export function rejectedOauthBearerMessage(): string {
+	return `Kody rejected the bearer from \`kody login\`: the Open API still accepts only scoped \`kody_at_…\` API tokens on CapabilityProxy / package-graph (not MCP OAuth). See ${localExecuteOauthPlatformIssueUrl}. Until that lands, ${apiTokenMintInstructions()}`
 }
 
 export function insufficientScopeMessage(input: {

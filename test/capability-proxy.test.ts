@@ -7,7 +7,7 @@ import {
 	openCapabilityProxySession,
 } from '../src/capability-proxy.js'
 
-const token = 'kody_tok_secret_value'
+const token = 'kody_at_secret_value'
 
 function respondWith(status: number, body: unknown) {
 	const requests: Array<{ url: string; method: string; headers: Headers; body: string | null }> =
@@ -62,6 +62,23 @@ test('openCapabilityProxySession explains a rejected token without echoing it', 
 			assert.match(error.message, /rejected the API token/)
 			assert.match(error.message, /--token or KODY_API_TOKEN/)
 			assert.equal(error.message.includes(token), false)
+			return true
+		},
+	)
+})
+
+test('openCapabilityProxySession explains rejected login OAuth and names the platform gap', async () => {
+	const oauth = 'oauth-access-from-login'
+	const { fetchFn } = respondWith(401, {
+		error: { code: 'unauthorized', message: 'Invalid API token.' },
+	})
+	await assert.rejects(
+		() => openCapabilityProxySession({ apiUrl: 'https://api.kody.codes', token: oauth, fetchFn }),
+		(error: Error) => {
+			assert.match(error.message, /kody login/)
+			assert.match(error.message, /kentcdodds\/kody\/issues\/2812/)
+			assert.match(error.message, /kody_at_/)
+			assert.equal(error.message.includes(oauth), false)
 			return true
 		},
 	)

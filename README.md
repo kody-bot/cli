@@ -88,10 +88,16 @@ npx @kodycodes/cli whoami
 
 - Neither `kody login` nor a token → the error tells you to mint one with the
   MCP `api` tool `tokenCreate` (scopes: `local-execute` plus the capability
-  scopes the module will call) and pass `--token` / `KODY_API_TOKEN`.
-  `execute --local` never reads stored CLI OAuth, so login is not a substitute
-  there.
-- Wrong/expired token → 401 with a mint-fresh-token message.
+  scopes the module will call) and pass `--token` / `KODY_API_TOKEN`, or run
+  `kody login` (for cloud MCP commands and for login-backed `execute --local`).
+- For `execute --local` specifically: `--token` / `KODY_API_TOKEN` wins when
+  set; otherwise the CLI uses the stored `kody login` OAuth access token as
+  the Bearer (no under-the-hood `tokenCreate`). The Open API must accept that
+  OAuth bearer on CapabilityProxy / package-graph
+  ([kentcdodds/kody#2812](https://github.com/kentcdodds/kody/issues/2812));
+  until then mint a scoped `kody_at_…` token.
+- Wrong/expired token → 401 with a mint-fresh-token message (or the OAuth
+  platform-gap message when the bearer is login OAuth).
 - Wrong scopes → the error includes `insufficient_scope` and the required
   scope when Kody sends one.
 - Account flag off → the error includes `feature_disabled` and the
@@ -105,19 +111,29 @@ with `--params`) on this machine instead of in Kody's cloud sandbox. Local CPU
 is free; every `kody:runtime` call (`kody.*`, `kody.mcp.*`, `workflows.create`)
 is proxied to Kody's CapabilityProxy and metered like a cloud hop. Static
 `kody:@scope/package/export` imports are **resolved into the local workerd
-bundle** via `POST /v1/local-execute/package-graph` (same Open API token —
-never hosted MCP `execute`, and never a whole-module CapabilityProxy →
-`kody.execute` defer). There is no author-facing `packages.invoke`.
+bundle** via `POST /v1/local-execute/package-graph` (same Bearer as
+CapabilityProxy — never hosted MCP `execute`, and never a whole-module
+CapabilityProxy → `kody.execute` defer). There is no author-facing
+`packages.invoke`.
 
 ```bash
-export KODY_API_TOKEN=…   # scoped token minted through the Kody `api` tool
+# Prefer login when already signed in (no temporary API token to paste):
+npx @kodycodes/cli login
+npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.com"}'
+
+# Or a scoped API token (still wins over login when set):
+export KODY_API_TOKEN=…   # minted through the Kody `api` tool
 npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.com"}'
 ```
 
-- **Auth:** a scoped API token from `--token` or `KODY_API_TOKEN` (prefer the
-  env var so the token stays out of shell history and `ps`). No `kody login`,
-  and the CLI never reads MCP OAuth tokens from other hosts. The token stays in
-  the CLI process; the sandbox only talks to a loopback bridge.
+- **Auth:** `--token` / `KODY_API_TOKEN` when set; else a valid `kody login`
+  session (OAuth access token as Bearer — never printed, never exchanged via
+  `tokenCreate`). Prefer the env var for API tokens so they stay out of shell
+  history and `ps`. The bearer stays in the CLI process; the sandbox only
+  talks to a loopback bridge. Host MCP OAuth from other clients is never
+  read. Until [kentcdodds/kody#2812](https://github.com/kentcdodds/kody/issues/2812)
+  ships, login-only Bearer is rejected by the Open API — use a `kody_at_…`
+  token in that case.
 - **Node.js:** 22 or newer (`package.json` `engines` is `>=22`). Older Node
   fails immediately with that requirement, before workerd is downloaded or
   started.
@@ -167,8 +183,9 @@ If the keychain is unavailable (common on headless Linux), the CLI writes a
 
 Access tokens refresh automatically on expiry or HTTP 401.
 
-`execute --local` and token-only cloud execute do not use stored CLI
-credentials; they only read `--token` / `KODY_API_TOKEN`.
+`execute --local` prefers `--token` / `KODY_API_TOKEN` when set; otherwise it
+uses stored CLI credentials from `kody login`. Token-only cloud execute still
+only reads `--token` / `KODY_API_TOKEN`.
 
 ## Releases
 

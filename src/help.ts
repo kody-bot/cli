@@ -29,16 +29,19 @@ Usage:
              CapabilityProxy — including cloud execute without --local.
              Mint with the MCP \`api\` tool \`tokenCreate\` (include
              \`local-execute\` plus the capability scopes you need).
-             --local still runs the module on this machine (workerd).
+             For \`execute --local\`, \`--token\` / ${apiTokenEnvVar} wins
+             when set; otherwise a valid \`kody login\` session is used as
+             the Bearer (no tokenCreate exchange).
 
   --local    Run the execute module on this machine (workerd, Linux/macOS).
-             Requires Node.js 22 or newer and a token with the local-execute
-             scope. Static kody:@… imports are fetched via
-             POST /v1/local-execute/package-graph and embedded in local
-             workerd (CapabilityProxy only for per-call kody:runtime hops —
-             never a whole-module cloud kody.execute defer). Fails clearly
-             when that package-graph API is unavailable. Cloud token execute
-             (no --local) uses CapabilityProxy → kody.execute for every module.
+             Requires Node.js 22 or newer. Auth: \`--token\` /
+             ${apiTokenEnvVar}, or else \`kody login\`. Static kody:@…
+             imports are fetched via POST /v1/local-execute/package-graph
+             and embedded in local workerd (CapabilityProxy only for
+             per-call kody:runtime hops — never a whole-module cloud
+             kody.execute defer). Fails clearly when that package-graph
+             API is unavailable. Cloud token execute (no --local) uses
+             CapabilityProxy → kody.execute for every module.
 
 Environment:
   KODY_MCP_URL        Override the default MCP URL (${defaultMcpUrl})

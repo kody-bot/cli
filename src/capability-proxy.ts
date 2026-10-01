@@ -2,6 +2,8 @@ import {
 	apiTokenMintInstructions,
 	featureDisabledMessage,
 	insufficientScopeMessage,
+	isScopedApiToken,
+	rejectedOauthBearerMessage,
 } from './api-token.js'
 import { apiTokenEnvVar, cliName } from './defaults.js'
 import { describeNetworkError } from './network-error.js'
@@ -10,7 +12,8 @@ import { readPackageVersion } from './package-info.js'
 /**
  * HTTP contract for Kody's CapabilityProxy (Open API `/v1`). Local execute
  * runs user code in workerd and forwards every `kody:runtime` call here with
- * a scoped API token.
+ * a Bearer from `--token` / `KODY_API_TOKEN` or (when unset) `kody login`
+ * OAuth access token.
  *
  * - `GET  /v1/capability-proxy/session` validates the token before workerd
  *   starts. 200 → `{ scopes?: string[], expiresAt?: string }`.
@@ -20,8 +23,8 @@ import { readPackageVersion } from './package-info.js'
  *   is the positional argument list. 200 → `{ result }`.
  *
  * Errors use `{ error: { code, message } }` (a bare string is accepted too).
- * 401 means the token is expired/revoked; 403 `feature_disabled` means the
- * `local-execute` flag is off for the account.
+ * 401 means the token is expired/revoked (or MCP OAuth until the platform
+ * accepts it); 403 `feature_disabled` means the `local-execute` flag is off.
  */
 export const capabilityProxySessionPath = 'v1/capability-proxy/session'
 export const capabilityProxyCallPath = 'v1/capability-proxy/call'
@@ -88,7 +91,7 @@ export async function openCapabilityProxySession(
 	const response = await send(input, url, { method: 'GET' })
 	const body = await readJson(response)
 	if (!response.ok) {
-		throw describeFailure(response.status, body, url, 'session')
+		throw describeFailure(response.status, body, url, 'session', input.token)
 	}
 	const record = isRecord(body) ? body : {}
 	return {
@@ -112,7 +115,7 @@ export async function callCapabilityProxy(
 	})
 	const body = await readJson(response)
 	if (!response.ok) {
-		throw describeFailure(response.status, body, url, 'call')
+		throw describeFailure(response.status, body, url, 'call', input.token)
 	}
 	const failure = readErrorBody(body)
 	if (failure) {
@@ -174,15 +177,16 @@ function describeFailure(
 	body: unknown,
 	url: URL,
 	stage: 'session' | 'call',
+	token: string,
 ): CapabilityProxyError {
 	const failure = readErrorBody(body)
 	const code = failure?.code ?? null
 	const detail = failure?.message ? ` Server said: ${failure.message}` : ''
 	if (status === 401) {
-		return new CapabilityProxyError(
-			`Kody rejected the API token (expired, revoked, or malformed). Mint a fresh scoped token and pass it with --token or ${apiTokenEnvVar}.${detail}`,
-			{ status, code },
-		)
+		const message = isScopedApiToken(token)
+			? `Kody rejected the API token (expired, revoked, or malformed). Mint a fresh scoped token and pass it with --token or ${apiTokenEnvVar}.${detail}`
+			: `${rejectedOauthBearerMessage()}${detail}`
+		return new CapabilityProxyError(message, { status, code })
 	}
 	if (code === 'feature_disabled') {
 		return new CapabilityProxyError(`${featureDisabledMessage()}${detail}`, { status, code })
