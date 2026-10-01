@@ -2,8 +2,8 @@ import { parseArgs } from 'node:util'
 import { readFile } from 'node:fs/promises'
 import {
 	hasExplicitTokenFlag,
-	readApiToken,
 	requireApiToken,
+	resolveScopedApiToken,
 } from './api-token.js'
 import {
 	deleteStoredApiToken,
@@ -25,7 +25,11 @@ import { installSkill } from './skill.js'
 import { readPackageVersion } from './package-info.js'
 import { redactError } from './redact.js'
 
-export { readApiToken, requireApiToken as resolveApiToken } from './api-token.js'
+export {
+	readApiToken,
+	requireApiToken as resolveApiToken,
+	resolveScopedApiToken,
+} from './api-token.js'
 export { resolveLocalExecuteBearer } from './local-execute-auth.js'
 export { authBootstrap, redeemBootstrapCode } from './auth-bootstrap.js'
 
@@ -256,7 +260,7 @@ async function dispatch(
 			const scopes = result.stored.scopes?.join(', ') || '(none)'
 			write(
 				[
-					`Bootstrap API token stored for execute --local.`,
+					`Bootstrap API token stored for execute --local, search, whoami, and token-auth cloud execute.`,
 					`api: ${result.stored.apiUrl}`,
 					`token id: ${result.stored.tokenId}`,
 					`scopes: ${scopes}`,
@@ -271,15 +275,23 @@ async function dispatch(
 		}
 		case 'whoami': {
 			const tokenValues = tokenFlagValues(parsed.values)
-			if (shouldUseApiToken({ tokenValues, mcpUrl, allowEnvWithoutLogin: true })) {
+			const apiUrl = apiUrlFrom({
+				apiUrl:
+					typeof parsed.values['api-url'] === 'string'
+						? parsed.values['api-url']
+						: undefined,
+			})
+			if (
+				shouldUseApiToken({
+					tokenValues,
+					mcpUrl,
+					apiUrl,
+					allowEnvWithoutLogin: true,
+				})
+			) {
 				const identity = await whoamiWithApiToken({
-					token: requireApiToken(tokenValues, process.env, 'whoami'),
-					apiUrl: apiUrlFrom({
-						apiUrl:
-							typeof parsed.values['api-url'] === 'string'
-								? parsed.values['api-url']
-								: undefined,
-					}),
+					token: requireApiToken(tokenValues, process.env, 'whoami', { apiUrl }),
+					apiUrl,
 				})
 				if (json) {
 					write(`${JSON.stringify(identity, null, 2)}\n`)
@@ -326,15 +338,23 @@ async function dispatch(
 		case 'search': {
 			const query = parsed.positionals.join(' ').trim()
 			const tokenValues = tokenFlagValues(parsed.values)
-			if (shouldUseApiToken({ tokenValues, mcpUrl, allowEnvWithoutLogin: true })) {
+			const apiUrl = apiUrlFrom({
+				apiUrl:
+					typeof parsed.values['api-url'] === 'string'
+						? parsed.values['api-url']
+						: undefined,
+			})
+			if (
+				shouldUseApiToken({
+					tokenValues,
+					mcpUrl,
+					apiUrl,
+					allowEnvWithoutLogin: true,
+				})
+			) {
 				const result = await searchWithApiToken({
-					token: requireApiToken(tokenValues, process.env, 'search'),
-					apiUrl: apiUrlFrom({
-						apiUrl:
-							typeof parsed.values['api-url'] === 'string'
-								? parsed.values['api-url']
-								: undefined,
-					}),
+					token: requireApiToken(tokenValues, process.env, 'search', { apiUrl }),
+					apiUrl,
 					query: query || undefined,
 					entity:
 						typeof parsed.values.entity === 'string' ? parsed.values.entity : undefined,
@@ -407,6 +427,7 @@ async function dispatch(
 				shouldUseApiToken({
 					tokenValues,
 					mcpUrl,
+					apiUrl,
 					allowEnvWithoutLogin: true,
 				})
 			const result = local
@@ -433,6 +454,7 @@ async function dispatch(
 								tokenValues,
 								process.env,
 								'execute with an API token',
+								{ apiUrl },
 							),
 							apiUrl,
 						})
@@ -543,21 +565,36 @@ function tokenFlagValues(values: ReturnType<typeof parseKnown>['values']): {
 
 /**
  * Prefer a scoped API token when the user passed `--token`, or when
- * `KODY_API_TOKEN` is set and there is no stored `kody login` session.
- * Logged-in MCP OAuth still wins over an env-only token so a leftover
- * `KODY_API_TOKEN` does not hijack cloud MCP commands.
+ * `KODY_API_TOKEN` / a stored bootstrap token is available and there is no
+ * stored `kody login` session. Logged-in MCP OAuth still wins over an
+ * env-only or stored token so a leftover token does not hijack cloud MCP
+ * commands.
  */
 export function shouldUseApiToken(input: {
 	tokenValues: { token?: string }
 	mcpUrl: string
 	allowEnvWithoutLogin: boolean
 	env?: NodeJS.ProcessEnv
+	apiUrl?: string
 	/** Override session detection (tests). */
 	hasSession?: boolean
+	/** Test seam for stored bootstrap/API token lookup. */
+	loadApiToken?: NonNullable<
+		Parameters<typeof resolveScopedApiToken>[0]
+	>['loadApiToken']
 }): boolean {
 	if (hasExplicitTokenFlag(input.tokenValues)) return true
 	if (!input.allowEnvWithoutLogin) return false
-	if (!readApiToken(input.tokenValues, input.env)) return false
+	if (
+		!resolveScopedApiToken({
+			tokenValues: input.tokenValues,
+			env: input.env,
+			apiUrl: input.apiUrl,
+			loadApiToken: input.loadApiToken,
+		})
+	) {
+		return false
+	}
 	const loggedIn =
 		input.hasSession ?? loadCredentials(input.mcpUrl) != null
 	return !loggedIn

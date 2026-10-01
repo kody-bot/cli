@@ -27,20 +27,24 @@ Usage:
   auth bootstrap
              Redeem a one-shot \`kody_bc_…\` from MCP \`cliCredentialBootstrap\`
              (POST /v1/tokens/bootstrap/redeem, no Authorization header).
-             Stores the resulting \`kody_at_…\` for \`execute --local\` without
-             printing the token. Prefer this over tokenCreate for agents
-             already on MCP. Interactive humans can use \`kody login\` instead.
+             Stores the resulting \`kody_at_…\` for \`execute --local\`,
+             search, whoami, and token-auth cloud execute without printing
+             the token. Prefer this over tokenCreate for agents already on
+             MCP. Interactive humans can use \`kody login\` instead.
 
   --token / ${apiTokenEnvVar}
              Scoped API token (preferred via env). With no \`kody login\`
              session, search / whoami / execute use the Open API and
              CapabilityProxy — including cloud execute without --local.
+             Auth priority matches \`execute --local\`: \`--token\` /
+             ${apiTokenEnvVar}; stored bootstrap/API token from
+             \`auth bootstrap\`; then \`kody login\` where applicable.
              Mint with the MCP \`api\` tool \`tokenCreate\` (include
              \`local-execute\` plus the capability scopes you need), or use
              \`auth bootstrap\` after \`cliCredentialBootstrap\`.
-             For \`execute --local\`, auth priority is: \`--token\` /
-             ${apiTokenEnvVar}; stored bootstrap/API token; then a valid
-             \`kody login\` session as Bearer (no tokenCreate exchange).
+             For \`execute --local\`, a valid \`kody login\` session can also
+             supply Bearer when no scoped token is available (no tokenCreate
+             exchange).
 
   --local    Run the execute module on this machine (workerd, Linux/macOS).
              Requires Node.js 22 or newer. Auth: \`--token\` /

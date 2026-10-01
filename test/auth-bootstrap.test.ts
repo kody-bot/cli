@@ -222,6 +222,148 @@ test('resolveLocalExecuteBearer still prefers --token over stored bootstrap', as
 	assert.equal(token, 'kody_at_flag')
 })
 
+test('whoami uses stored bootstrap token without env, --token, or login', async () => {
+	const home = mkdtempSync(join(tmpdir(), 'kody-cli-whoami-store-'))
+	const previousXdg = process.env.XDG_CONFIG_HOME
+	const previousHome = process.env.HOME
+	const previousToken = process.env.KODY_API_TOKEN
+	const previousMcpUrl = process.env.KODY_MCP_URL
+	process.env.XDG_CONFIG_HOME = home
+	process.env.HOME = home
+	delete process.env.KODY_API_TOKEN
+	process.env.KODY_MCP_URL = 'http://127.0.0.1:9/unreachable-mcp'
+	const storedToken = 'kody_at_whoami_stored'
+	saveStoredApiToken({
+		version: 1,
+		apiUrl,
+		token: storedToken,
+		tokenId: 'tok_whoami_stored',
+		scopes: ['account:read', 'local-execute'],
+		createdVia: 'cli-bootstrap',
+		expiresAt: '2026-10-02T12:00:00.000Z',
+	})
+	const authHeaders: Array<string | null> = []
+	const previousFetch = globalThis.fetch
+	globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+		const url = String(input)
+		const headers = new Headers(init?.headers)
+		authHeaders.push(headers.get('authorization'))
+		if (url.includes('/v1/tokens/current')) {
+			return new Response(
+				JSON.stringify({
+					id: 'tok_whoami_stored',
+					name: 'kody-cli-bootstrap',
+					scopes: ['account:read', 'local-execute'],
+					expires_at: '2026-10-02T12:00:00.000Z',
+					max_expires_at: null,
+				}),
+				{ status: 200 },
+			)
+		}
+		if (url.includes('/v1/me')) {
+			return new Response(
+				JSON.stringify({
+					user_id: 'user_1',
+					email: 'agent@example.com',
+					display_name: 'Agent',
+				}),
+				{ status: 200 },
+			)
+		}
+		return new Response('not found', { status: 404 })
+	}) as typeof fetch
+	let stdout = ''
+	let stderr = ''
+	try {
+		const code = await runCli(['whoami', '--api-url', apiUrl], {
+			stdout: (text) => {
+				stdout += text
+			},
+			stderr: (text) => {
+				stderr += text
+			},
+		})
+		assert.equal(code, 0, stderr)
+	} finally {
+		globalThis.fetch = previousFetch
+		if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME
+		else process.env.XDG_CONFIG_HOME = previousXdg
+		if (previousHome === undefined) delete process.env.HOME
+		else process.env.HOME = previousHome
+		if (previousToken === undefined) delete process.env.KODY_API_TOKEN
+		else process.env.KODY_API_TOKEN = previousToken
+		if (previousMcpUrl === undefined) delete process.env.KODY_MCP_URL
+		else process.env.KODY_MCP_URL = previousMcpUrl
+	}
+	assert.match(stdout, /tok_whoami_stored/)
+	assert.match(stdout, /Agent <agent@example.com>/)
+	assert.doesNotMatch(stdout, /kody_at_/)
+	assert.doesNotMatch(stderr, /Not logged in/)
+	assert.ok(authHeaders.some((header) => header === `Bearer ${storedToken}`))
+})
+
+test('search uses stored bootstrap token without env, --token, or login', async () => {
+	const home = mkdtempSync(join(tmpdir(), 'kody-cli-search-store-'))
+	const previousXdg = process.env.XDG_CONFIG_HOME
+	const previousHome = process.env.HOME
+	const previousToken = process.env.KODY_API_TOKEN
+	const previousMcpUrl = process.env.KODY_MCP_URL
+	process.env.XDG_CONFIG_HOME = home
+	process.env.HOME = home
+	delete process.env.KODY_API_TOKEN
+	process.env.KODY_MCP_URL = 'http://127.0.0.1:9/unreachable-mcp'
+	const storedToken = 'kody_at_search_stored'
+	saveStoredApiToken({
+		version: 1,
+		apiUrl,
+		token: storedToken,
+		tokenId: 'tok_search_stored',
+		scopes: ['local-execute'],
+		createdVia: 'cli-bootstrap',
+	})
+	const authHeaders: Array<string | null> = []
+	const previousFetch = globalThis.fetch
+	globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+		const url = String(input)
+		const headers = new Headers(init?.headers)
+		authHeaders.push(headers.get('authorization'))
+		if (url.includes('/v1/search')) {
+			return new Response(
+				JSON.stringify({ results: [{ id: 'guide:open_api', title: 'Open API' }] }),
+				{ status: 200 },
+			)
+		}
+		return new Response('not found', { status: 404 })
+	}) as typeof fetch
+	let stdout = ''
+	let stderr = ''
+	try {
+		const code = await runCli(['search', 'open api', '--api-url', apiUrl], {
+			stdout: (text) => {
+				stdout += text
+			},
+			stderr: (text) => {
+				stderr += text
+			},
+		})
+		assert.equal(code, 0, stderr)
+	} finally {
+		globalThis.fetch = previousFetch
+		if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME
+		else process.env.XDG_CONFIG_HOME = previousXdg
+		if (previousHome === undefined) delete process.env.HOME
+		else process.env.HOME = previousHome
+		if (previousToken === undefined) delete process.env.KODY_API_TOKEN
+		else process.env.KODY_API_TOKEN = previousToken
+		if (previousMcpUrl === undefined) delete process.env.KODY_MCP_URL
+		else process.env.KODY_MCP_URL = previousMcpUrl
+	}
+	assert.match(stdout, /guide:open_api/)
+	assert.doesNotMatch(stdout, /kody_at_/)
+	assert.doesNotMatch(stderr, /Not logged in/)
+	assert.ok(authHeaders.some((header) => header === `Bearer ${storedToken}`))
+})
+
 test('parseStoredApiToken rejects non-kody_at payloads', () => {
 	assert.throws(
 		() =>

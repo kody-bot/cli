@@ -1,8 +1,20 @@
-import { apiTokenEnvVar } from './defaults.js'
+import { loadStoredApiToken } from './api-token-store.js'
+import { apiTokenEnvVar, defaultApiUrl } from './defaults.js'
+import type { SecretBackend, StoreResolution } from './store.js'
 
 /** Platform tracking for login OAuth as CapabilityProxy / package-graph Bearer. */
 export const localExecuteOauthPlatformIssueUrl =
 	'https://github.com/kentcdodds/kody/issues/2812'
+
+export type ResolveScopedApiTokenInput = {
+	tokenValues?: { token?: string }
+	env?: NodeJS.ProcessEnv
+	apiUrl?: string
+	apiTokenBackend?: SecretBackend
+	apiTokenResolution?: StoreResolution
+	/** Test seam. */
+	loadApiToken?: typeof loadStoredApiToken
+}
 
 /**
  * Scoped Open API / CapabilityProxy token (`kody_at_…`). Same source for
@@ -14,6 +26,20 @@ export function readApiToken(
 ): string | null {
 	const token = (values.token ?? env[apiTokenEnvVar] ?? '').trim()
 	return token.length > 0 ? token : null
+}
+
+/**
+ * Resolve a scoped API token without falling back to `kody login` OAuth.
+ * Priority: `--token` / `KODY_API_TOKEN` → stored bootstrap/API token.
+ */
+export function resolveScopedApiToken(
+	input: ResolveScopedApiTokenInput = {},
+): string | null {
+	const token = readApiToken(input.tokenValues, input.env)
+	if (token) return token
+	const apiUrl = input.apiUrl || defaultApiUrl
+	const loadApi = input.loadApiToken ?? loadStoredApiToken
+	return loadApi(apiUrl, input.apiTokenBackend, input.apiTokenResolution)?.token ?? null
 }
 
 /** True when the bearer looks like a minted Open API token (not MCP OAuth). */
@@ -83,8 +109,13 @@ export function requireApiToken(
 	values: { token?: string } = {},
 	env: NodeJS.ProcessEnv = process.env,
 	purpose: string = 'this command',
+	options: Omit<ResolveScopedApiTokenInput, 'tokenValues' | 'env'> = {},
 ): string {
-	const token = readApiToken(values, env)
+	const token = resolveScopedApiToken({
+		tokenValues: values,
+		env,
+		...options,
+	})
 	if (!token) throw new Error(missingApiTokenMessage(purpose))
 	return token
 }

@@ -11,7 +11,8 @@ import {
 
 /**
  * Scoped API token stored by `auth bootstrap` (ADR 0056) for
- * `execute --local`. Separate from `kody login` OAuth credentials.
+ * `execute --local`, Open API search/whoami, and token-auth cloud execute.
+ * Separate from `kody login` OAuth credentials.
  */
 export type StoredApiToken = {
 	version: 1
