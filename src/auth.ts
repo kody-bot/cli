@@ -11,6 +11,7 @@ import {
 } from '@modelcontextprotocol/client'
 import {
 	accessTokenSkewMs,
+	apiTokenEnvVar,
 	cliRedirectUrl,
 	defaultMcpUrl,
 	defaultScopes,
@@ -151,7 +152,9 @@ export async function ensureFreshCredentials(input: {
 	const mcpUrl = input.mcpUrl ?? defaultMcpUrl
 	const credentials = loadCredentials(mcpUrl, input.backend)
 	if (!credentials) {
-		throw new Error('Not logged in. Run `kody login`.')
+		throw new Error(
+			`Not logged in. Run \`kody login\`, or pass a scoped API token with --token / ${apiTokenEnvVar} (search, whoami, and execute — including cloud execute without --local).`,
+		)
 	}
 	if (!isAccessTokenExpired(credentials, input.now)) {
 		return credentials

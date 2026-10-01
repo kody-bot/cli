@@ -62,11 +62,35 @@ Or run via `npx @kodycodes/cli` without a global install.
 | `kody login` | Browser OAuth (CIMD + PKCE) for the CLI itself. Stores access and refresh tokens. |
 | `kody logout` | Deletes stored CLI credentials. |
 | `kody status` | Shows CLI login state without printing secrets. |
-| `kody whoami` | Confirms the CLI MCP connection and lists tools. |
-| `kody search [query]` | Calls Kody `search` from the CLI (prefer the host MCP tool). |
-| `kody execute` | Calls Kody `execute` from the CLI (`--invoke`, `--code`, `--file`, or stdin via `--file -`). Add `--local` to run the module on this machine. |
+| `kody whoami` | Confirms the CLI MCP connection and lists tools. With a scoped API token (and no login), shows token identity via the Open API. |
+| `kody search [query]` | Calls Kody `search` from the CLI (prefer the host MCP tool). Token-only auth uses Open API `GET /v1/search`. |
+| `kody execute` | Calls Kody `execute` from the CLI (`--invoke`, `--code`, `--file`, or stdin via `--file -`). With a scoped API token and no login (or with `--token`), cloud execute goes through CapabilityProxy → `kody.execute` — no `kody login`. Add `--local` to run the module on this machine instead. |
 
 `--json` prints structured MCP results.
+
+## Token-authenticated execute (no `kody login`)
+
+Scoped API tokens (`kody_at_…`, from the MCP `api` tool `tokenCreate` or
+`POST /v1/tokens`) authenticate the Open API and CapabilityProxy. They never
+replace MCP OAuth on `/mcp`. The CLI uses that token path when you pass
+`--token` / `KODY_API_TOKEN` and are not logged in (or when you pass `--token`
+explicitly):
+
+```bash
+export KODY_API_TOKEN=…   # scopes: local-execute (+ search:read for search)
+# Cloud execute — module runs in Kody's sandbox via CapabilityProxy → kody.execute
+npx @kodycodes/cli execute --code 'export default async () => ({ ok: true })'
+# Same token, module runs on this machine
+npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.com"}'
+npx @kodycodes/cli search "what can you do"
+npx @kodycodes/cli whoami
+```
+
+- Missing token → prompt to set `--token` / `KODY_API_TOKEN` or run `kody login`.
+- Wrong/expired token → 401 with a mint-fresh-token message.
+- Token lacks `local-execute` (or the account flag is off) → 403 naming the
+  scope or `local-execute` feature flag before any module runs.
+- Prefer the env var so the token stays out of shell history and `ps`.
 
 ## Local execute
 
@@ -119,8 +143,8 @@ If the keychain is unavailable (common on headless Linux), the CLI writes a
 
 Access tokens refresh automatically on expiry or HTTP 401.
 
-`execute --local` does not use stored CLI credentials; it only reads
-`--token` / `KODY_API_TOKEN`.
+`execute --local` and token-only cloud execute do not use stored CLI
+credentials; they only read `--token` / `KODY_API_TOKEN`.
 
 ## Releases
 
