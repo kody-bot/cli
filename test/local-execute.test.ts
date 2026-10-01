@@ -376,7 +376,7 @@ test('runLocalExecute stops before starting workerd when the token or flag is re
 		() =>
 			runLocalExecute({
 				code: 'export default () => 1',
-				token: 'kody_tok_revoked',
+				token: 'kody_at_revoked',
 				apiUrl,
 				workerdPath: neverRuns,
 			}),
@@ -400,7 +400,7 @@ test('runLocalExecute stops before starting workerd when the token or flag is re
 })
 
 test(
-	'kody execute --local uses the token only and never touches CLI login',
+	'kody execute --local with --token never requires MCP login',
 	{ timeout: 180_000 },
 	async () => {
 		reset()

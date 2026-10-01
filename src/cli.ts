@@ -11,6 +11,7 @@ import { ensureFreshCredentials, login } from './auth.js'
 import { deleteCredentials, loadCredentials } from './store.js'
 import { callKodyTool, formatToolResult, listKodyTools } from './mcp.js'
 import { runInstall } from './install.js'
+import { resolveLocalExecuteBearer } from './local-execute-auth.js'
 import { runLocalExecute } from './local-execute.js'
 import { assertLocalExecuteNodeEngine } from './node-engine.js'
 import { searchWithApiToken, whoamiWithApiToken } from './open-api-client.js'
@@ -20,6 +21,7 @@ import { readPackageVersion } from './package-info.js'
 import { redactError } from './redact.js'
 
 export { readApiToken, requireApiToken as resolveApiToken } from './api-token.js'
+export { resolveLocalExecuteBearer } from './local-execute-auth.js'
 
 export type CommandName =
 	| 'login'
@@ -330,7 +332,11 @@ async function dispatch(
 						code: args.code as string,
 						params: args.params,
 						conversationId: args.conversationId as string | undefined,
-						token: requireApiToken(tokenValues, process.env, 'execute --local'),
+						token: await resolveLocalExecuteBearer({
+							tokenValues,
+							mcpUrl,
+							purpose: 'execute --local',
+						}),
 						apiUrl,
 						onStatus: (message) => writeErr(`${message}\n`),
 					})

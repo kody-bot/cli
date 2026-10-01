@@ -3,6 +3,7 @@ import {
 	capabilityProxyUrl,
 	type CapabilityProxyClientInput,
 } from './capability-proxy.js'
+import { isScopedApiToken, rejectedOauthBearerMessage } from './api-token.js'
 import { cliName } from './defaults.js'
 import { describeNetworkError } from './network-error.js'
 import { readPackageVersion } from './package-info.js'
@@ -122,7 +123,7 @@ export async function fetchLocalPackageGraph(
 
 	const body = await readJson(response)
 	if (!response.ok) {
-		throw describePackageGraphFailure(response.status, body, url, imports)
+		throw describePackageGraphFailure(response.status, body, url, imports, input.token)
 	}
 
 	const graph = parsePackageGraphBody(body, imports)
@@ -180,6 +181,7 @@ function describePackageGraphFailure(
 	body: unknown,
 	url: URL,
 	imports: Array<string>,
+	token: string,
 ): LocalPackageGraphError {
 	const failure = readErrorBody(body)
 	const code = failure?.code ?? null
@@ -195,10 +197,10 @@ function describePackageGraphFailure(
 		)
 	}
 	if (status === 401) {
-		return new LocalPackageGraphError(
-			`Kody rejected the API token while fetching the local package graph.${detail}`,
-			{ status, code },
-		)
+		const message = isScopedApiToken(token)
+			? `Kody rejected the API token while fetching the local package graph.${detail}`
+			: `${rejectedOauthBearerMessage()}${detail}`
+		return new LocalPackageGraphError(message, { status, code })
 	}
 	if (code === 'feature_disabled') {
 		return new LocalPackageGraphError(

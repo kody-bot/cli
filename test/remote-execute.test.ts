@@ -107,7 +107,7 @@ test('runRemoteExecuteWithToken surfaces missing-token session 401 clearly', asy
 		() =>
 			runRemoteExecuteWithToken({
 				code: 'export default () => 1',
-				token: 'bad',
+				token: 'kody_at_bad',
 				apiUrl: 'https://api.kody.codes',
 				fetchFn,
 			}),
