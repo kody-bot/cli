@@ -73,7 +73,21 @@ test('openCapabilityProxySession names the local-execute flag when it is off', a
 	})
 	await assert.rejects(
 		() => openCapabilityProxySession({ apiUrl: 'https://api.kody.codes', token, fetchFn }),
-		/not enabled for this Kody account \(feature flag `local-execute`\)/,
+		/feature_disabled[\s\S]*feature flag `local-execute`/,
+	)
+})
+
+test('openCapabilityProxySession names insufficient_scope and the required scope', async () => {
+	const { fetchFn } = respondWith(403, {
+		error: {
+			code: 'insufficient_scope',
+			message: 'need local-execute',
+			details: { required_scope: 'local-execute' },
+		},
+	})
+	await assert.rejects(
+		() => openCapabilityProxySession({ apiUrl: 'https://api.kody.codes', token, fetchFn }),
+		/insufficient_scope[\s\S]*local-execute[\s\S]*tokenCreate[\s\S]*KODY_API_TOKEN/,
 	)
 })
 
@@ -155,6 +169,24 @@ test('callCapabilityProxy surfaces capability errors from string or object bodie
 				args: [{}],
 			}),
 		(error: Error) => error.message === 'emailSend needs a verified destination',
+	)
+	const missingScope = respondWith(403, {
+		error: {
+			code: 'insufficient_scope',
+			message: 'emailSend is not granted',
+			details: { required_scopes: ['email:send'] },
+		},
+	})
+	await assert.rejects(
+		() =>
+			callCapabilityProxy({
+				apiUrl: 'https://api.kody.codes',
+				token,
+				fetchFn: missingScope.fetchFn,
+				path: ['kody', 'emailSend'],
+				args: [{}],
+			}),
+		/insufficient_scope[\s\S]*email:send[\s\S]*tokenCreate/,
 	)
 	const { fetchFn } = respondWith(422, { error: { code: 'invalid_args', message: 'to is required' } })
 	await assert.rejects(

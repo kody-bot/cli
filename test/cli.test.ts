@@ -52,7 +52,10 @@ test('resolveCommand parses execute --local flags', () => {
 test('resolveApiToken prefers --token, falls back to KODY_API_TOKEN, and requires one', () => {
 	assert.equal(resolveApiToken({ token: 'flag' }, { KODY_API_TOKEN: 'env' }), 'flag')
 	assert.equal(resolveApiToken({}, { KODY_API_TOKEN: ' env ' }), 'env')
-	assert.throws(() => resolveApiToken({}, {}), /pass --token or set KODY_API_TOKEN/)
+	assert.throws(
+		() => resolveApiToken({}, {}),
+		/tokenCreate[\s\S]*local-execute[\s\S]*pass --token or set KODY_API_TOKEN/,
+	)
 })
 
 test('apiUrlFrom defaults to api.kody.codes', () => {
@@ -169,7 +172,94 @@ test('execute without token or login prompts clearly', async () => {
 		if (previousToken === undefined) delete process.env.KODY_API_TOKEN
 		else process.env.KODY_API_TOKEN = previousToken
 	}
-	assert.match(stderr, /Not logged in|KODY_API_TOKEN|--token/)
+	assert.match(stderr, /Not logged in, and no API token is set/)
+	assert.match(stderr, /tokenCreate/)
+	assert.match(stderr, /local-execute/)
+	assert.match(stderr, /KODY_API_TOKEN/)
+	assert.match(stderr, /--token/)
+})
+
+test('execute --local without a token names tokenCreate and does not pretend login is enough', async () => {
+	const previousToken = process.env.KODY_API_TOKEN
+	delete process.env.KODY_API_TOKEN
+	let stderr = ''
+	try {
+		const code = await runCli(
+			['execute', '--local', '--code', 'export default () => 1'],
+			{ stdout: () => {}, stderr: (text) => (stderr += text) },
+		)
+		assert.equal(code, 1)
+	} finally {
+		if (previousToken === undefined) delete process.env.KODY_API_TOKEN
+		else process.env.KODY_API_TOKEN = previousToken
+	}
+	assert.match(stderr, /execute --local needs a scoped Kody API token/)
+	assert.match(stderr, /tokenCreate/)
+	assert.match(stderr, /local-execute/)
+	assert.match(stderr, /pass --token or set KODY_API_TOKEN/)
+	assert.match(stderr, /not used on this path/)
+	assert.doesNotMatch(stderr, /workerd did not start|Could not start workerd/)
+})
+
+test('execute token paths surface feature_disabled and insufficient_scope', async () => {
+	const previousToken = process.env.KODY_API_TOKEN
+	delete process.env.KODY_API_TOKEN
+	const previousFetch = globalThis.fetch
+	const moduleArgs = ['--api-url', 'https://api.kody.codes', '--code', 'export default () => 1']
+	const cases: Array<{ args: Array<string>; statusBody: unknown; pattern: RegExp }> = [
+		{
+			args: ['execute', '--local', '--token', 'tok', ...moduleArgs],
+			statusBody: { error: { code: 'feature_disabled', message: 'local-execute is off' } },
+			pattern: /feature_disabled[\s\S]*local-execute/,
+		},
+		{
+			args: ['execute', '--local', '--token', 'tok', ...moduleArgs],
+			statusBody: {
+				error: {
+					code: 'insufficient_scope',
+					message: 'need local-execute',
+					details: { required_scope: 'local-execute' },
+				},
+			},
+			pattern: /insufficient_scope[\s\S]*tokenCreate[\s\S]*local-execute/,
+		},
+		{
+			args: ['execute', '--token', 'tok', ...moduleArgs],
+			statusBody: { error: { code: 'feature_disabled', message: 'local-execute is off' } },
+			pattern: /feature_disabled[\s\S]*local-execute/,
+		},
+		{
+			args: ['execute', '--token', 'tok', ...moduleArgs],
+			statusBody: {
+				error: {
+					code: 'insufficient_scope',
+					message: 'need email:send',
+					details: { required_scopes: ['local-execute', 'email:send'] },
+				},
+			},
+			pattern: /insufficient_scope[\s\S]*email:send[\s\S]*tokenCreate/,
+		},
+	]
+	try {
+		for (const entry of cases) {
+			globalThis.fetch = (async () =>
+				new Response(JSON.stringify(entry.statusBody), {
+					status: 403,
+					headers: { 'content-type': 'application/json' },
+				})) as typeof fetch
+			let stderr = ''
+			const code = await runCli(entry.args, {
+				stdout: () => {},
+				stderr: (text) => (stderr += text),
+			})
+			assert.equal(code, 1, stderr)
+			assert.match(stderr, entry.pattern)
+		}
+	} finally {
+		globalThis.fetch = previousFetch
+		if (previousToken === undefined) delete process.env.KODY_API_TOKEN
+		else process.env.KODY_API_TOKEN = previousToken
+	}
 })
 
 test('execute rejects --invoke with --local', async () => {
