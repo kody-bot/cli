@@ -186,7 +186,6 @@ async function dispatch(
 		}
 		case 'whoami': {
 			const tokenValues = tokenFlagValues(parsed.values)
-			const apiToken = readApiToken(tokenValues)
 			if (shouldUseApiToken({ tokenValues, mcpUrl, allowEnvWithoutLogin: true })) {
 				const identity = await whoamiWithApiToken({
 					token: requireApiToken(tokenValues, process.env, 'whoami'),

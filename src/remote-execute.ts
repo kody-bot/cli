@@ -1,4 +1,5 @@
 import {
+	assertTokenSafeApiUrl,
 	callCapabilityProxy,
 	openCapabilityProxySession,
 } from './capability-proxy.js'
@@ -26,6 +27,7 @@ export type RemoteExecuteInput = {
 export async function runRemoteExecuteWithToken(
 	input: RemoteExecuteInput,
 ): Promise<ToolCallResult> {
+	assertTokenSafeApiUrl(input.apiUrl)
 	const code = resolveRemoteExecuteCode(input)
 	const client = { apiUrl: input.apiUrl, token: input.token, fetchFn: input.fetchFn }
 	await openCapabilityProxySession(client)

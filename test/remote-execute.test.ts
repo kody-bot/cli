@@ -115,6 +115,18 @@ test('runRemoteExecuteWithToken surfaces missing-token session 401 clearly', asy
 	)
 })
 
+test('runRemoteExecuteWithToken refuses to send the token over cleartext http', async () => {
+	await assert.rejects(
+		() =>
+			runRemoteExecuteWithToken({
+				code: 'export default () => 1',
+				token: 'tok',
+				apiUrl: 'http://api.example.com',
+			}),
+		/Refusing to send the API token|https/,
+	)
+})
+
 test('runRemoteExecuteWithToken surfaces insufficient_scope on session', async () => {
 	const fetchFn = (async () =>
 		new Response(
@@ -131,6 +143,6 @@ test('runRemoteExecuteWithToken surfaces insufficient_scope on session', async (
 				apiUrl: 'https://api.kody.codes',
 				fetchFn,
 			}),
-		/local execute scope|local-execute/i,
+		/local-execute scope|CapabilityProxy/i,
 	)
 })
