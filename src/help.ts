@@ -8,8 +8,9 @@ Install Kody as a remote MCP server in local agents, or use this CLI as a local 
 
 Usage:
   kody login [--mcp-url <url>] [--no-browser]
-  kody logout [--mcp-url <url>]
-  kody status [--mcp-url <url>]
+  kody logout [--mcp-url <url>] [--api-url <url>]
+  kody status [--mcp-url <url>] [--api-url <url>]
+  kody auth bootstrap --code <kody_bc_…> [--api-url <url>]
   kody whoami [--mcp-url <url>] [--token <token>] [--api-url <url>] [--json]
   kody search [query] [--entity <ref>] [--domain <id>] [--limit <n>] [--token <token>] [--api-url <url>] [--json]
   kody execute [--invoke <ref> | --code <esm> | --file <path>] [--params <json>] [--conversation-id <id>] [--json]
@@ -23,25 +24,33 @@ Usage:
 
   --clients  Comma-separated ids: ${hostIds.join(', ')}
 
+  auth bootstrap
+             Redeem a one-shot \`kody_bc_…\` from MCP \`cliCredentialBootstrap\`
+             (POST /v1/tokens/bootstrap/redeem, no Authorization header).
+             Stores the resulting \`kody_at_…\` for \`execute --local\` without
+             printing the token. Prefer this over tokenCreate for agents
+             already on MCP. Interactive humans can use \`kody login\` instead.
+
   --token / ${apiTokenEnvVar}
              Scoped API token (preferred via env). With no \`kody login\`
              session, search / whoami / execute use the Open API and
              CapabilityProxy — including cloud execute without --local.
              Mint with the MCP \`api\` tool \`tokenCreate\` (include
-             \`local-execute\` plus the capability scopes you need).
-             For \`execute --local\`, \`--token\` / ${apiTokenEnvVar} wins
-             when set; otherwise a valid \`kody login\` session is used as
-             the Bearer (no tokenCreate exchange).
+             \`local-execute\` plus the capability scopes you need), or use
+             \`auth bootstrap\` after \`cliCredentialBootstrap\`.
+             For \`execute --local\`, auth priority is: \`--token\` /
+             ${apiTokenEnvVar}; stored bootstrap/API token; then a valid
+             \`kody login\` session as Bearer (no tokenCreate exchange).
 
   --local    Run the execute module on this machine (workerd, Linux/macOS).
              Requires Node.js 22 or newer. Auth: \`--token\` /
-             ${apiTokenEnvVar}, or else \`kody login\`. Static kody:@…
-             imports are fetched via POST /v1/local-execute/package-graph
-             and embedded in local workerd (CapabilityProxy only for
-             per-call kody:runtime hops — never a whole-module cloud
-             kody.execute defer). Fails clearly when that package-graph
-             API is unavailable. Cloud token execute (no --local) uses
-             CapabilityProxy → kody.execute for every module.
+             ${apiTokenEnvVar}, else stored \`auth bootstrap\` token, else
+             \`kody login\`. Static kody:@… imports are fetched via POST
+             /v1/local-execute/package-graph and embedded in local workerd
+             (CapabilityProxy only for per-call kody:runtime hops — never a
+             whole-module cloud kody.execute defer). Fails clearly when that
+             package-graph API is unavailable. Cloud token execute (no
+             --local) uses CapabilityProxy → kody.execute for every module.
 
 Environment:
   KODY_MCP_URL        Override the default MCP URL (${defaultMcpUrl})

@@ -5,6 +5,11 @@ import {
 	readApiToken,
 	requireApiToken,
 } from './api-token.js'
+import {
+	deleteStoredApiToken,
+	loadStoredApiToken,
+} from './api-token-store.js'
+import { authBootstrap } from './auth-bootstrap.js'
 import { defaultApiUrl, defaultMcpUrl, modernMcpProtocolVersion } from './defaults.js'
 import { usage } from './help.js'
 import { ensureFreshCredentials, login } from './auth.js'
@@ -22,11 +27,13 @@ import { redactError } from './redact.js'
 
 export { readApiToken, requireApiToken as resolveApiToken } from './api-token.js'
 export { resolveLocalExecuteBearer } from './local-execute-auth.js'
+export { authBootstrap, redeemBootstrapCode } from './auth-bootstrap.js'
 
 export type CommandName =
 	| 'login'
 	| 'logout'
 	| 'status'
+	| 'auth'
 	| 'whoami'
 	| 'search'
 	| 'execute'
@@ -93,6 +100,7 @@ export function resolveCommand(argv: Array<string>): {
 		case 'login':
 		case 'logout':
 		case 'status':
+		case 'auth':
 		case 'whoami':
 		case 'search':
 		case 'execute':
@@ -162,26 +170,100 @@ async function dispatch(
 			return 0
 		}
 		case 'logout': {
-			const result = deleteCredentials(mcpUrl)
-			write(result.deleted ? 'Logged out.\n' : 'No stored credentials.\n')
+			const apiUrl = apiUrlFrom({
+				apiUrl:
+					typeof parsed.values['api-url'] === 'string'
+						? parsed.values['api-url']
+						: undefined,
+			})
+			const oauth = deleteCredentials(mcpUrl)
+			const apiToken = deleteStoredApiToken(apiUrl)
+			if (!oauth.deleted && !apiToken.deleted) {
+				write('No stored credentials.\n')
+				return 0
+			}
+			const parts: Array<string> = []
+			if (oauth.deleted) parts.push('Logged out of kody login.')
+			if (apiToken.deleted) parts.push('Cleared stored bootstrap/API token.')
+			write(`${parts.join(' ')}\n`)
 			return 0
 		}
 		case 'status': {
+			const apiUrl = apiUrlFrom({
+				apiUrl:
+					typeof parsed.values['api-url'] === 'string'
+						? parsed.values['api-url']
+						: undefined,
+			})
 			const credentials = loadCredentials(mcpUrl)
-			if (!credentials) {
+			const storedApi = loadStoredApiToken(apiUrl)
+			if (!credentials && !storedApi) {
 				write('Not logged in.\n')
 				return 1
 			}
-			const expires = credentials.expiresAt
-				? new Date(credentials.expiresAt).toISOString()
-				: 'unknown'
-			write(
-				[
+			const lines: Array<string> = []
+			if (credentials) {
+				const expires = credentials.expiresAt
+					? new Date(credentials.expiresAt).toISOString()
+					: 'unknown'
+				lines.push(
 					`mcp: ${credentials.mcpUrl}`,
 					`logged in: yes`,
 					`access token expires: ${expires}`,
 					`refresh token: ${credentials.refreshToken ? 'yes' : 'no'}`,
 					`scope: ${credentials.scope ?? 'unknown'}`,
+				)
+			} else {
+				lines.push(`mcp: ${mcpUrl}`, `logged in: no`)
+			}
+			if (storedApi) {
+				const scopes = storedApi.scopes?.join(', ') || '(unknown)'
+				lines.push(
+					`api: ${storedApi.apiUrl}`,
+					`stored API token: yes (${storedApi.tokenId})`,
+					`API token scopes: ${scopes}`,
+					`API token expires: ${storedApi.expiresAt ?? 'unknown'}`,
+					`API token via: ${storedApi.createdVia ?? 'unknown'}`,
+				)
+			} else {
+				lines.push(`api: ${apiUrl}`, `stored API token: no`)
+			}
+			lines.push('')
+			write(lines.join('\n'))
+			return 0
+		}
+		case 'auth': {
+			const action = parsed.positionals[0]
+			if (action !== 'bootstrap') {
+				throw new Error(
+					'Usage: kody auth bootstrap --code <kody_bc_…> [--api-url <url>]',
+				)
+			}
+			const code =
+				typeof parsed.values.code === 'string' ? parsed.values.code.trim() : ''
+			if (!code) {
+				throw new Error(
+					'Provide --code <kody_bc_…> from cliCredentialBootstrap (MCP api / kody.cliCredentialBootstrap).',
+				)
+			}
+			const apiUrl = apiUrlFrom({
+				apiUrl:
+					typeof parsed.values['api-url'] === 'string'
+						? parsed.values['api-url']
+						: undefined,
+			})
+			const result = await authBootstrap({ code, apiUrl })
+			const scopes = result.stored.scopes?.join(', ') || '(none)'
+			write(
+				[
+					`Bootstrap API token stored for execute --local.`,
+					`api: ${result.stored.apiUrl}`,
+					`token id: ${result.stored.tokenId}`,
+					`scopes: ${scopes}`,
+					`expires: ${result.stored.expiresAt ?? 'unknown'}`,
+					result.backendKind === 'file' && result.backendPath
+						? `OS keychain was unavailable; token saved at ${result.backendPath} (mode 0600).`
+						: 'Token stored in the OS keychain.',
 					'',
 				].join('\n'),
 			)
@@ -335,6 +417,7 @@ async function dispatch(
 						token: await resolveLocalExecuteBearer({
 							tokenValues,
 							mcpUrl,
+							apiUrl,
 							purpose: 'execute --local',
 						}),
 						apiUrl,

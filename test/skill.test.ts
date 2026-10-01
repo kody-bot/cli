@@ -19,6 +19,7 @@ test('installSkill writes the bundled skill to user host directories', async () 
 		assert.match(body, /Install the MCP server \(recommended\)/)
 		assert.match(body, /npx @kodycodes\/cli install/)
 		assert.match(body, /kody login/)
+		assert.match(body, /auth bootstrap|cliCredentialBootstrap/)
 	}
 })
 

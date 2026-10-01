@@ -22,30 +22,36 @@ export function isScopedApiToken(token: string): boolean {
 }
 
 /**
- * How to mint the scoped token this CLI already accepts. There is no second
- * auth flow here — callers use the MCP `api` tool they already have.
+ * How to mint a scoped token for CI/headless. Interactive agents on MCP should
+ * prefer `cliCredentialBootstrap` → `auth bootstrap` instead.
  */
 export function apiTokenMintInstructions(): string {
 	return `Mint one with the Kody MCP \`api\` tool \`tokenCreate\` (include the \`local-execute\` scope plus the capability scopes this command needs) and pass --token or set ${apiTokenEnvVar}.`
 }
 
+/** Preferred interactive path for agents already on Kody MCP (ADR 0056). */
+export function cliBootstrapInstructions(): string {
+	return `From MCP, call \`cliCredentialBootstrap\` (MCP \`api\` / \`kody.cliCredentialBootstrap\`), then run \`npx @kodycodes/cli auth bootstrap --code <kody_bc_…>\``
+}
+
 /** Token-only Open API paths (search / whoami / cloud token execute) with no token. */
 export function missingApiTokenMessage(purpose: string): string {
-	return `${purpose} needs a scoped Kody API token. ${apiTokenMintInstructions()}`
+	return `${purpose} needs a scoped Kody API token. ${cliBootstrapInstructions()}, or ${apiTokenMintInstructions()}`
 }
 
 /**
- * `execute --local` with neither `--token` / `KODY_API_TOKEN` nor `kody login`.
+ * `execute --local` with neither env/`--token`, stored bootstrap token, nor
+ * `kody login`. Prefer bootstrap (MCP) → login → tokenCreate (CI).
  */
 export function missingLocalExecuteAuthMessage(
 	purpose: string = 'execute --local',
 ): string {
-	return `${purpose} needs auth. Run \`kody login\`, or ${apiTokenMintInstructions()}`
+	return `${purpose} needs auth. ${cliBootstrapInstructions()}; or run \`kody login\`; or for CI/headless, ${apiTokenMintInstructions()}`
 }
 
 /** Cloud search / whoami / execute when the process has neither a session nor a token. */
 export function missingCliAuthMessage(): string {
-	return `Not logged in, and no API token is set. ${apiTokenMintInstructions()} Or run \`kody login\` for browser OAuth (search, whoami, cloud execute, and login-backed \`execute --local\`).`
+	return `Not logged in, and no API token is set. ${cliBootstrapInstructions()}; or run \`kody login\` for browser OAuth (search, whoami, cloud execute, and login-backed \`execute --local\`); or for CI/headless, ${apiTokenMintInstructions()}`
 }
 
 /** 401 when CapabilityProxy rejected a non-`kody_at_` bearer (typically CLI OAuth). */
