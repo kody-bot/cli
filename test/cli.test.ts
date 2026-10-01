@@ -44,6 +44,8 @@ function sampleLoginCredentials(
 test('resolveCommand maps subcommands and flags', () => {
 	assert.equal(resolveCommand(['search', 'what can you do']).command, 'search')
 	assert.equal(resolveCommand(['install', '--yes']).command, 'install')
+	assert.equal(resolveCommand(['auth', 'bootstrap', '--code', 'kody_bc_x']).command, 'auth')
+	assert.equal(resolveCommand(['auth', 'bootstrap']).positionals[0], 'bootstrap')
 	assert.equal(resolveCommand(['--help']).command, 'help')
 	assert.equal(resolveCommand(['--version']).command, 'version')
 	assert.equal(
@@ -78,7 +80,7 @@ test('resolveApiToken prefers --token, falls back to KODY_API_TOKEN, and require
 	assert.equal(resolveApiToken({}, { KODY_API_TOKEN: ' env ' }), 'env')
 	assert.throws(
 		() => resolveApiToken({}, {}),
-		/tokenCreate[\s\S]*local-execute[\s\S]*pass --token or set KODY_API_TOKEN/,
+		/cliCredentialBootstrap[\s\S]*tokenCreate[\s\S]*local-execute[\s\S]*pass --token or set KODY_API_TOKEN/,
 	)
 })
 
@@ -97,6 +99,7 @@ test('resolveLocalExecuteBearer uses login OAuth when no API token is set', asyn
 	const token = await resolveLocalExecuteBearer({
 		tokenValues: {},
 		env: {},
+		loadApiToken: () => null,
 		ensureCredentials: async () => sampleLoginCredentials(),
 	})
 	assert.equal(token, 'oauth-access-from-login')
@@ -108,11 +111,12 @@ test('resolveLocalExecuteBearer fails clearly when neither login nor token is av
 			resolveLocalExecuteBearer({
 				tokenValues: {},
 				env: {},
+				loadApiToken: () => null,
 				ensureCredentials: async () => {
 					throw new Error('Not logged in')
 				},
 			}),
-		/execute --local needs auth[\s\S]*kody login[\s\S]*KODY_API_TOKEN/,
+		/execute --local needs auth[\s\S]*cliCredentialBootstrap[\s\S]*auth bootstrap[\s\S]*kody login[\s\S]*tokenCreate/,
 	)
 })
 
@@ -231,6 +235,7 @@ test('execute without token or login prompts clearly', async () => {
 		else process.env.KODY_API_TOKEN = previousToken
 	}
 	assert.match(stderr, /Not logged in, and no API token is set/)
+	assert.match(stderr, /cliCredentialBootstrap|auth bootstrap/)
 	assert.match(stderr, /tokenCreate/)
 	assert.match(stderr, /local-execute/)
 	assert.match(stderr, /KODY_API_TOKEN/)
@@ -257,6 +262,7 @@ test('execute --local without token or login fails clearly', async () => {
 		else process.env.XDG_CONFIG_HOME = previousXdg
 	}
 	assert.match(stderr, /execute --local needs auth/)
+	assert.match(stderr, /cliCredentialBootstrap|auth bootstrap/)
 	assert.match(stderr, /kody login/)
 	assert.match(stderr, /tokenCreate|KODY_API_TOKEN/)
 	assert.match(stderr, /pass --token or set KODY_API_TOKEN/)

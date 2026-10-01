@@ -60,8 +60,9 @@ Or run via `npx @kodycodes/cli` without a global install.
 | `kody install` | Detect running local MCP clients, write their config, and start host OAuth. **Recommended long-term path.** |
 | `kody skill install` | Copies the getting-started skill into Claude Code / Cursor / Agents. |
 | `kody login` | Browser OAuth (CIMD + PKCE) for the CLI itself. Stores access and refresh tokens. |
-| `kody logout` | Deletes stored CLI credentials. |
-| `kody status` | Shows CLI login state without printing secrets. |
+| `kody logout` | Deletes stored CLI OAuth credentials and any stored bootstrap/API token. |
+| `kody status` | Shows CLI login / stored API token state without printing secrets. |
+| `kody auth bootstrap --code` | Redeems a one-shot `kody_bc_…` from MCP `cliCredentialBootstrap` and stores the resulting `kody_at_…` for `execute --local` (never prints the token). |
 | `kody whoami` | Confirms the CLI MCP connection and lists tools. With a scoped API token (and no login), shows token identity via the Open API. |
 | `kody search [query]` | Calls Kody `search` from the CLI (prefer the host MCP tool). Token-only auth uses Open API `GET /v1/search`. |
 | `kody execute` | Calls Kody `execute` from the CLI (`--invoke`, `--code`, `--file`, or stdin via `--file -`). With a scoped API token and no login (or with `--token`), cloud execute goes through CapabilityProxy → `kody.execute` — no `kody login`. Add `--local` to run the module (and static `kody:@…` package modules) on this machine instead. |
@@ -70,13 +71,21 @@ Or run via `npx @kodycodes/cli` without a global install.
 
 ## Token-authenticated execute (no `kody login`)
 
-Scoped API tokens (`kody_at_…`, from the MCP `api` tool `tokenCreate` or
-`POST /v1/tokens`) authenticate the Open API and CapabilityProxy. They never
-replace MCP OAuth on `/mcp`. The CLI uses that token path when you pass
-`--token` / `KODY_API_TOKEN` and are not logged in (or when you pass `--token`
-explicitly):
+Agents already on Kody MCP should prefer `cliCredentialBootstrap` →
+`kody auth bootstrap --code …` (ADR 0056) so a one-shot `kody_bc_…` seeds the
+CLI store without pasting `kody_at_…` into chat. Interactive humans can use
+`kody login`. Scoped API tokens (`kody_at_…`, from bootstrap redeem,
+`tokenCreate`, or `POST /v1/tokens`) authenticate the Open API and
+CapabilityProxy. They never replace MCP OAuth on `/mcp`. The CLI uses that
+token path when you pass `--token` / `KODY_API_TOKEN` and are not logged in
+(or when you pass `--token` explicitly):
 
 ```bash
+# Preferred for agents on MCP (no tokenCreate, no second OAuth):
+# 1. MCP api / kody.cliCredentialBootstrap → { bootstrap_code, cli_command }
+npx @kodycodes/cli auth bootstrap --code 'kody_bc_…'
+npx @kodycodes/cli execute --local --file ./task.js
+
 export KODY_API_TOKEN=…   # scopes: local-execute (+ search:read for search)
 # Cloud execute — module runs in Kody's sandbox via CapabilityProxy → kody.execute
 npx @kodycodes/cli execute --code 'export default async () => ({ ok: true })'
@@ -86,16 +95,16 @@ npx @kodycodes/cli search "what can you do"
 npx @kodycodes/cli whoami
 ```
 
-- Neither `kody login` nor a token → the error tells you to mint one with the
-  MCP `api` tool `tokenCreate` (scopes: `local-execute` plus the capability
-  scopes the module will call) and pass `--token` / `KODY_API_TOKEN`, or run
-  `kody login` (for cloud MCP commands and for login-backed `execute --local`).
+- Neither bootstrap store, `kody login`, nor a token → the error prefers
+  `cliCredentialBootstrap` → `auth bootstrap`, then `kody login`, then
+  `tokenCreate` for CI/headless (`--token` / `KODY_API_TOKEN`).
 - For `execute --local` specifically: `--token` / `KODY_API_TOKEN` wins when
-  set; otherwise the CLI uses the stored `kody login` OAuth access token as
-  the Bearer (no under-the-hood `tokenCreate`). The Open API must accept that
-  OAuth bearer on CapabilityProxy / package-graph
+  set; else a stored bootstrap/API token from `auth bootstrap`; else the
+  stored `kody login` OAuth access token as Bearer (no under-the-hood
+  `tokenCreate`). The Open API must accept that OAuth bearer on
+  CapabilityProxy / package-graph
   ([kentcdodds/kody#2812](https://github.com/kentcdodds/kody/issues/2812));
-  until then mint a scoped `kody_at_…` token.
+  until then use bootstrap or a scoped `kody_at_…` token.
 - Wrong/expired token → 401 with a mint-fresh-token message (or the OAuth
   platform-gap message when the bearer is login OAuth).
 - Wrong scopes → the error includes `insufficient_scope` and the required
@@ -103,6 +112,7 @@ npx @kodycodes/cli whoami
 - Account flag off → the error includes `feature_disabled` and the
   `local-execute` feature flag. Another token does not bypass that flag.
 - Prefer the env var so the token stays out of shell history and `ps`.
+- Never scavenge host MCP OAuth tokens from disk (ADR 0053).
 
 ## Local execute
 
@@ -121,19 +131,24 @@ CapabilityProxy → `kody.execute` defer). There is no author-facing
 npx @kodycodes/cli login
 npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.com"}'
 
-# Or a scoped API token (still wins over login when set):
+# Agents on MCP: bootstrap code → store (no tokenCreate, no second OAuth):
+npx @kodycodes/cli auth bootstrap --code 'kody_bc_…'
+npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.com"}'
+
+# Or a scoped API token (still wins over login / bootstrap store when set):
 export KODY_API_TOKEN=…   # minted through the Kody `api` tool
 npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.com"}'
 ```
 
-- **Auth:** `--token` / `KODY_API_TOKEN` when set; else a valid `kody login`
-  session (OAuth access token as Bearer — never printed, never exchanged via
-  `tokenCreate`). Prefer the env var for API tokens so they stay out of shell
-  history and `ps`. The bearer stays in the CLI process; the sandbox only
-  talks to a loopback bridge. Host MCP OAuth from other clients is never
-  read. Until [kentcdodds/kody#2812](https://github.com/kentcdodds/kody/issues/2812)
-  ships, login-only Bearer is rejected by the Open API — use a `kody_at_…`
-  token in that case.
+- **Auth:** `--token` / `KODY_API_TOKEN` when set; else stored `auth bootstrap`
+  API token; else a valid `kody login` session (OAuth access token as Bearer —
+  never printed, never exchanged via `tokenCreate`). Prefer the env var for
+  API tokens so they stay out of shell history and `ps`. The bearer stays in
+  the CLI process; the sandbox only talks to a loopback bridge. Host MCP OAuth
+  from other clients is never read. Until
+  [kentcdodds/kody#2812](https://github.com/kentcdodds/kody/issues/2812)
+  ships, login-only Bearer is rejected by the Open API — use bootstrap or a
+  `kody_at_…` token in that case.
 - **Node.js:** 22 or newer (`package.json` `engines` is `>=22`). Older Node
   fails immediately with that requirement, before workerd is downloaded or
   started.

@@ -81,19 +81,28 @@ whole-module cloud defer). If that package-graph API is missing, `--local`
 fails clearly rather than silently billing a remote execute.
 
 For `execute --local` auth: `--token` / `KODY_API_TOKEN` wins when set;
-otherwise use a valid `kody login` session (OAuth access token as Bearer —
-never print it, never mint via `tokenCreate` under the hood). Until the Open
-API accepts MCP OAuth on CapabilityProxy / package-graph
-(https://github.com/kentcdodds/kody/issues/2812), mint a scoped token with
-the MCP `api` tool `tokenCreate` — include `local-execute` plus the capability
-scopes the module calls — and pass `--token` or `KODY_API_TOKEN`. If neither
-login nor a token is set, the CLI error says that. `insufficient_scope` means
-the token is missing a scope; `feature_disabled` means the account
+otherwise a stored token from `kody auth bootstrap --code` (after MCP
+`cliCredentialBootstrap`); otherwise a valid `kody login` session (OAuth
+access token as Bearer — never print it, never mint via `tokenCreate` under
+the hood). Prefer bootstrap over `tokenCreate` for agents already on MCP so
+`kody_at_…` never appears in chat. Until the Open API accepts MCP OAuth on
+CapabilityProxy / package-graph
+(https://github.com/kentcdodds/kody/issues/2812), use bootstrap or mint a
+scoped token with the MCP `api` tool `tokenCreate` — include `local-execute`
+plus the capability scopes the module calls — and pass `--token` or
+`KODY_API_TOKEN`. If none of those are available, the CLI error says that
+(bootstrap → login → tokenCreate for CI). `insufficient_scope` means the
+token is missing a scope; `feature_disabled` means the account
 `local-execute` flag is off. Never read MCP OAuth tokens from the host.
 
 ```bash
+# Agents on MCP:
+# cliCredentialBootstrap → { bootstrap_code, cli_command }
+npx @kodycodes/cli auth bootstrap --code 'kody_bc_…'
+npx @kodycodes/cli execute --local --file ./task.js --params '{"q":"email"}'
+
 npx @kodycodes/cli login
 npx @kodycodes/cli execute --local --file ./task.js --params '{"q":"email"}'
-# Or with an explicit scoped token (wins over login):
+# Or with an explicit scoped token (wins over login / bootstrap store):
 KODY_API_TOKEN=… npx @kodycodes/cli execute --local --file ./task.js --params '{"q":"email"}'
 ```
