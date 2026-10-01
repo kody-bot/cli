@@ -55,16 +55,11 @@ export const workflows = {
 	create: async (input) => await __kodyCall(['workflows', 'create'], [input ?? {}]),
 };
 
-export const packages = {
-	invoke: async (specifier, options) => {
-		if (typeof specifier !== 'string') {
-			throw new Error(
-				'Object-only packages.invoke was removed. Use a static import (import fn from "kody:@owner/package/export") when the name is known, or import(specifier) when the name is data.',
-			);
-		}
-		return await __kodyCall(['packages', 'invoke'], [specifier, options ?? {}]);
-	},
-};
+// Always null: there is no author-facing packages.invoke. Use a static
+// kody:@scope/package/export import when the name is known, or import(specifier)
+// when the name is data. Under --local, those imports fall back to
+// CapabilityProxy → kody.execute so the origin can resolve the package graph.
+export const packages = null;
 
 export function packageStorage() {
 	throw new Error(

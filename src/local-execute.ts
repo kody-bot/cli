@@ -29,6 +29,7 @@ import {
 } from './local-runtime-source.js'
 import type { ToolCallResult } from './mcp.js'
 import { redact } from './redact.js'
+import { runRemoteExecuteWithToken } from './remote-execute.js'
 import { ensureWorkerdBinary } from './workerd-binary.js'
 
 export type LocalExecuteInput = {
@@ -51,18 +52,34 @@ type Bridge = { port: number; close: () => Promise<void> }
 const workerdStartTimeoutMs = 30_000
 const workerdExitGraceMs = 1_000
 
-export function assertNoStaticPackageImports(code: string): void {
-	if (/(?:\bfrom\s*|\bimport\s*\(?\s*)["']kody:@/.test(code)) {
-		throw new Error(
-			'execute --local does not resolve saved-package imports (kody:@…) yet. Call the export with packages.invoke(specifier, options) from kody:runtime, or run execute without --local.',
-		)
-	}
+/** True when the module statically or dynamically imports a saved package (`kody:@…`). */
+export function hasSavedPackageImports(code: string): boolean {
+	return /(?:\bfrom\s*|\bimport\s*\(?\s*)["']kody:@/.test(code)
 }
+
+/**
+ * Saved-package imports need origin ownership, shares, stamps, and the hosted
+ * module graph. Local workerd cannot resolve them offline, so `--local`
+ * transparently uses CapabilityProxy → `kody.execute` (Open API / token —
+ * never hosted MCP `execute`). There is no author-facing `packages.invoke`.
+ */
+export const savedPackageImportLocalFallbackStatus =
+	'Module imports saved packages (kody:@…). Resolving and running via Open API CapabilityProxy → kody.execute (package graph on origin; still no hosted MCP execute).'
 
 export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCallResult> {
 	assertLocalExecuteNodeEngine()
-	assertNoStaticPackageImports(input.code)
 	assertTokenSafeApiUrl(input.apiUrl)
+	if (hasSavedPackageImports(input.code)) {
+		input.onStatus?.(savedPackageImportLocalFallbackStatus)
+		return runRemoteExecuteWithToken({
+			code: input.code,
+			params: input.params,
+			conversationId: input.conversationId,
+			token: input.token,
+			apiUrl: input.apiUrl,
+			fetchFn: input.fetchFn,
+		})
+	}
 	const client = { apiUrl: input.apiUrl, token: input.token, fetchFn: input.fetchFn }
 	await openCapabilityProxySession(client)
 	const workerdPath =
