@@ -1,3 +1,4 @@
+import { insufficientScopeMessage } from './api-token.js'
 import { apiTokenEnvVar, cliName, defaultApiUrl } from './defaults.js'
 import { assertTokenSafeApiUrl, capabilityProxyUrl } from './capability-proxy.js'
 import { describeNetworkError } from './network-error.js'
@@ -181,14 +182,15 @@ function describeOpenApiFailure(status: number, body: unknown, url: URL): OpenAp
 			isRecord(body) && isRecord(body.error) && isRecord(body.error.details)
 				? body.error.details.required_scope
 				: null
-		const scopeHint =
-			typeof required === 'string'
-				? ` Mint a token that includes "${required}".`
-				: ' Mint a token with the required scope.'
 		return new OpenApiError(
-			`The API token is missing a required scope.${scopeHint}${detail}`,
+			`${insufficientScopeMessage({
+				requiredScope: typeof required === 'string' ? required : null,
+			})}${detail}`,
 			{ status, code },
 		)
+	}
+	if (code === 'feature_disabled') {
+		return new OpenApiError(`Kody returned feature_disabled.${detail}`, { status, code })
 	}
 	return new OpenApiError(
 		failure?.message ?? `Kody API request failed with HTTP ${status} (${url.pathname}).`,

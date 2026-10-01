@@ -143,6 +143,6 @@ test('runRemoteExecuteWithToken surfaces insufficient_scope on session', async (
 				apiUrl: 'https://api.kody.codes',
 				fetchFn,
 			}),
-		/local-execute scope|CapabilityProxy/i,
+		/insufficient_scope[\s\S]*tokenCreate[\s\S]*local-execute/,
 	)
 })

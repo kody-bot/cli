@@ -18,6 +18,7 @@ import {
 	callCapabilityProxy,
 	openCapabilityProxySession,
 } from './capability-proxy.js'
+import { assertLocalExecuteNodeEngine } from './node-engine.js'
 import { apiTokenEnvVar } from './defaults.js'
 import {
 	createLocalEntrySource,
@@ -59,6 +60,7 @@ export function assertNoStaticPackageImports(code: string): void {
 }
 
 export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCallResult> {
+	assertLocalExecuteNodeEngine()
 	assertNoStaticPackageImports(input.code)
 	assertTokenSafeApiUrl(input.apiUrl)
 	const client = { apiUrl: input.apiUrl, token: input.token, fetchFn: input.fetchFn }

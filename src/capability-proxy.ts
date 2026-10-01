@@ -1,3 +1,8 @@
+import {
+	apiTokenMintInstructions,
+	featureDisabledMessage,
+	insufficientScopeMessage,
+} from './api-token.js'
 import { apiTokenEnvVar, cliName } from './defaults.js'
 import { describeNetworkError } from './network-error.js'
 import { readPackageVersion } from './package-info.js'
@@ -180,14 +185,20 @@ function describeFailure(
 		)
 	}
 	if (code === 'feature_disabled') {
+		return new CapabilityProxyError(`${featureDisabledMessage()}${detail}`, { status, code })
+	}
+	if (code === 'insufficient_scope') {
 		return new CapabilityProxyError(
-			'CapabilityProxy is not enabled for this Kody account (feature flag `local-execute`). Use `kody login` for MCP cloud execute, or ask the Kody team for access.',
+			`${insufficientScopeMessage({
+				requiredScope: requiredScopeFrom(body),
+				includeLocalExecute: true,
+			})}${detail}`,
 			{ status, code },
 		)
 	}
 	if (status === 403 && stage === 'session') {
 		return new CapabilityProxyError(
-			`The API token is not allowed to use CapabilityProxy${code ? ` (${code})` : ''}. Mint a token with the local-execute scope (needed for both \`execute --local\` and token-auth cloud execute).${detail}`,
+			`The API token is not allowed to use CapabilityProxy${code ? ` (${code})` : ''}. ${apiTokenMintInstructions()}${detail}`,
 			{ status, code },
 		)
 	}
@@ -201,6 +212,18 @@ function describeFailure(
 		failure?.message ?? `Kody API request failed with HTTP ${status} (${url.pathname}).`,
 		{ status, code },
 	)
+}
+
+function requiredScopeFrom(body: unknown): string | null {
+	if (!isRecord(body) || !isRecord(body.error) || !isRecord(body.error.details)) return null
+	const required = body.error.details.required_scope
+	if (typeof required === 'string' && required.trim()) return required.trim()
+	const requiredList = body.error.details.required_scopes
+	if (!Array.isArray(requiredList)) return null
+	const scopes = requiredList.filter(
+		(scope): scope is string => typeof scope === 'string' && scope.trim().length > 0,
+	)
+	return scopes.length > 0 ? scopes.join(', ') : null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

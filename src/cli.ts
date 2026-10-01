@@ -12,6 +12,7 @@ import { deleteCredentials, loadCredentials } from './store.js'
 import { callKodyTool, formatToolResult, listKodyTools } from './mcp.js'
 import { runInstall } from './install.js'
 import { runLocalExecute } from './local-execute.js'
+import { assertLocalExecuteNodeEngine } from './node-engine.js'
 import { searchWithApiToken, whoamiWithApiToken } from './open-api-client.js'
 import { runRemoteExecuteWithToken } from './remote-execute.js'
 import { installSkill } from './skill.js'
@@ -290,6 +291,7 @@ async function dispatch(
 					'--invoke cannot be combined with --code, --file, or a module string.',
 				)
 			}
+			if (local) assertLocalExecuteNodeEngine()
 			const code =
 				invoke !== undefined
 					? undefined

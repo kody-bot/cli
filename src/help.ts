@@ -27,12 +27,14 @@ Usage:
              Scoped API token (preferred via env). With no \`kody login\`
              session, search / whoami / execute use the Open API and
              CapabilityProxy — including cloud execute without --local.
+             Mint with the MCP \`api\` tool \`tokenCreate\` (include
+             \`local-execute\` plus the capability scopes you need).
              --local still runs the module on this machine (workerd).
 
   --local    Run the execute module on this machine (workerd, Linux/macOS).
-             Requires a token with the local-execute scope. Cloud token
-             execute (no --local) uses the same token via CapabilityProxy
-             → kody.execute and also needs local-execute.
+             Requires Node.js 22 or newer and a token with the local-execute
+             scope. Cloud token execute (no --local) uses the same token via
+             CapabilityProxy → kody.execute and also needs local-execute.
 
 Environment:
   KODY_MCP_URL        Override the default MCP URL (${defaultMcpUrl})

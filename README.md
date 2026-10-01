@@ -86,10 +86,16 @@ npx @kodycodes/cli search "what can you do"
 npx @kodycodes/cli whoami
 ```
 
-- Missing token → prompt to set `--token` / `KODY_API_TOKEN` or run `kody login`.
+- Neither `kody login` nor a token → the error tells you to mint one with the
+  MCP `api` tool `tokenCreate` (scopes: `local-execute` plus the capability
+  scopes the module will call) and pass `--token` / `KODY_API_TOKEN`.
+  `execute --local` never reads stored CLI OAuth, so login is not a substitute
+  there.
 - Wrong/expired token → 401 with a mint-fresh-token message.
-- Token lacks `local-execute` (or the account flag is off) → 403 naming the
-  scope or `local-execute` feature flag before any module runs.
+- Wrong scopes → the error includes `insufficient_scope` and the required
+  scope when Kody sends one.
+- Account flag off → the error includes `feature_disabled` and the
+  `local-execute` feature flag. Another token does not bypass that flag.
 - Prefer the env var so the token stays out of shell history and `ps`.
 
 ## Local execute
@@ -108,6 +114,9 @@ npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.
   env var so the token stays out of shell history and `ps`). No `kody login`,
   and the CLI never reads MCP OAuth tokens from other hosts. The token stays in
   the CLI process; the sandbox only talks to a loopback bridge.
+- **Node.js:** 22 or newer (`package.json` `engines` is `>=22`). Older Node
+  fails immediately with that requirement, before workerd is downloaded or
+  started.
 - **Runtime:** a pinned [workerd](https://github.com/cloudflare/workerd)
   release, downloaded once from GitHub, sha256-verified, and cached under
   `~/.cache/kody` (Linux, or `$XDG_CACHE_HOME/kody`) or
