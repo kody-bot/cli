@@ -74,10 +74,12 @@ To run execute with a scoped API token and **no** `kody login`, set
 `KODY_API_TOKEN` (or `--token`). Cloud execute (no `--local`) goes through
 CapabilityProxy → `kody.execute`. Add `--local` to run the module on this
 machine instead (Node.js 22 or newer; older Node fails before workerd starts).
-Mint the token with the MCP `api` tool `tokenCreate` — include `local-execute`
-plus the capability scopes the module calls — and pass `--token` or
-`KODY_API_TOKEN`. If neither login nor a token is set, the CLI error says
-that. `insufficient_scope` means the token is missing a scope;
+Modules with `kody:@…` imports keep `--local` and still resolve via
+CapabilityProxy → `kody.execute` (Open API / token — not hosted MCP
+`execute`). Mint the token with the MCP `api` tool `tokenCreate` — include
+`local-execute` plus the capability scopes the module calls — and pass
+`--token` or `KODY_API_TOKEN`. If neither login nor a token is set, the CLI
+error says that. `insufficient_scope` means the token is missing a scope;
 `feature_disabled` means the account `local-execute` flag is off. Never read
 MCP OAuth tokens from the host.
 

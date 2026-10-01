@@ -9,9 +9,10 @@ import { after, before, test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { runCli } from '../src/cli.js'
 import {
-	assertNoStaticPackageImports,
 	buildLocalExecuteResult,
+	hasSavedPackageImports,
 	runLocalExecute,
+	savedPackageImportLocalFallbackStatus,
 } from '../src/local-execute.js'
 
 const goodToken = 'kody_tok_good'
@@ -48,6 +49,33 @@ before(async () => {
 		}
 		if (request.url === '/v1/capability-proxy/call') {
 			const { path, args } = body as { path: Array<string>; args: Array<unknown> }
+			if (path.join('.') === 'kody.execute') {
+				const code =
+					typeof args[0] === 'object' &&
+					args[0] !== null &&
+					'code' in args[0] &&
+					typeof (args[0] as { code?: unknown }).code === 'string'
+						? (args[0] as { code: string }).code
+						: ''
+				if (code.includes('kody:@missing/package/export')) {
+					send(200, {
+						result: {
+							ok: false,
+							error: 'Could not resolve saved package import kody:@missing/package/export.',
+							logs: [],
+						},
+					})
+					return
+				}
+				send(200, {
+					result: {
+						ok: true,
+						result: { fromPackage: true, codeSnippet: code.slice(0, 80) },
+						logs: ['resolved via kody.execute'],
+					},
+				})
+				return
+			}
 			if (path.join('.') === 'kody.explode') {
 				send(200, { error: { code: 'capability_failed', message: 'explode is broken' } })
 				return
@@ -103,17 +131,73 @@ function reset() {
 	sessionStatus = { status: 200, body: { scopes: ['capability-proxy'], expiresAt: null } }
 }
 
-test('assertNoStaticPackageImports rejects kody:@ imports with a clear hint', () => {
-	assert.throws(
-		() => assertNoStaticPackageImports(`import skill from 'kody:@me/skills/get'`),
-		/does not resolve saved-package imports/,
-	)
-	assert.throws(
-		() => assertNoStaticPackageImports(`const m = await import("kody:@me/skills/get")`),
-		/does not resolve saved-package imports/,
-	)
-	assert.doesNotThrow(() => assertNoStaticPackageImports(`import { kody } from 'kody:runtime'`))
+test('hasSavedPackageImports detects static and dynamic kody:@ imports', () => {
+	assert.equal(hasSavedPackageImports(`import skill from 'kody:@me/skills/get'`), true)
+	assert.equal(hasSavedPackageImports(`const m = await import("kody:@me/skills/get")`), true)
+	assert.equal(hasSavedPackageImports(`import { kody } from 'kody:runtime'`), false)
 })
+
+test(
+	'runLocalExecute with kody:@ imports uses CapabilityProxy kody.execute (happy path)',
+	{ timeout: 60_000 },
+	async () => {
+		reset()
+		const statuses: Array<string> = []
+		const code = `import { searchMessages } from 'kody:@kentcdodds/google/gmail'
+export default async function main(params) {
+	return await searchMessages(params)
+}`
+		const result = await runLocalExecute({
+			code,
+			params: { q: 'from:me' },
+			conversationId: 'conv-pkg',
+			token: goodToken,
+			apiUrl,
+			workerdPath: '/nonexistent/workerd',
+			onStatus: (message) => statuses.push(message),
+		})
+		assert.equal(result.isError, false)
+		assert.deepEqual(statuses, [savedPackageImportLocalFallbackStatus])
+		assert.deepEqual((result.structuredContent as { result: unknown }).result, {
+			fromPackage: true,
+			codeSnippet: code.slice(0, 80),
+		})
+		assert.equal(proxyRequests[0]?.url, '/v1/capability-proxy/session')
+		assert.equal(proxyRequests.length, 2)
+		assert.deepEqual(proxyRequests[1]?.body, {
+			path: ['kody', 'execute'],
+			args: [{ code, params: { q: 'from:me' }, conversationId: 'conv-pkg' }],
+			conversationId: 'conv-pkg',
+		})
+	},
+)
+
+test(
+	'runLocalExecute with kody:@ imports surfaces package resolution failures clearly',
+	{ timeout: 60_000 },
+	async () => {
+		reset()
+		const code = `import missing from 'kody:@missing/package/export'
+export default async function main() { return missing({}) }`
+		const result = await runLocalExecute({
+			code,
+			token: goodToken,
+			apiUrl,
+			workerdPath: '/nonexistent/workerd',
+		})
+		assert.equal(result.isError, true)
+		assert.deepEqual(result.content, [
+			{
+				type: 'text',
+				text: 'Error: Could not resolve saved package import kody:@missing/package/export.',
+			},
+		])
+		assert.match(
+			String((result.structuredContent as { error?: string }).error),
+			/Could not resolve saved package import/,
+		)
+	},
+)
 
 test('buildLocalExecuteResult matches the cloud execute envelope', () => {
 	const startedAt = new Date('2026-09-30T00:00:00.000Z')
@@ -172,14 +256,13 @@ export default async function main(params) {
 	const sent = await kody.emailSend({ to: params.name })
 	const light = await kody.mcp.home.lights_on({ room: 'office' })
 	const run = await workflows.create({ code: 'x' })
-	const invoked = await packages.invoke('kody:@me/pkg/export', { params: { a: 1 } })
 	let failure = null
 	try {
 		await kody.explode({})
 	} catch (error) {
 		failure = error.message
 	}
-	return { sent, light, run, invoked, failure, email }
+	return { sent, light, run, packages, failure, email }
 }
 `
 		const result = await runLocalExecute({
@@ -195,17 +278,14 @@ export default async function main(params) {
 			sent: { echoed: 'kody.emailSend', args: [{ to: 'kent' }] },
 			light: { echoed: 'kody.mcp.home.lights_on', args: [{ room: 'office' }] },
 			run: { echoed: 'workflows.create', args: [{ code: 'x' }] },
-			invoked: {
-				echoed: 'packages.invoke',
-				args: ['kody:@me/pkg/export', { params: { a: 1 } }],
-			},
+			packages: null,
 			failure: 'explode is broken',
 			email: null,
 		})
 		assert.deepEqual(structured.logs, ['hello kent', '[warn] careful'])
 		assert.equal(structured.conversationId, 'conv-local')
 		assert.equal(proxyRequests[0]?.url, '/v1/capability-proxy/session')
-		assert.equal(proxyRequests.length, 6)
+		assert.equal(proxyRequests.length, 5)
 		for (const request of proxyRequests) {
 			assert.equal(request.authorization, `Bearer ${goodToken}`)
 		}

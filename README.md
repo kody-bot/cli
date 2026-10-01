@@ -102,8 +102,12 @@ npx @kodycodes/cli whoami
 
 `kody execute --local` runs the same execute module (default export called
 with `--params`) on this machine instead of in Kody's cloud sandbox. Local CPU
-is free; every `kody:runtime` call (`kody.*`, `kody.mcp.*`, `workflows`,
-`packages`) is proxied to Kody's CapabilityProxy and metered like a cloud hop.
+is free; every `kody:runtime` call (`kody.*`, `kody.mcp.*`, `workflows.create`)
+is proxied to Kody's CapabilityProxy and metered like a cloud hop. Static
+`kody:@scope/package/export` imports (and `import(specifier)` of those names)
+keep the `--local` flag but resolve the package graph on origin via
+CapabilityProxy → `kody.execute` — same Open API token path, never hosted MCP
+`execute`. There is no author-facing `packages.invoke`.
 
 ```bash
 export KODY_API_TOKEN=…   # scoped token minted through the Kody `api` tool
@@ -132,11 +136,16 @@ npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.
   The token is only sent over https (plain http is allowed for localhost).
 - **Lifetime:** no execution time limit locally; Ctrl-C (or SIGTERM) stops
   workerd and removes the temporary module.
-- **Not yet:** static `kody:@scope/package/export` imports and `--invoke`
-  (use cloud execute or `packages.invoke`). `packageStorage()`,
-  `packageSecrets`, `email`, and `events` stay unbound like ad hoc cloud
-  execute. Outbound `fetch` goes straight from this machine, including to
-  local-network hosts.
+- **Saved packages:** `import { … } from 'kody:@owner/name/export'` works under
+  `--local`. The CLI detects those imports and runs the module through
+  CapabilityProxy → `kody.execute` so origin can stamp and bundle the graph.
+  That hop still needs network + a `local-execute` token; CPU for that path is
+  metered like cloud execute. Prefer keeping `--local` in agent workflows —
+  do not switch to hosted MCP `execute`. `--invoke` without `--local` is the
+  thin passthrough for a single export. `packageStorage()`, `packageSecrets`,
+  `email`, and `events` stay unbound like ad hoc cloud execute. Outbound
+  `fetch` on the pure-local (no `kody:@`) path goes straight from this
+  machine, including to local-network hosts.
 
 ## Token storage
 

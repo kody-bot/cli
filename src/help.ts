@@ -33,8 +33,10 @@ Usage:
 
   --local    Run the execute module on this machine (workerd, Linux/macOS).
              Requires Node.js 22 or newer and a token with the local-execute
-             scope. Cloud token execute (no --local) uses the same token via
-             CapabilityProxy → kody.execute and also needs local-execute.
+             scope. Modules that import kody:@… keep --local but resolve the
+             package graph via CapabilityProxy → kody.execute (Open API /
+             token; not hosted MCP execute). Cloud token execute (no --local)
+             uses the same token path for every module.
 
 Environment:
   KODY_MCP_URL        Override the default MCP URL (${defaultMcpUrl})
