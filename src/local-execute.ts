@@ -21,16 +21,27 @@ import {
 import { assertLocalExecuteNodeEngine } from './node-engine.js'
 import { apiTokenEnvVar } from './defaults.js'
 import {
+	fetchLocalPackageGraph,
+	hasSavedPackageImports,
+	type LocalPackageGraph,
+} from './local-package-graph.js'
+import {
 	createLocalEntrySource,
 	createLocalRuntimeModuleSource,
 	createWorkerdConfig,
 	runSecretEnvVar,
 	runSecretHeader,
+	type WorkerdPackageModuleFile,
 } from './local-runtime-source.js'
 import type { ToolCallResult } from './mcp.js'
 import { redact } from './redact.js'
-import { runRemoteExecuteWithToken } from './remote-execute.js'
 import { ensureWorkerdBinary } from './workerd-binary.js'
+
+export {
+	hasSavedPackageImports,
+	listSavedPackageImports,
+	localPackageGraphPlatformIssueUrl,
+} from './local-package-graph.js'
 
 export type LocalExecuteInput = {
 	code: string
@@ -52,36 +63,25 @@ type Bridge = { port: number; close: () => Promise<void> }
 const workerdStartTimeoutMs = 30_000
 const workerdExitGraceMs = 1_000
 
-/** True when the module statically or dynamically imports a saved package (`kody:@…`). */
-export function hasSavedPackageImports(code: string): boolean {
-	return /(?:\bfrom\s*|\bimport\s*\(?\s*)["']kody:@/.test(code)
-}
-
-/**
- * Saved-package imports need origin ownership, shares, stamps, and the hosted
- * module graph. Local workerd cannot resolve them offline, so `--local`
- * transparently uses CapabilityProxy → `kody.execute` (Open API / token —
- * never hosted MCP `execute`). There is no author-facing `packages.invoke`.
- */
-export const savedPackageImportLocalFallbackStatus =
-	'Module imports saved packages (kody:@…). Resolving and running via Open API CapabilityProxy → kody.execute (package graph on origin; still no hosted MCP execute).'
+export const savedPackageImportLocalResolveStatus =
+	'Module imports saved packages (kody:@…). Fetching stamped package modules for local workerd bundling (no cloud kody.execute defer).'
 
 export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCallResult> {
 	assertLocalExecuteNodeEngine()
 	assertTokenSafeApiUrl(input.apiUrl)
-	if (hasSavedPackageImports(input.code)) {
-		input.onStatus?.(savedPackageImportLocalFallbackStatus)
-		return runRemoteExecuteWithToken({
-			code: input.code,
-			params: input.params,
-			conversationId: input.conversationId,
-			token: input.token,
-			apiUrl: input.apiUrl,
-			fetchFn: input.fetchFn,
-		})
-	}
 	const client = { apiUrl: input.apiUrl, token: input.token, fetchFn: input.fetchFn }
 	await openCapabilityProxySession(client)
+
+	let packageGraph: LocalPackageGraph = { modules: [], imports: [] }
+	if (hasSavedPackageImports(input.code)) {
+		input.onStatus?.(savedPackageImportLocalResolveStatus)
+		packageGraph = await fetchLocalPackageGraph({
+			...client,
+			code: input.code,
+			conversationId: input.conversationId,
+		})
+	}
+
 	const workerdPath =
 		input.workerdPath ??
 		(await ensureWorkerdBinary({
@@ -121,8 +121,12 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 		await writeFile(join(workDir, files.entry), createLocalEntrySource())
 		await writeFile(join(workDir, files.user), input.code)
 		await writeFile(join(workDir, files.runtime), createLocalRuntimeModuleSource())
+		const packageModules = await writePackageModuleFiles(workDir, packageGraph)
 		const configPath = join(workDir, 'config.capnp')
-		await writeFile(configPath, createWorkerdConfig({ bridgePort: bridge.port, files }))
+		await writeFile(
+			configPath,
+			createWorkerdConfig({ bridgePort: bridge.port, files, packageModules }),
+		)
 
 		const env: NodeJS.ProcessEnv = { ...process.env, [runSecretEnvVar]: runSecret }
 		delete env[apiTokenEnvVar]
@@ -159,6 +163,19 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 		await bridge?.close()
 		await rm(workDir, { recursive: true, force: true })
 	}
+}
+
+async function writePackageModuleFiles(
+	workDir: string,
+	graph: LocalPackageGraph,
+): Promise<Array<WorkerdPackageModuleFile>> {
+	const written: Array<WorkerdPackageModuleFile> = []
+	for (const [index, module] of graph.modules.entries()) {
+		const file = `pkg-${index}.js`
+		await writeFile(join(workDir, file), module.esModule)
+		written.push({ name: module.name, file })
+	}
+	return written
 }
 
 /** Same envelope as cloud execute so `formatToolResult` and `--json` behave identically. */
