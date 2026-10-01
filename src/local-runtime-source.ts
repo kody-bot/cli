@@ -57,8 +57,10 @@ export const workflows = {
 
 // Always null: there is no author-facing packages.invoke. Use a static
 // kody:@scope/package/export import when the name is known, or import(specifier)
-// when the name is data. Under --local, those imports fall back to
-// CapabilityProxy → kody.execute so the origin can resolve the package graph.
+// when the name is data. Under --local, static kody:@ imports are resolved into
+// the workerd module list via POST /v1/local-execute/package-graph (see
+// local-package-graph.ts / kentcdodds/kody#2808) — never a whole-module
+// CapabilityProxy → kody.execute hop.
 export const packages = null;
 
 export function packageStorage() {
@@ -162,17 +164,36 @@ export default {
 `.trimStart()
 }
 
+export type WorkerdPackageModuleFile = {
+	/** Exact module name as imported from user / package code (e.g. `kody:@scope/pkg/export`). */
+	name: string
+	/** Path relative to the workerd config file. */
+	file: string
+}
+
 /**
  * workerd text config. `files` are embedded relative to the config file.
  * Outbound fetch reaches public and private networks: local execute runs as
  * the user on their own machine, and reaching local services is part of why
  * one would run locally.
+ *
+ * Optional `packageModules` are stamped `kody:@…` (and nested) modules from
+ * POST /v1/local-execute/package-graph — embedded alongside the user module so
+ * imports resolve inside local workerd without a remote `kody.execute`.
  */
 export function createWorkerdConfig(input: {
 	bridgePort: number
 	files: { entry: string; user: string; runtime: string }
+	packageModules?: Array<WorkerdPackageModuleFile>
 }): string {
 	const flags = localExecuteCompatibilityFlags.map((flag) => JSON.stringify(flag)).join(', ')
+	const packageEntries = (input.packageModules ?? [])
+		.map(
+			(module) =>
+				`    (name = ${JSON.stringify(module.name)}, esModule = embed ${JSON.stringify(module.file)}),`,
+		)
+		.join('\n')
+	const packageBlock = packageEntries ? `\n${packageEntries}` : ''
 	return `using Workerd = import "/workerd/workerd.capnp";
 
 const config :Workerd.Config = (
@@ -188,7 +209,7 @@ const kodyWorker :Workerd.Worker = (
   modules = [
     (name = ${JSON.stringify(localWorkerModuleNames.entry)}, esModule = embed ${JSON.stringify(input.files.entry)}),
     (name = ${JSON.stringify(localWorkerModuleNames.user)}, esModule = embed ${JSON.stringify(input.files.user)}),
-    (name = ${JSON.stringify(localWorkerModuleNames.runtime)}, esModule = embed ${JSON.stringify(input.files.runtime)}),
+    (name = ${JSON.stringify(localWorkerModuleNames.runtime)}, esModule = embed ${JSON.stringify(input.files.runtime)}),${packageBlock}
   ],
   compatibilityDate = ${JSON.stringify(localExecuteCompatibilityDate)},
   compatibilityFlags = [${flags}],

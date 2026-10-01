@@ -64,7 +64,7 @@ Or run via `npx @kodycodes/cli` without a global install.
 | `kody status` | Shows CLI login state without printing secrets. |
 | `kody whoami` | Confirms the CLI MCP connection and lists tools. With a scoped API token (and no login), shows token identity via the Open API. |
 | `kody search [query]` | Calls Kody `search` from the CLI (prefer the host MCP tool). Token-only auth uses Open API `GET /v1/search`. |
-| `kody execute` | Calls Kody `execute` from the CLI (`--invoke`, `--code`, `--file`, or stdin via `--file -`). With a scoped API token and no login (or with `--token`), cloud execute goes through CapabilityProxy → `kody.execute` — no `kody login`. Add `--local` to run the module on this machine instead. |
+| `kody execute` | Calls Kody `execute` from the CLI (`--invoke`, `--code`, `--file`, or stdin via `--file -`). With a scoped API token and no login (or with `--token`), cloud execute goes through CapabilityProxy → `kody.execute` — no `kody login`. Add `--local` to run the module (and static `kody:@…` package modules) on this machine instead. |
 
 `--json` prints structured MCP results.
 
@@ -104,10 +104,10 @@ npx @kodycodes/cli whoami
 with `--params`) on this machine instead of in Kody's cloud sandbox. Local CPU
 is free; every `kody:runtime` call (`kody.*`, `kody.mcp.*`, `workflows.create`)
 is proxied to Kody's CapabilityProxy and metered like a cloud hop. Static
-`kody:@scope/package/export` imports (and `import(specifier)` of those names)
-keep the `--local` flag but resolve the package graph on origin via
-CapabilityProxy → `kody.execute` — same Open API token path, never hosted MCP
-`execute`. There is no author-facing `packages.invoke`.
+`kody:@scope/package/export` imports are **resolved into the local workerd
+bundle** via `POST /v1/local-execute/package-graph` (same Open API token —
+never hosted MCP `execute`, and never a whole-module CapabilityProxy →
+`kody.execute` defer). There is no author-facing `packages.invoke`.
 
 ```bash
 export KODY_API_TOKEN=…   # scoped token minted through the Kody `api` tool
@@ -130,22 +130,28 @@ npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.
 - **API:** `https://api.kody.codes` by default (`--api-url` or `KODY_API_URL`
   to override). The CLI calls `GET /v1/capability-proxy/session` before
   starting workerd and `POST /v1/capability-proxy/call` with
-  `{ path, args, conversationId? }` for each runtime call.
+  `{ path, args, conversationId? }` for each runtime call. When the module
+  imports `kody:@…`, it also calls `POST /v1/local-execute/package-graph` to
+  download stamped package modules for local embedding
+  ([platform issue](https://github.com/kentcdodds/kody/issues/2808)).
 - **Errors:** an expired/revoked token or an account without the
   `local-execute` flag fails fast with a clear message before any code runs.
   The token is only sent over https (plain http is allowed for localhost).
+  Missing package-graph API, unresolved imports, or missing artifacts fail
+  clearly — there is **no silent fallback** to cloud `kody.execute`.
 - **Lifetime:** no execution time limit locally; Ctrl-C (or SIGTERM) stops
   workerd and removes the temporary module.
-- **Saved packages:** `import { … } from 'kody:@owner/name/export'` works under
-  `--local`. The CLI detects those imports and runs the module through
-  CapabilityProxy → `kody.execute` so origin can stamp and bundle the graph.
-  That hop still needs network + a `local-execute` token; CPU for that path is
-  metered like cloud execute. Prefer keeping `--local` in agent workflows —
-  do not switch to hosted MCP `execute`. `--invoke` without `--local` is the
-  thin passthrough for a single export. `packageStorage()`, `packageSecrets`,
-  `email`, and `events` stay unbound like ad hoc cloud execute. Outbound
-  `fetch` on the pure-local (no `kody:@`) path goes straight from this
-  machine, including to local-network hosts.
+- **Saved packages:** `import { … } from 'kody:@owner/name/export'` under
+  `--local` keeps the user module + package graph in local workerd. Local
+  package CPU is not billed as a full cloud execute of the user module;
+  per-call CapabilityProxy hops (and whatever the package-graph prep call
+  meters once shipped) may still meter. Prefer keeping `--local` in agent
+  workflows — do not switch to hosted MCP `execute`. `--invoke` without
+  `--local` is the thin passthrough for a single export (still cloud).
+  `packageStorage()`, `packageSecrets`, `email`, and `events` stay unbound on
+  the ad hoc entry like cloud execute unless the downloaded package modules
+  carry stamps. Outbound `fetch` goes straight from this machine, including
+  to local-network hosts.
 
 ## Token storage
 

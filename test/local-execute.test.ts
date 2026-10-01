@@ -12,8 +12,9 @@ import {
 	buildLocalExecuteResult,
 	hasSavedPackageImports,
 	runLocalExecute,
-	savedPackageImportLocalFallbackStatus,
+	savedPackageImportLocalResolveStatus,
 } from '../src/local-execute.js'
+import { localPackageGraphPath, localPackageGraphPlatformIssueUrl } from '../src/local-package-graph.js'
 
 const goodToken = 'kody_tok_good'
 
@@ -49,38 +50,42 @@ before(async () => {
 		}
 		if (request.url === '/v1/capability-proxy/call') {
 			const { path, args } = body as { path: Array<string>; args: Array<unknown> }
-			if (path.join('.') === 'kody.execute') {
-				const code =
-					typeof args[0] === 'object' &&
-					args[0] !== null &&
-					'code' in args[0] &&
-					typeof (args[0] as { code?: unknown }).code === 'string'
-						? (args[0] as { code: string }).code
-						: ''
-				if (code.includes('kody:@missing/package/export')) {
-					send(200, {
-						result: {
-							ok: false,
-							error: 'Could not resolve saved package import kody:@missing/package/export.',
-							logs: [],
-						},
-					})
-					return
-				}
-				send(200, {
-					result: {
-						ok: true,
-						result: { fromPackage: true, codeSnippet: code.slice(0, 80) },
-						logs: ['resolved via kody.execute'],
-					},
-				})
-				return
-			}
 			if (path.join('.') === 'kody.explode') {
 				send(200, { error: { code: 'capability_failed', message: 'explode is broken' } })
 				return
 			}
 			send(200, { result: { echoed: path.join('.'), args } })
+			return
+		}
+		if (request.url === `/${localPackageGraphPath}`) {
+			const payload = body as { code?: string; imports?: Array<string> }
+			const imports = payload.imports ?? []
+			if (imports.some((specifier) => specifier.includes('@missing/'))) {
+				send(422, {
+					error: {
+						code: 'package_import_unresolved',
+						message: 'Could not resolve saved package import kody:@missing/package/export.',
+					},
+				})
+				return
+			}
+			if (imports.includes('kody:@test/pkg/hello')) {
+				send(200, {
+					imports: ['kody:@test/pkg/hello'],
+					modules: [
+						{
+							name: 'kody:@test/pkg/hello',
+							esModule: `export function greet(name) {
+	return { hello: name, fromPackage: true }
+}
+export default greet
+`,
+						},
+					],
+				})
+				return
+			}
+			send(404, { error: { code: 'not_found', message: 'package-graph not deployed' } })
 			return
 		}
 		send(404, { error: 'not found' })
@@ -138,63 +143,94 @@ test('hasSavedPackageImports detects static and dynamic kody:@ imports', () => {
 })
 
 test(
-	'runLocalExecute with kody:@ imports uses CapabilityProxy kody.execute (happy path)',
-	{ timeout: 60_000 },
+	'runLocalExecute with kody:@ imports bundles package modules into local workerd',
+	{ timeout: 180_000 },
 	async () => {
 		reset()
 		const statuses: Array<string> = []
-		const code = `import { searchMessages } from 'kody:@kentcdodds/google/gmail'
+		const code = `import { greet } from 'kody:@test/pkg/hello'
 export default async function main(params) {
-	return await searchMessages(params)
+	return greet(params.name)
 }`
 		const result = await runLocalExecute({
 			code,
-			params: { q: 'from:me' },
+			params: { name: 'kent' },
 			conversationId: 'conv-pkg',
 			token: goodToken,
 			apiUrl,
-			workerdPath: '/nonexistent/workerd',
 			onStatus: (message) => statuses.push(message),
 		})
 		assert.equal(result.isError, false)
-		assert.deepEqual(statuses, [savedPackageImportLocalFallbackStatus])
+		assert.ok(statuses.includes(savedPackageImportLocalResolveStatus))
 		assert.deepEqual((result.structuredContent as { result: unknown }).result, {
+			hello: 'kent',
 			fromPackage: true,
-			codeSnippet: code.slice(0, 80),
 		})
 		assert.equal(proxyRequests[0]?.url, '/v1/capability-proxy/session')
-		assert.equal(proxyRequests.length, 2)
-		assert.deepEqual(proxyRequests[1]?.body, {
-			path: ['kody', 'execute'],
-			args: [{ code, params: { q: 'from:me' }, conversationId: 'conv-pkg' }],
-			conversationId: 'conv-pkg',
-		})
+		assert.equal(
+			proxyRequests.some((request) => request.url === `/${localPackageGraphPath}`),
+			true,
+		)
+		assert.equal(
+			proxyRequests.every((request) => {
+				if (request.url !== '/v1/capability-proxy/call') return true
+				const path = (request.body as { path?: Array<string> } | null)?.path
+				return !(Array.isArray(path) && path.join('.') === 'kody.execute')
+			}),
+			true,
+			'must not hop the whole module to CapabilityProxy kody.execute',
+		)
 	},
 )
 
 test(
-	'runLocalExecute with kody:@ imports surfaces package resolution failures clearly',
+	'runLocalExecute with kody:@ imports fails clearly when the package cannot be resolved',
 	{ timeout: 60_000 },
 	async () => {
 		reset()
 		const code = `import missing from 'kody:@missing/package/export'
 export default async function main() { return missing({}) }`
-		const result = await runLocalExecute({
-			code,
-			token: goodToken,
-			apiUrl,
-			workerdPath: '/nonexistent/workerd',
-		})
-		assert.equal(result.isError, true)
-		assert.deepEqual(result.content, [
-			{
-				type: 'text',
-				text: 'Error: Could not resolve saved package import kody:@missing/package/export.',
+		await assert.rejects(
+			() =>
+				runLocalExecute({
+					code,
+					token: goodToken,
+					apiUrl,
+					workerdPath: '/nonexistent/workerd',
+				}),
+			/Could not resolve saved package import kody:@missing\/package\/export/,
+		)
+		assert.equal(
+			proxyRequests.some((request) => request.url === '/v1/capability-proxy/call'),
+			false,
+		)
+	},
+)
+
+test(
+	'runLocalExecute with kody:@ imports fails clearly when package-graph API is missing',
+	{ timeout: 60_000 },
+	async () => {
+		reset()
+		const code = `import x from 'kody:@other/pkg/export'
+export default async function main() { return x }`
+		await assert.rejects(
+			() =>
+				runLocalExecute({
+					code,
+					token: goodToken,
+					apiUrl,
+					workerdPath: '/nonexistent/workerd',
+				}),
+			(error: unknown) => {
+				assert.ok(error instanceof Error)
+				assert.match(error.message, /will not silently fall back to cloud kody\.execute/)
+				assert.match(
+					error.message,
+					new RegExp(localPackageGraphPlatformIssueUrl.replace(/\./g, '\\.')),
+				)
+				return true
 			},
-		])
-		assert.match(
-			String((result.structuredContent as { error?: string }).error),
-			/Could not resolve saved package import/,
 		)
 	},
 )
