@@ -13,6 +13,7 @@ import {
 	runCli,
 	shouldUseApiToken,
 } from '../src/cli.js'
+import type { StoredApiToken } from '../src/api-token-store.js'
 import { modernMcpProtocolVersion } from '../src/defaults.js'
 import { formatToolResult, listKodyTools } from '../src/mcp.js'
 import { redact } from '../src/redact.js'
@@ -166,6 +167,52 @@ test('shouldUseApiToken prefers explicit --token and env token when not logged i
 			hasSession: false,
 		}),
 		false,
+	)
+})
+
+test('shouldUseApiToken treats stored bootstrap token like env when not logged in', () => {
+	const stored: StoredApiToken = {
+		version: 1,
+		apiUrl: 'https://api.kody.codes',
+		token: 'kody_at_stored',
+		tokenId: 'tok_stored',
+	}
+	assert.equal(
+		shouldUseApiToken({
+			tokenValues: {},
+			mcpUrl: 'https://kody.codes/mcp',
+			allowEnvWithoutLogin: true,
+			env: {},
+			hasSession: false,
+			loadApiToken: () => stored,
+		}),
+		true,
+	)
+	assert.equal(
+		shouldUseApiToken({
+			tokenValues: {},
+			mcpUrl: 'https://kody.codes/mcp',
+			allowEnvWithoutLogin: true,
+			env: {},
+			hasSession: true,
+			loadApiToken: () => stored,
+		}),
+		false,
+	)
+})
+
+test('resolveApiToken falls back to a stored bootstrap token', () => {
+	const stored: StoredApiToken = {
+		version: 1,
+		apiUrl: 'https://api.kody.codes',
+		token: 'kody_at_stored',
+		tokenId: 'tok_stored',
+	}
+	assert.equal(
+		resolveApiToken({}, {}, 'this command', {
+			loadApiToken: () => stored,
+		}),
+		'kody_at_stored',
 	)
 })
 
