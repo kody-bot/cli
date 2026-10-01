@@ -10,6 +10,7 @@ import {
 	resolveApiToken,
 	resolveCommand,
 	runCli,
+	shouldUseApiToken,
 } from '../src/cli.js'
 import { modernMcpProtocolVersion } from '../src/defaults.js'
 import { formatToolResult, listKodyTools } from '../src/mcp.js'
@@ -60,18 +61,125 @@ test('apiUrlFrom defaults to api.kody.codes', () => {
 	assert.equal(apiUrlFrom({ apiUrl: 'http://x' }, { KODY_API_URL: 'http://y' }), 'http://x')
 })
 
-test('execute rejects --token without --local and --invoke with --local', async () => {
-	const run = async (argv: Array<string>) => {
-		let stderr = ''
-		const code = await runCli(argv, { stdout: () => {}, stderr: (text) => (stderr += text) })
-		return { code, stderr }
+test('shouldUseApiToken prefers explicit --token and env token when not logged in', () => {
+	assert.equal(
+		shouldUseApiToken({
+			tokenValues: { token: 'flag' },
+			mcpUrl: 'https://kody.codes/mcp',
+			allowEnvWithoutLogin: true,
+			env: {},
+			hasSession: true,
+		}),
+		true,
+	)
+	assert.equal(
+		shouldUseApiToken({
+			tokenValues: {},
+			mcpUrl: 'https://kody.codes/mcp',
+			allowEnvWithoutLogin: true,
+			env: { KODY_API_TOKEN: 'env-tok' },
+			hasSession: false,
+		}),
+		true,
+	)
+	assert.equal(
+		shouldUseApiToken({
+			tokenValues: {},
+			mcpUrl: 'https://kody.codes/mcp',
+			allowEnvWithoutLogin: true,
+			env: { KODY_API_TOKEN: 'env-tok' },
+			hasSession: true,
+		}),
+		false,
+	)
+	assert.equal(
+		shouldUseApiToken({
+			tokenValues: {},
+			mcpUrl: 'https://kody.codes/mcp',
+			allowEnvWithoutLogin: true,
+			env: {},
+			hasSession: false,
+		}),
+		false,
+	)
+})
+
+test('execute with --token (no --local) uses CapabilityProxy and never requires login', async () => {
+	const previousMcpUrl = process.env.KODY_MCP_URL
+	process.env.KODY_MCP_URL = 'http://127.0.0.1:9/unreachable-mcp'
+	const calls: Array<string> = []
+	const fetchFn = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+		const url = String(input)
+		calls.push(`${(init?.method ?? 'GET').toUpperCase()} ${url}`)
+		if (url.includes('/session')) {
+			return new Response(JSON.stringify({ scopes: ['local-execute'] }), { status: 200 })
+		}
+		return new Response(
+			JSON.stringify({ result: { ok: true, result: { cloud: true }, logs: [] } }),
+			{ status: 200 },
+		)
+	}) as typeof fetch
+	const previousFetch = globalThis.fetch
+	globalThis.fetch = fetchFn
+	let stdout = ''
+	let stderr = ''
+	try {
+		const code = await runCli(
+			[
+				'execute',
+				'--token',
+				'tok',
+				'--api-url',
+				'https://api.kody.codes',
+				'--code',
+				'export default async () => ({ cloud: true })',
+			],
+			{ stdout: (text) => (stdout += text), stderr: (text) => (stderr += text) },
+		)
+		assert.equal(code, 0, stderr)
+	} finally {
+		globalThis.fetch = previousFetch
+		if (previousMcpUrl === undefined) delete process.env.KODY_MCP_URL
+		else process.env.KODY_MCP_URL = previousMcpUrl
 	}
-	const tokenOnly = await run(['execute', '--token', 'tok', '--code', 'export default () => 1'])
-	assert.equal(tokenOnly.code, 1)
-	assert.match(tokenOnly.stderr, /--token is only used with execute --local/)
-	const invokeLocal = await run(['execute', '--local', '--invoke', 'kody:@me/pkg/export'])
-	assert.equal(invokeLocal.code, 1)
-	assert.match(invokeLocal.stderr, /--local runs a module you provide/)
+	assert.deepEqual(JSON.parse(stdout), { cloud: true })
+	assert.ok(calls.some((call) => call.includes('/v1/capability-proxy/session')))
+	assert.ok(calls.some((call) => call.includes('/v1/capability-proxy/call')))
+	assert.equal(
+		calls.some((call) => call.includes('unreachable-mcp')),
+		false,
+	)
+})
+
+test('execute without token or login prompts clearly', async () => {
+	const previousMcpUrl = process.env.KODY_MCP_URL
+	const previousToken = process.env.KODY_API_TOKEN
+	process.env.KODY_MCP_URL = 'http://127.0.0.1:9/unreachable-mcp'
+	delete process.env.KODY_API_TOKEN
+	let stderr = ''
+	try {
+		const code = await runCli(['execute', '--code', 'export default () => 1'], {
+			stdout: () => {},
+			stderr: (text) => (stderr += text),
+		})
+		assert.equal(code, 1)
+	} finally {
+		if (previousMcpUrl === undefined) delete process.env.KODY_MCP_URL
+		else process.env.KODY_MCP_URL = previousMcpUrl
+		if (previousToken === undefined) delete process.env.KODY_API_TOKEN
+		else process.env.KODY_API_TOKEN = previousToken
+	}
+	assert.match(stderr, /Not logged in|KODY_API_TOKEN|--token/)
+})
+
+test('execute rejects --invoke with --local', async () => {
+	let stderr = ''
+	const code = await runCli(['execute', '--local', '--invoke', 'kody:@me/pkg/export'], {
+		stdout: () => {},
+		stderr: (text) => (stderr += text),
+	})
+	assert.equal(code, 1)
+	assert.match(stderr, /--local runs a module you provide/)
 })
 
 test('buildExecuteToolArgs passes invoke without code and keeps params', () => {
