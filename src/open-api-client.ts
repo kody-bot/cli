@@ -26,18 +26,192 @@ export class OpenApiError extends Error {
 	}
 }
 
+/** Path to the live OpenAPI document on the Kody API origin. */
+export const openApiDocumentPath = 'openapi.json'
+
+/**
+ * Bootstrap redeem returns a `kody_at_…` once. Agents must use
+ * `kody auth bootstrap --code` so the token is stored and never printed.
+ */
+export const cliCredentialBootstrapRedeemOperationId =
+	'cliCredentialBootstrapRedeem'
+
+export type OpenApiOperationRoute = {
+	operationId: string
+	method: string
+	pathTemplate: string
+	pathParamNames: Array<string>
+}
+
+const openApiRouteCache = new Map<string, Map<string, OpenApiOperationRoute>>()
+
 export async function openApiGet(
 	input: OpenApiClientInput & { path: string; query?: Record<string, string | number | undefined> },
 ): Promise<unknown> {
+	return openApiRequest({
+		...input,
+		method: 'GET',
+		path: input.path,
+		query: input.query,
+	})
+}
+
+/**
+ * Authenticated Open API request (Bearer `kody_at_…`). Shared by search/whoami
+ * helpers and `kody api <operationId>`.
+ */
+export async function openApiRequest(
+	input: OpenApiClientInput & {
+		method: string
+		path: string
+		query?: Record<string, unknown>
+		body?: Record<string, unknown>
+	},
+): Promise<unknown> {
 	const apiUrl = input.apiUrl || defaultApiUrl
 	assertTokenSafeApiUrl(apiUrl)
-	const url = capabilityProxyUrl(apiUrl, input.path)
+	const url = capabilityProxyUrl(apiUrl, input.path.replace(/^\//, ''))
 	if (input.query) {
-		for (const [key, value] of Object.entries(input.query)) {
-			if (value === undefined || value === '') continue
-			url.searchParams.set(key, String(value))
+		appendQueryParams(url.searchParams, input.query)
+	}
+	const method = input.method.toUpperCase()
+	const headers: Record<string, string> = {
+		accept: 'application/json',
+		authorization: `Bearer ${input.token}`,
+		'user-agent': `${cliName}/${readPackageVersion()}`,
+	}
+	let body: string | undefined
+	if (input.body !== undefined && method !== 'GET' && method !== 'HEAD') {
+		headers['content-type'] = 'application/json'
+		body = JSON.stringify(input.body)
+	}
+	const fetchFn = input.fetchFn ?? fetch
+	let response: Response
+	try {
+		response = await fetchFn(url, { method, headers, body })
+	} catch (error) {
+		const reason = describeNetworkError(error)
+		throw new OpenApiError(
+			`Could not reach the Kody API at ${url.origin} (${reason}). Check --api-url / KODY_API_URL and your network.`,
+		)
+	}
+	const responseBody = await readJson(response)
+	if (!response.ok) {
+		throw describeOpenApiFailure(response.status, responseBody, url)
+	}
+	return responseBody
+}
+
+/**
+ * Call one Open API operation by `operationId` + flat `params`, matching the
+ * MCP `api` tool shape. Resolves method/path from `/openapi.json`.
+ */
+export async function callOpenApiOperation(
+	input: OpenApiClientInput & {
+		operationId: string
+		params?: Record<string, unknown>
+		/** Test seam: skip /openapi.json fetch. */
+		operations?: Map<string, OpenApiOperationRoute>
+	},
+): Promise<unknown> {
+	const operationId = input.operationId.trim()
+	if (!operationId) {
+		throw new OpenApiError('Provide an Open API operationId (e.g. usageGet, metaGetCurrentUser).')
+	}
+	assertApiOperationAllowed(operationId)
+	const apiUrl = input.apiUrl || defaultApiUrl
+	const operations =
+		input.operations ?? (await loadOpenApiOperations({ apiUrl, fetchFn: input.fetchFn }))
+	const route = operations.get(operationId)
+	if (!route) {
+		throw new OpenApiError(
+			`Unknown operationId "${operationId}". Operation ids are listed in ${capabilityProxyUrl(apiUrl, openApiDocumentPath).href} and match Kody capability names (plus token operations such as tokenCreate).`,
+			{ status: 404, code: 'not_found' },
+		)
+	}
+	const built = buildOpenApiHttpRequest({
+		route,
+		params: input.params ?? {},
+	})
+	return openApiRequest({
+		token: input.token,
+		apiUrl,
+		fetchFn: input.fetchFn,
+		method: built.method,
+		path: built.path,
+		query: built.query,
+		body: built.body,
+	})
+}
+
+export function assertApiOperationAllowed(operationId: string): void {
+	if (operationId === cliCredentialBootstrapRedeemOperationId) {
+		throw new OpenApiError(
+			`Refusing to call ${cliCredentialBootstrapRedeemOperationId}: redeem returns a kody_at_… token that must not print to stdout. Use \`kody auth bootstrap --code <kody_bc_…>\` instead (stores the token; never prints it).`,
+			{ status: null, code: 'refused' },
+		)
+	}
+}
+
+/**
+ * Split flat MCP-style params into path / query / body for an Open API route.
+ * GET and DELETE send non-path fields as query; other methods send them as JSON body.
+ */
+export function buildOpenApiHttpRequest(input: {
+	route: OpenApiOperationRoute
+	params: Record<string, unknown>
+}): {
+	method: string
+	path: string
+	query?: Record<string, unknown>
+	body?: Record<string, unknown>
+} {
+	const remaining: Record<string, unknown> = { ...input.params }
+	const pathParams: Record<string, string> = {}
+	for (const name of input.route.pathParamNames) {
+		if (!(name in remaining) || remaining[name] === undefined || remaining[name] === null) {
+			throw new OpenApiError(
+				`Missing required path parameter "${name}" for ${input.route.operationId} (${input.route.pathTemplate}).`,
+			)
+		}
+		pathParams[name] = String(remaining[name])
+		delete remaining[name]
+	}
+	const path = fillPathTemplate(input.route.pathTemplate, pathParams)
+	const method = input.route.method.toUpperCase()
+	if (apiOperationUsesQueryInputs(method)) {
+		return {
+			method,
+			path,
+			...(Object.keys(remaining).length > 0 ? { query: remaining } : {}),
 		}
 	}
+	return {
+		method,
+		path,
+		body: remaining,
+	}
+}
+
+export function apiOperationUsesQueryInputs(method: string): boolean {
+	const upper = method.toUpperCase()
+	return upper === 'GET' || upper === 'DELETE'
+}
+
+export async function loadOpenApiOperations(input: {
+	apiUrl?: string
+	fetchFn?: typeof fetch
+	/** Bypass cache (tests). */
+	bustCache?: boolean
+}): Promise<Map<string, OpenApiOperationRoute>> {
+	const apiUrl = input.apiUrl || defaultApiUrl
+	assertTokenSafeApiUrl(apiUrl)
+	const cacheKey = new URL(apiUrl).origin
+	if (!input.bustCache) {
+		const cached = openApiRouteCache.get(cacheKey)
+		if (cached) return cached
+	}
+	const url = capabilityProxyUrl(apiUrl, openApiDocumentPath)
 	const fetchFn = input.fetchFn ?? fetch
 	let response: Response
 	try {
@@ -45,21 +219,99 @@ export async function openApiGet(
 			method: 'GET',
 			headers: {
 				accept: 'application/json',
-				authorization: `Bearer ${input.token}`,
 				'user-agent': `${cliName}/${readPackageVersion()}`,
 			},
 		})
 	} catch (error) {
 		const reason = describeNetworkError(error)
 		throw new OpenApiError(
-			`Could not reach the Kody API at ${url.origin} (${reason}). Check --api-url / KODY_API_URL and your network.`,
+			`Could not load OpenAPI from ${url.href} (${reason}). Check --api-url / KODY_API_URL and your network.`,
 		)
 	}
 	const body = await readJson(response)
 	if (!response.ok) {
-		throw describeOpenApiFailure(response.status, body, url)
+		throw new OpenApiError(
+			`Could not load OpenAPI from ${url.href} (HTTP ${response.status}).`,
+			{ status: response.status },
+		)
 	}
-	return body
+	const operations = indexOpenApiOperations(body)
+	openApiRouteCache.set(cacheKey, operations)
+	return operations
+}
+
+/** Visible for tests. */
+export function indexOpenApiOperations(document: unknown): Map<string, OpenApiOperationRoute> {
+	if (!isRecord(document) || !isRecord(document.paths)) {
+		throw new OpenApiError('OpenAPI document is missing a paths object.')
+	}
+	const operations = new Map<string, OpenApiOperationRoute>()
+	for (const [pathTemplate, methods] of Object.entries(document.paths)) {
+		if (!isRecord(methods)) continue
+		for (const [method, operation] of Object.entries(methods)) {
+			if (!isRecord(operation)) continue
+			const operationId =
+				typeof operation.operationId === 'string' ? operation.operationId : ''
+			if (!operationId) continue
+			operations.set(operationId, {
+				operationId,
+				method: method.toUpperCase(),
+				pathTemplate,
+				pathParamNames: pathParamNamesFromTemplate(pathTemplate),
+			})
+		}
+	}
+	return operations
+}
+
+/** Clear the in-memory OpenAPI route cache (tests). */
+export function clearOpenApiRouteCache(): void {
+	openApiRouteCache.clear()
+}
+
+function pathParamNamesFromTemplate(pathTemplate: string): Array<string> {
+	const names: Array<string> = []
+	for (const match of pathTemplate.matchAll(/\{([^{}/]+)\}/g)) {
+		const name = match[1]
+		if (name) names.push(name)
+	}
+	return names
+}
+
+function fillPathTemplate(
+	pathTemplate: string,
+	pathParams: Record<string, string>,
+): string {
+	return pathTemplate.replace(/\{([^{}/]+)\}/g, (_full, name: string) => {
+		const value = pathParams[name]
+		if (value === undefined) {
+			throw new OpenApiError(`Missing path parameter "${name}" for ${pathTemplate}.`)
+		}
+		return encodeURIComponent(value)
+	})
+}
+
+function appendQueryParams(
+	searchParams: URLSearchParams,
+	query: Record<string, unknown>,
+): void {
+	for (const [key, value] of Object.entries(query)) {
+		if (value === undefined || value === null || value === '') continue
+		if (Array.isArray(value)) {
+			for (const entry of value) {
+				if (entry === undefined || entry === null) continue
+				searchParams.append(key, stringifyQueryValue(entry))
+			}
+			continue
+		}
+		searchParams.set(key, stringifyQueryValue(value))
+	}
+}
+
+function stringifyQueryValue(value: unknown): string {
+	if (typeof value === 'string') return value
+	if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+	return JSON.stringify(value)
 }
 
 export async function searchWithApiToken(input: OpenApiClientInput & {

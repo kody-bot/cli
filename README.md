@@ -65,6 +65,7 @@ Or run via `npx @kodycodes/cli` without a global install.
 | `kody auth bootstrap --code` | Redeems a one-shot `kody_bc_…` from MCP `cliCredentialBootstrap` and stores the resulting `kody_at_…` for `execute --local` (never prints the token). |
 | `kody whoami` | Confirms the CLI MCP connection and lists tools. With a scoped API token (and no login), shows token identity via the Open API. |
 | `kody search [query]` | Calls Kody `search` from the CLI (prefer the host MCP tool). Token-only auth uses Open API `GET /v1/search`. |
+| `kody api <operationId>` | Thin Open API wrapper matching the MCP `api` tool: `operationId` + flat `--params` JSON. Auth: `--token` / `KODY_API_TOKEN` / stored `auth bootstrap` token. |
 | `kody execute` | Calls Kody `execute` from the CLI (`--invoke`, `--code`, `--file`, or stdin via `--file -`). With a scoped API token and no login (or with `--token`), cloud execute goes through CapabilityProxy → `kody.execute` — no `kody login`. Add `--local` to run the module (and static `kody:@…` package modules) on this machine instead. |
 
 `--json` prints structured MCP results.
@@ -93,6 +94,7 @@ npx @kodycodes/cli execute --code 'export default async () => ({ ok: true })'
 npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.com"}'
 npx @kodycodes/cli search "what can you do"
 npx @kodycodes/cli whoami
+npx @kodycodes/cli api usageGet --params '{}'
 ```
 
 - Neither bootstrap store, `kody login`, nor a token → the error prefers

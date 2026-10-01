@@ -13,6 +13,7 @@ Usage:
   kody auth bootstrap --code <kody_bc_…> [--api-url <url>]
   kody whoami [--mcp-url <url>] [--token <token>] [--api-url <url>] [--json]
   kody search [query] [--entity <ref>] [--domain <id>] [--limit <n>] [--token <token>] [--api-url <url>] [--json]
+  kody api <operationId> [--params <json>] [--token <token>] [--api-url <url>] [--json]
   kody execute [--invoke <ref> | --code <esm> | --file <path>] [--params <json>] [--conversation-id <id>] [--json]
                [--token <token>] [--api-url <url>] [--local]
   kody install [--mcp-url <url>] [--clients <ids>] [--yes] [--project] [--json]
@@ -28,13 +29,24 @@ Usage:
              Redeem a one-shot \`kody_bc_…\` from MCP \`cliCredentialBootstrap\`
              (POST /v1/tokens/bootstrap/redeem, no Authorization header).
              Stores the resulting \`kody_at_…\` for \`execute --local\`,
-             search, whoami, and token-auth cloud execute without printing
-             the token. Prefer this over tokenCreate for agents already on
-             MCP. Interactive humans can use \`kody login\` instead.
+             search, whoami, api, and token-auth cloud execute without
+             printing the token. Prefer this over tokenCreate for agents
+             already on MCP. Interactive humans can use \`kody login\`
+             instead. Do not call \`kody api cliCredentialBootstrapRedeem\`
+             — that would print the token.
+
+  api        Call one Open API operation by operationId + flat --params
+             JSON (same shape as the MCP \`api\` tool). Uses scoped API
+             auth only (\`--token\` / ${apiTokenEnvVar} / stored bootstrap).
+             Prints JSON. Example: \`kody api usageGet --params '{}'\`.
+             Unknown operationIds error clearly; see
+             ${defaultApiUrl}/openapi.json. tokenCreate / tokenRotate
+             responses include a one-time token value — prefer env storage
+             over pasting into chat.
 
   --token / ${apiTokenEnvVar}
              Scoped API token (preferred via env). With no \`kody login\`
-             session, search / whoami / execute use the Open API and
+             session, search / whoami / api / execute use the Open API and
              CapabilityProxy — including cloud execute without --local.
              Auth priority matches \`execute --local\`: \`--token\` /
              ${apiTokenEnvVar}; stored bootstrap/API token from
@@ -58,7 +70,7 @@ Usage:
 
 Environment:
   KODY_MCP_URL        Override the default MCP URL (${defaultMcpUrl})
-  ${apiTokenEnvVar}      Scoped API token for token-auth search / whoami / execute
+  ${apiTokenEnvVar}      Scoped API token for token-auth search / whoami / api / execute
   KODY_API_URL        Override the Kody API URL (${defaultApiUrl})
   KODY_CACHE_DIR      Where execute --local caches workerd (default: user cache dir)
   KODY_WORKERD_PATH   Use this workerd binary instead of the pinned download
