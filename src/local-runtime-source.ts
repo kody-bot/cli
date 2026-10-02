@@ -3,6 +3,13 @@
  * same `kody:runtime` surface as ad hoc cloud execute; every call becomes a
  * `{ path, args }` hop to the CLI's loopback bridge, which adds the API token
  * and forwards it to CapabilityProxy. The token never enters workerd.
+ *
+ * Stamped `kody:@…` packages also receive a package-graph CapabilityProxy shim
+ * from origin. This host module still binds createAuthenticatedFetch /
+ * secretHeaders / oauthClientCredentials for ad hoc imports, and the entry
+ * installs the shared runtime ALS before evaluating user code so published
+ * bundles that inline optional runtime exports (Dropbox-style) see a populated
+ * store at module evaluation — matching cloud `__kodyRunInRuntime`.
  */
 
 export const localExecuteCompatibilityDate = '2026-04-16'
@@ -18,8 +25,13 @@ export const localWorkerModuleNames = {
 export const runSecretHeader = 'x-kody-run-secret'
 export const runSecretEnvVar = 'KODY_RUN_SECRET'
 
+/** Runtime ALS symbol shared with stamped / inlined `kody:runtime` helpers. */
+export const kodyRuntimeStorageSymbolDescription = 'kody.runtimeStorage'
+
 export function createLocalRuntimeModuleSource(): string {
 	return `
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 let __kodyBridge = null;
 
 export function __kodyInstallLocalBridge(bridge) {
@@ -83,9 +95,131 @@ export const packageSecrets = {
 export const packageContext = Object.freeze({});
 export const email = null;
 export const events = null;
-export const createAuthenticatedFetch = undefined;
-export const secretHeaders = undefined;
-export const oauthClientCredentials = undefined;
+
+const __kodyNullBodyStatuses = new Set([204, 205, 304]);
+
+function __kodyBytesToBase64(bytes) {
+	let binary = '';
+	for (let i = 0; i < bytes.length; i += 1) {
+		binary += String.fromCharCode(bytes[i]);
+	}
+	return btoa(binary);
+}
+
+function __kodyBase64ToBytes(value) {
+	const binary = atob(value);
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i += 1) {
+		bytes[i] = binary.charCodeAt(i);
+	}
+	return bytes;
+}
+
+async function __kodyBodyToBytes(body) {
+	if (typeof body === 'string') {
+		return new TextEncoder().encode(body);
+	}
+	if (body instanceof Uint8Array) return body;
+	if (body instanceof ArrayBuffer) return new Uint8Array(body);
+	if (ArrayBuffer.isView(body)) {
+		return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+	}
+	if (typeof Blob !== 'undefined' && body instanceof Blob) {
+		return new Uint8Array(await body.arrayBuffer());
+	}
+	if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+		return new TextEncoder().encode(body.toString());
+	}
+	if (body && typeof body.getReader === 'function') {
+		return new Uint8Array(await new Response(body).arrayBuffer());
+	}
+	if (typeof FormData !== 'undefined' && body instanceof FormData) {
+		throw new Error(
+			'Local execute createAuthenticatedFetch does not support FormData bodies yet; use Uint8Array, Blob, or string.',
+		);
+	}
+	throw new Error(
+		'Local execute createAuthenticatedFetch could not serialize the request body.',
+	);
+}
+
+export async function createAuthenticatedFetch(providerName) {
+	const name = String(providerName ?? '').trim();
+	if (!name) {
+		throw new Error('Integration name is required.');
+	}
+	return async (input, init) => {
+		let url;
+		let method = 'GET';
+		let headers = {};
+		let bodyBytes = null;
+		if (typeof input === 'string' || input instanceof URL) {
+			url = String(input);
+			method = String(init?.method ?? 'GET');
+			headers = Object.fromEntries(new Headers(init?.headers).entries());
+			if (init?.body != null) {
+				bodyBytes = await __kodyBodyToBytes(init.body);
+			}
+		} else {
+			const merged = new Request(input, init);
+			url = merged.url;
+			method = merged.method;
+			headers = Object.fromEntries(merged.headers.entries());
+			if (method !== 'GET' && method !== 'HEAD') {
+				bodyBytes = new Uint8Array(await merged.arrayBuffer());
+			}
+		}
+		const result = await __kodyCall(['kody', 'authenticatedFetch'], [{
+			providerName: name,
+			request: {
+				url,
+				method,
+				headers,
+				...(bodyBytes != null
+					? { bodyBase64: __kodyBytesToBase64(bodyBytes) }
+					: {}),
+			},
+		}]);
+		const bytes = __kodyBase64ToBytes(result.bodyBase64 ?? '');
+		return new Response(
+			__kodyNullBodyStatuses.has(result.status) ? null : bytes,
+			{
+				status: result.status,
+				statusText: result.statusText,
+				headers: result.headers,
+			},
+		);
+	};
+}
+
+export const secretHeaders = {
+	basic(input) {
+		const usernameSecret = String(input?.usernameSecret ?? '').trim();
+		const passwordSecret = String(input?.passwordSecret ?? '').trim();
+		if (!usernameSecret || !passwordSecret) {
+			throw new Error(
+				'secretHeaders.basic requires usernameSecret and passwordSecret.',
+			);
+		}
+		const scope =
+			typeof input?.scope === 'string' && input.scope.trim()
+				? input.scope.trim()
+				: null;
+		return scope
+			? \`{{secret-basic:username=\${usernameSecret},password=\${passwordSecret}|scope=\${scope}}}\`
+			: \`{{secret-basic:username=\${usernameSecret},password=\${passwordSecret}}}\`;
+	},
+};
+
+export async function oauthClientCredentials(input) {
+	return await __kodyCall(['kody', 'oauthClientCredentials'], [input ?? {}]);
+}
+
+const __kodyRuntimeStorageSymbol = Symbol.for(${JSON.stringify(kodyRuntimeStorageSymbolDescription)});
+const __globalAny = globalThis;
+const __kodyRuntimeStorage =
+	__globalAny[__kodyRuntimeStorageSymbol] ??
+	(__globalAny[__kodyRuntimeStorageSymbol] = new AsyncLocalStorage());
 
 const __kodyRuntimeDefault = Object.freeze({
 	kody,
@@ -102,12 +236,20 @@ const __kodyRuntimeDefault = Object.freeze({
 });
 export default __kodyRuntimeDefault;
 export const KodyRuntime = Object.freeze({ defaultValue: __kodyRuntimeDefault });
+
+/** Enter the shared runtime ALS before evaluating user / package modules. */
+export function __kodyRunInLocalRuntime(callback) {
+	return __kodyRuntimeStorage.run(__kodyRuntimeDefault, callback);
+}
 `.trimStart()
 }
 
 export function createLocalEntrySource(): string {
 	return `
-import { __kodyInstallLocalBridge } from ${JSON.stringify(localWorkerModuleNames.runtime)};
+import {
+	__kodyInstallLocalBridge,
+	__kodyRunInLocalRuntime,
+} from ${JSON.stringify(localWorkerModuleNames.runtime)};
 
 const __kodyRunSecretHeader = ${JSON.stringify(runSecretHeader)};
 let __kodyClaimed = false;
@@ -145,11 +287,15 @@ export default {
 			error: (...a) => { logs.push('[error] ' + __kodyFormatLogArgs(a)); },
 		};
 		try {
-			const module = await import(${JSON.stringify(`./${localWorkerModuleNames.user}`)});
-			if (typeof module?.default !== 'function') {
-				throw new Error('Kody execute modules must default export a function.');
-			}
-			const result = await module.default(params);
+			// Evaluate user + stamped package modules inside the runtime ALS so
+			// inlined optional exports capture callable helpers (cloud parity).
+			const result = await __kodyRunInLocalRuntime(async () => {
+				const module = await import(${JSON.stringify(`./${localWorkerModuleNames.user}`)});
+				if (typeof module?.default !== 'function') {
+					throw new Error('Kody execute modules must default export a function.');
+				}
+				return await module.default(params);
+			});
 			return new Response(JSON.stringify({ result, logs }), {
 				headers: { 'content-type': 'application/json' },
 			});
