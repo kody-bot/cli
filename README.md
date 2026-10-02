@@ -66,7 +66,7 @@ Or run via `npx @kodycodes/cli` without a global install.
 | `kody whoami` | Confirms the CLI MCP connection and lists tools. With a scoped API token (and no login), shows token identity via the Open API. |
 | `kody search [query]` | Calls Kody `search` from the CLI (prefer the host MCP tool). Token-only auth uses Open API `GET /v1/search`. |
 | `kody api <operationId>` | Thin Open API wrapper matching the MCP `api` tool: `operationId` + flat `--params` JSON. Auth: `--token` / `KODY_API_TOKEN` / stored `auth bootstrap` token. |
-| `kody execute` | Calls Kody `execute` from the CLI (`--invoke`, `--code`, `--file`, or stdin via `--file -`). With a scoped API token and no login (or with `--token`), cloud execute goes through CapabilityProxy → `kody.execute` — no `kody login`. Add `--local` to run the module (and static `kody:@…` package modules) on this machine instead. |
+| `kody execute` | Calls Kody `execute` from the CLI (`--invoke`, `--code`, `--file`, or stdin via `--file -`). With a scoped API token and no login (or with `--token`), cloud execute goes through CapabilityProxy → `kody.execute` — no `kody login`. Add `--local` to run the module (and static `kody:@…` package modules) on this machine instead. `--allow-private-network` opts local execution into private and local network access. |
 
 `--json` prints structured MCP results.
 
@@ -102,8 +102,12 @@ npx @kodycodes/cli api usageGet --params '{}'
   `tokenCreate` for CI/headless (`--token` / `KODY_API_TOKEN`).
 - For `execute --local` specifically: `--token` / `KODY_API_TOKEN` wins when
   set; else a stored bootstrap/API token from `auth bootstrap`; else the
-  stored `kody login` OAuth access token as Bearer (no under-the-hood
-  `tokenCreate`). The Open API must accept that OAuth bearer on
+  stored `kody login` OAuth access token as Bearer only when the API and MCP
+  URLs are paired (no under-the-hood `tokenCreate`). The default pair is
+  `https://api.kody.codes` and `https://kody.codes/mcp`; preview workers pair
+  when the API worker name adds `-api`, and loopback hosts pair at any port.
+  For a different API origin, use `auth bootstrap --api-url <origin>` or set
+  `KODY_API_TOKEN`. The Open API must accept that OAuth bearer on
   CapabilityProxy / package-graph
   ([kentcdodds/kody#2812](https://github.com/kentcdodds/kody/issues/2812));
   until then use bootstrap or a scoped `kody_at_…` token.
@@ -183,8 +187,10 @@ npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.
   `--local` is the thin passthrough for a single export (still cloud).
   `packageStorage()`, `packageSecrets`, `email`, and `events` stay unbound on
   the ad hoc entry like cloud execute unless the downloaded package modules
-  carry stamps. Outbound `fetch` goes straight from this machine, including
-  to local-network hosts.
+  carry stamps. Outbound `fetch` is public-network-only by default. Pass
+  `--allow-private-network` with `execute --local` to also allow private and
+  local addresses; the loopback bridge used for CapabilityProxy calls remains
+  available either way.
 
 ## Token storage
 

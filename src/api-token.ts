@@ -1,5 +1,9 @@
 import { loadStoredApiToken } from './api-token-store.js'
-import { apiTokenEnvVar, defaultApiUrl } from './defaults.js'
+import {
+	apiTokenEnvVar,
+	defaultApiUrl,
+	defaultMcpUrl,
+} from './defaults.js'
 import type { SecretBackend, StoreResolution } from './store.js'
 
 /** Platform tracking for login OAuth as CapabilityProxy / package-graph Bearer. */
@@ -14,6 +18,66 @@ export type ResolveScopedApiTokenInput = {
 	apiTokenResolution?: StoreResolution
 	/** Test seam. */
 	loadApiToken?: typeof loadStoredApiToken
+}
+
+const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
+
+function tryParseUrl(value: string): URL | null {
+	try {
+		return new URL(value)
+	} catch {
+		return null
+	}
+}
+
+function isWorkersDevHostname(hostname: string): boolean {
+	return hostname.endsWith('.workers.dev')
+}
+
+/** Whether a login OAuth bearer may be sent to this API origin. */
+export function isPairedApiUrl(
+	apiUrl: string = defaultApiUrl,
+	mcpUrl: string = defaultMcpUrl,
+): boolean {
+	const api = tryParseUrl(apiUrl)
+	const mcp = tryParseUrl(mcpUrl)
+	if (!api || !mcp) return false
+
+	const apiIsLoopback = loopbackHosts.has(api.hostname.toLowerCase())
+	const mcpIsLoopback = loopbackHosts.has(mcp.hostname.toLowerCase())
+	if (apiIsLoopback && mcpIsLoopback) {
+		return ['http:', 'https:'].includes(api.protocol) &&
+			['http:', 'https:'].includes(mcp.protocol)
+	}
+	if (api.protocol !== 'https:' || mcp.protocol !== 'https:') return false
+	const apiIsWorkersDev = isWorkersDevHostname(api.hostname)
+	const mcpIsWorkersDev = isWorkersDevHostname(mcp.hostname)
+	if (apiIsWorkersDev || mcpIsWorkersDev) {
+		if (!apiIsWorkersDev || !mcpIsWorkersDev) return false
+		const apiLabels = api.hostname.toLowerCase().split('.')
+		const mcpLabels = mcp.hostname.toLowerCase().split('.')
+		return (
+			apiLabels.length === mcpLabels.length &&
+			apiLabels.slice(1).join('.') === mcpLabels.slice(1).join('.') &&
+			apiLabels[0] === `${mcpLabels[0]}-api`
+		)
+	}
+	return api.hostname.toLowerCase() === `api.${mcp.hostname.toLowerCase()}`
+}
+
+export function expectedPairedApiOrigin(mcpUrl: string): string {
+	const mcp = tryParseUrl(mcpUrl)
+	if (!mcp) return 'a paired API origin'
+	if (loopbackHosts.has(mcp.hostname.toLowerCase())) {
+		return 'a loopback API origin'
+	}
+	const hostname = mcp.hostname.toLowerCase()
+	if (isWorkersDevHostname(hostname)) {
+		const labels = hostname.split('.')
+		labels[0] = `${labels[0]}-api`
+		return `https://${labels.join('.')}`
+	}
+	return `https://api.${hostname}`
 }
 
 /**
