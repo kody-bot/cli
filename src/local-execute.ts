@@ -53,6 +53,7 @@ export type LocalExecuteInput = {
 	fetchFn?: typeof fetch
 	/** Skip the pinned download and run this workerd binary. */
 	workerdPath?: string
+	allowPrivateNetwork?: boolean
 	onStatus?: (message: string) => void
 }
 
@@ -125,7 +126,12 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 		const configPath = join(workDir, 'config.capnp')
 		await writeFile(
 			configPath,
-			createWorkerdConfig({ bridgePort: bridge.port, files, packageModules }),
+			createWorkerdConfig({
+				bridgePort: bridge.port,
+				files,
+				packageModules,
+				allowPrivateNetwork: input.allowPrivateNetwork,
+			}),
 		)
 
 		const env: NodeJS.ProcessEnv = { ...process.env, [runSecretEnvVar]: runSecret }

@@ -14,6 +14,7 @@ import {
 	runCli,
 	shouldUseApiToken,
 } from '../src/cli.js'
+import { isPairedApiUrl } from '../src/api-token.js'
 import type { StoredApiToken } from '../src/api-token-store.js'
 import { modernMcpProtocolVersion } from '../src/defaults.js'
 import { formatToolResult, listKodyTools } from '../src/mcp.js'
@@ -76,6 +77,7 @@ test('resolveCommand parses execute --local flags', () => {
 	const { values } = resolveCommand([
 		'execute',
 		'--local',
+		'--allow-private-network',
 		'--token',
 		'tok',
 		'--api-url',
@@ -84,8 +86,19 @@ test('resolveCommand parses execute --local flags', () => {
 		'mod.js',
 	])
 	assert.equal(values.local, true)
+	assert.equal(values['allow-private-network'], true)
 	assert.equal(values.token, 'tok')
 	assert.equal(values['api-url'], 'http://localhost:8787')
+})
+
+test('allow-private-network is limited to execute --local', async () => {
+	let stderr = ''
+	const code = await runCli(
+		['execute', '--allow-private-network', '--code', 'export default () => 1'],
+		{ stdout: () => {}, stderr: (text) => (stderr += text) },
+	)
+	assert.equal(code, 1)
+	assert.match(stderr, /--allow-private-network can only be used with execute --local/)
 })
 
 test('resolveApiToken prefers --token, falls back to KODY_API_TOKEN, and requires one', () => {
@@ -116,6 +129,126 @@ test('resolveLocalExecuteBearer uses login OAuth when no API token is set', asyn
 		ensureCredentials: async () => sampleLoginCredentials(),
 	})
 	assert.equal(token, 'oauth-access-from-login')
+})
+
+test('default paired API and MCP URLs allow login OAuth', async () => {
+	let ensureCalls = 0
+	const token = await resolveLocalExecuteBearer({
+		tokenValues: {},
+		env: {},
+		loadApiToken: () => null,
+		ensureCredentials: async () => {
+			ensureCalls += 1
+			return sampleLoginCredentials()
+		},
+	})
+	assert.equal(token, 'oauth-access-from-login')
+	assert.equal(ensureCalls, 1)
+	assert.equal(isPairedApiUrl(), true)
+})
+
+test('mismatched API origin rejects login OAuth before ensure or fetch', async () => {
+	let ensureCalls = 0
+	let fetchCalls = 0
+	await assert.rejects(
+		() =>
+			resolveLocalExecuteBearer({
+				tokenValues: {},
+				env: {},
+				mcpUrl: 'https://kody.codes/mcp',
+				apiUrl: 'https://api.other.test',
+				loadApiToken: () => null,
+				fetchFn: (async () => {
+					fetchCalls += 1
+					throw new Error('fetch must not run')
+				}) as typeof fetch,
+				ensureCredentials: async () => {
+					ensureCalls += 1
+					return sampleLoginCredentials()
+				},
+			}),
+		/kody login credentials.*https:\/\/api\.kody\.codes.*api\.other\.test/,
+	)
+	assert.equal(ensureCalls, 0)
+	assert.equal(fetchCalls, 0)
+})
+
+test('explicit and stored API tokens remain usable on mismatched origins', async () => {
+	const apiUrl = 'https://api.other.test'
+	const mcpUrl = 'https://kody.codes/mcp'
+	const explicitToken = await resolveLocalExecuteBearer({
+		tokenValues: { token: 'explicit-token' },
+		env: {},
+		mcpUrl,
+		apiUrl,
+		ensureCredentials: async () => {
+			throw new Error('login OAuth must not be consulted')
+		},
+	})
+	assert.equal(explicitToken, 'explicit-token')
+
+	const envToken = await resolveLocalExecuteBearer({
+		tokenValues: {},
+		env: { KODY_API_TOKEN: 'env-token' },
+		mcpUrl,
+		apiUrl,
+		ensureCredentials: async () => {
+			throw new Error('login OAuth must not be consulted')
+		},
+	})
+	assert.equal(envToken, 'env-token')
+
+	const storedToken = await resolveLocalExecuteBearer({
+		tokenValues: {},
+		env: {},
+		mcpUrl,
+		apiUrl,
+		loadApiToken: (requestedApiUrl) => ({
+			version: 1,
+			apiUrl: requestedApiUrl ?? apiUrl,
+			token: 'stored-token',
+			tokenId: 'stored-id',
+		}),
+		ensureCredentials: async () => {
+			throw new Error('login OAuth must not be consulted')
+		},
+	})
+	assert.equal(storedToken, 'stored-token')
+})
+
+test('paired preview and loopback API origins allow login OAuth', async () => {
+	for (const [apiUrl, mcpUrl] of [
+		[
+			'https://kody-pr-42-api.kody.workers.dev',
+			'https://kody-pr-42.kody.workers.dev/mcp',
+		],
+		['http://localhost:8788', 'http://127.0.0.1:8787/mcp'],
+	]) {
+		assert.equal(isPairedApiUrl(apiUrl, mcpUrl), true)
+		const token = await resolveLocalExecuteBearer({
+			tokenValues: {},
+			env: {},
+			apiUrl,
+			mcpUrl,
+			loadApiToken: () => null,
+			ensureCredentials: async () => sampleLoginCredentials({ mcpUrl }),
+		})
+		assert.equal(token, 'oauth-access-from-login')
+	}
+	assert.equal(
+		isPairedApiUrl(
+			'https://api.kody-pr-42.kody.workers.dev',
+			'https://kody-pr-42.kody.workers.dev/mcp',
+		),
+		false,
+	)
+	assert.equal(
+		isPairedApiUrl(
+			'https://unrelated-api.workers.dev',
+			'https://kody-pr-42.kody.workers.dev/mcp',
+		),
+		false,
+	)
 })
 
 test('resolveLocalExecuteBearer fails clearly when neither login nor token is available', async () => {
@@ -450,7 +583,7 @@ test('execute --local with login (no API token) sends OAuth access token as Bear
 				'--mcp-url',
 				mcpUrl,
 				'--api-url',
-				'https://api.kody.codes',
+				'https://api.login-local.test',
 				'--code',
 				'export default () => 1',
 			],

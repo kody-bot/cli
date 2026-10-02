@@ -15,7 +15,7 @@ Usage:
   kody search [query] [--entity <ref>] [--domain <id>] [--limit <n>] [--token <token>] [--api-url <url>] [--json]
   kody api <operationId> [--params <json>] [--token <token>] [--api-url <url>] [--json]
   kody execute [--invoke <ref> | --code <esm> | --file <path>] [--params <json>] [--conversation-id <id>] [--json]
-               [--token <token>] [--api-url <url>] [--local]
+               [--token <token>] [--api-url <url>] [--local] [--allow-private-network]
   kody install [--mcp-url <url>] [--clients <ids>] [--yes] [--project] [--json]
   kody skill install [--project]
 
@@ -61,12 +61,16 @@ Usage:
   --local    Run the execute module on this machine (workerd, Linux/macOS).
              Requires Node.js 22 or newer. Auth: \`--token\` /
              ${apiTokenEnvVar}, else stored \`auth bootstrap\` token, else
-             \`kody login\`. Static kody:@… imports are fetched via POST
+             paired \`kody login\` credentials. Static kody:@… imports are fetched via POST
              /v1/local-execute/package-graph and embedded in local workerd
              (CapabilityProxy only for per-call kody:runtime hops — never a
              whole-module cloud kody.execute defer). Fails clearly when that
              package-graph API is unavailable. Cloud token execute (no
              --local) uses CapabilityProxy → kody.execute for every module.
+
+  --allow-private-network
+             Allow execute --local code to fetch private and local network
+             addresses. Default is public-only; this flag requires --local.
 
 Environment:
   KODY_MCP_URL        Override the default MCP URL (${defaultMcpUrl})

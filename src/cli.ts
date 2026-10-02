@@ -81,6 +81,7 @@ function parseKnown(args: Array<string>) {
 			params: { type: 'string' },
 			'conversation-id': { type: 'string' },
 			local: { type: 'boolean' },
+			'allow-private-network': { type: 'boolean' },
 			token: { type: 'string' },
 			'api-url': { type: 'string' },
 			project: { type: 'boolean' },
@@ -152,6 +153,12 @@ async function dispatch(
 		mcpUrl: typeof parsed.values['mcp-url'] === 'string' ? parsed.values['mcp-url'] : undefined,
 	})
 	const json = parsed.values.json === true
+	if (
+		parsed.values['allow-private-network'] === true &&
+		(parsed.command !== 'execute' || parsed.values.local !== true)
+	) {
+		throw new Error('--allow-private-network can only be used with execute --local.')
+	}
 
 	switch (parsed.command) {
 		case 'help':
@@ -448,6 +455,8 @@ async function dispatch(
 							purpose: 'execute --local',
 						}),
 						apiUrl,
+						allowPrivateNetwork:
+							parsed.values['allow-private-network'] === true,
 						onStatus: (message) => writeErr(`${message}\n`),
 					})
 				: useToken

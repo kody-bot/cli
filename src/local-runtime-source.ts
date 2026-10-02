@@ -319,9 +319,8 @@ export type WorkerdPackageModuleFile = {
 
 /**
  * workerd text config. `files` are embedded relative to the config file.
- * Outbound fetch reaches public and private networks: local execute runs as
- * the user on their own machine, and reaching local services is part of why
- * one would run locally.
+ * Outbound fetch is public-only unless private-network access is explicitly
+ * enabled. The loopback bridge remains a separate external service.
  *
  * Optional `packageModules` are stamped `kody:@…` (and nested) modules from
  * POST /v1/local-execute/package-graph — embedded alongside the user module so
@@ -331,8 +330,12 @@ export function createWorkerdConfig(input: {
 	bridgePort: number
 	files: { entry: string; user: string; runtime: string }
 	packageModules?: Array<WorkerdPackageModuleFile>
+	allowPrivateNetwork?: boolean
 }): string {
 	const flags = localExecuteCompatibilityFlags.map((flag) => JSON.stringify(flag)).join(', ')
+	const networkAllow = input.allowPrivateNetwork
+		? '["public", "private", "local"]'
+		: '["public"]'
 	const packageEntries = (input.packageModules ?? [])
 		.map(
 			(module) =>
@@ -346,7 +349,7 @@ const config :Workerd.Config = (
   services = [
     (name = "main", worker = .kodyWorker),
     (name = "kody-bridge", external = (address = "127.0.0.1:${input.bridgePort}", http = ())),
-    (name = "internet", network = (allow = ["public", "private", "local"], tlsOptions = (trustBrowserCas = true))),
+    (name = "internet", network = (allow = ${networkAllow}, tlsOptions = (trustBrowserCas = true))),
   ],
   sockets = [ (name = "http", address = "127.0.0.1:0", http = (), service = "main") ],
 );

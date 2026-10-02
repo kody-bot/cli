@@ -14,9 +14,31 @@ import {
 	runLocalExecute,
 	savedPackageImportLocalResolveStatus,
 } from '../src/local-execute.js'
+import { createWorkerdConfig } from '../src/local-runtime-source.js'
 import { localPackageGraphPath, localPackageGraphPlatformIssueUrl } from '../src/local-package-graph.js'
 
 const goodToken = 'kody_tok_good'
+
+test('workerd network access is public-only by default and keeps the loopback bridge', () => {
+	const config = createWorkerdConfig({
+		bridgePort: 4321,
+		files: { entry: 'entry.js', user: 'main.js', runtime: 'runtime.js' },
+	})
+	assert.match(config, /allow = \["public"\]/)
+	assert.match(config, /address = "127\.0\.0\.1:4321"/)
+	assert.doesNotMatch(config, /allow = \["public", "private", "local"\]/)
+
+	const privateNetworkConfig = createWorkerdConfig({
+		bridgePort: 4321,
+		files: { entry: 'entry.js', user: 'main.js', runtime: 'runtime.js' },
+		allowPrivateNetwork: true,
+	})
+	assert.match(
+		privateNetworkConfig,
+		/allow = \["public", "private", "local"\]/,
+	)
+	assert.match(privateNetworkConfig, /address = "127\.0\.0\.1:4321"/)
+})
 
 type ProxyRequest = { method: string; url: string; authorization: string | null; body: unknown }
 
