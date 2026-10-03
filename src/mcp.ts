@@ -3,7 +3,12 @@ import {
 	StreamableHTTPClientTransport,
 	UnauthorizedError,
 } from '@modelcontextprotocol/client'
-import { cliName, modernMcpProtocolVersion } from './defaults.js'
+import {
+	cliName,
+	missingOpenidReloginHint,
+	modernMcpProtocolVersion,
+	scopeIncludesOpenid,
+} from './defaults.js'
 import { ensureFreshCredentials, refreshStoredCredentials } from './auth.js'
 import { readPackageVersion } from './package-info.js'
 import { redactError } from './redact.js'
@@ -59,7 +64,7 @@ export async function callKodyTool(
 		return await invoke(credentials.mcpUrl, credentials.accessToken, input)
 	} catch (error) {
 		if (!(error instanceof UnauthorizedError) && !isUnauthorized(error)) {
-			throw redactError(error)
+			throw withOpenidScopeHint(error, credentials.scope)
 		}
 		const refreshed = await refreshStoredCredentials({
 			credentials,
@@ -69,7 +74,7 @@ export async function callKodyTool(
 		try {
 			return await invoke(refreshed.mcpUrl, refreshed.accessToken, input)
 		} catch (retryError) {
-			throw redactError(retryError)
+			throw withOpenidScopeHint(retryError, refreshed.scope)
 		}
 	}
 }
@@ -101,19 +106,23 @@ export async function listKodyTools(input: {
 		backend: input.backend,
 		fetchFn: input.fetchFn,
 	})
-	const { client, transport } = await connect(
-		credentials.mcpUrl,
-		credentials.accessToken,
-		input.fetchFn,
-	)
 	try {
-		const listed = await client.listTools()
-		return listed.tools.map((tool) => ({
-			name: tool.name,
-			description: tool.description,
-		}))
-	} finally {
-		await transport.close().catch(() => undefined)
+		const { client, transport } = await connect(
+			credentials.mcpUrl,
+			credentials.accessToken,
+			input.fetchFn,
+		)
+		try {
+			const listed = await client.listTools()
+			return listed.tools.map((tool) => ({
+				name: tool.name,
+				description: tool.description,
+			}))
+		} finally {
+			await transport.close().catch(() => undefined)
+		}
+	} catch (error) {
+		throw withOpenidScopeHint(error, credentials.scope)
 	}
 }
 
@@ -149,4 +158,15 @@ function isUnauthorized(error: unknown): boolean {
 		status === 401 ||
 		(error instanceof Error && /401|unauthorized/i.test(error.message))
 	)
+}
+
+function withOpenidScopeHint(error: unknown, scope: string | undefined): Error {
+	const redacted = redactError(error)
+	if (
+		/insufficient_scope/i.test(redacted.message) &&
+		!scopeIncludesOpenid(scope)
+	) {
+		return new Error(`${redacted.message}\n${missingOpenidReloginHint}`)
+	}
+	return redacted
 }
