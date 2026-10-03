@@ -7,7 +7,9 @@ import {
 import {
 	cliClientMetadataUrl,
 	cliRedirectUrl,
+	defaultScopes,
 	modernMcpProtocolVersion,
+	scopeIncludesOpenid,
 } from '../src/defaults.js'
 import {
 	buildCliClientMetadata,
@@ -27,6 +29,14 @@ const previous: StoredCredentials = {
 	expiresAt: 1,
 	scope: 'profile email',
 }
+
+test('defaultScopes request openid for login and CIMD metadata', () => {
+	assert.deepEqual([...defaultScopes], ['openid', 'profile', 'email'])
+	assert.equal(defaultScopes.join(' '), 'openid profile email')
+	assert.equal(scopeIncludesOpenid('openid profile email'), true)
+	assert.equal(scopeIncludesOpenid('profile email'), false)
+	assert.equal(scopeIncludesOpenid(undefined), false)
+})
 
 test('isAccessTokenExpired uses a one-minute skew', () => {
 	const now = 1_000_000
@@ -101,6 +111,7 @@ test('CLI OAuth identity is CIMD with a fixed loopback redirect', async () => {
 	assert.deepEqual(metadata.redirect_uris, [cliRedirectUrl().href])
 	assert.equal(metadata.token_endpoint_auth_method, 'none')
 	assert.equal(metadata.application_type, 'native')
+	assert.equal(metadata.scope, 'openid profile email')
 	assert.equal(modernMcpProtocolVersion, '2026-07-28')
 	assert.equal(
 		provider.clientMetadataUrl,
@@ -108,4 +119,5 @@ test('CLI OAuth identity is CIMD with a fixed loopback redirect', async () => {
 	)
 	const client = await provider.clientInformation()
 	assert.equal(client?.client_id, provider.clientMetadataUrl)
+	assert.equal(provider.clientMetadata.scope, 'openid profile email')
 })
