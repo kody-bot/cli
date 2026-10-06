@@ -16,6 +16,50 @@ const bootstrapCodePattern = /^kody_bc_([a-z0-9]{16})_([A-Za-z0-9_-]{32})$/
 
 export const bootstrapRedeemPath = 'v1/tokens/bootstrap/redeem'
 
+/** ADR 0056 idle / absolute lifetime caps (seconds). */
+export const cliTokenLifetimePolicy = {
+	minIdleTtlSeconds: 60,
+	/** Idle timeout at most 14 days. */
+	maxIdleTtlSeconds: 14 * 24 * 60 * 60,
+	/** Absolute lifetime at most 3 months. */
+	maxMaxLifetimeSeconds: 90 * 24 * 60 * 60,
+} as const
+
+/**
+ * Input aliases for required token lifetimes. Sugar only: never stored on the
+ * token. `short` suits single-task agents; `long` is the policy maximum.
+ */
+export const cliTokenLifetimeAliases = {
+	short: {
+		idleTtlSeconds: 60 * 60,
+		maxLifetimeSeconds: 24 * 60 * 60,
+	},
+	long: {
+		idleTtlSeconds: cliTokenLifetimePolicy.maxIdleTtlSeconds,
+		maxLifetimeSeconds: cliTokenLifetimePolicy.maxMaxLifetimeSeconds,
+	},
+} as const
+
+export type CliTokenLifetimeAlias = keyof typeof cliTokenLifetimeAliases
+
+/**
+ * Resolved lifetime for redeem. Alias form keeps the label only for the
+ * redeem JSON body (`lifetime`); explicit form sends idle/max seconds.
+ * Neither label nor alias is persisted with the stored API token.
+ */
+export type ResolvedCliTokenLifetime =
+	| {
+			kind: 'alias'
+			lifetime: CliTokenLifetimeAlias
+			idleTtlSeconds: number
+			maxLifetimeSeconds: number
+	  }
+	| {
+			kind: 'explicit'
+			idleTtlSeconds: number
+			maxLifetimeSeconds: number
+	  }
+
 export type BootstrapRedeemResponse = {
 	token: string
 	token_type?: string
@@ -28,6 +72,14 @@ export type BootstrapRedeemResponse = {
 	max_expires_at?: string | null
 	created_via?: string
 }
+
+export type BootstrapRedeemRequestBody =
+	| { code: string; lifetime: CliTokenLifetimeAlias }
+	| {
+			code: string
+			idle_ttl_seconds: number
+			max_lifetime_seconds: number
+	  }
 
 export function parseCliBootstrapCode(value: string): { codeId: string; secret: string } | null {
 	const match = bootstrapCodePattern.exec(value.trim())
@@ -47,16 +99,125 @@ export function assertCliBootstrapCode(code: string): string {
 	return trimmed
 }
 
+/** Exact CLI flag syntax for a missing lifetime (ADR 0056). */
+export function cliTokenLifetimeMissingError(): string {
+	return (
+		'Token lifetime is required. Pass --lifetime short|long, or both ' +
+		`--idle-ttl-seconds <n> and --max-lifetime-seconds <n> ` +
+		`(idle ${cliTokenLifetimePolicy.minIdleTtlSeconds}-${cliTokenLifetimePolicy.maxIdleTtlSeconds}s, ` +
+		`max age up to ${cliTokenLifetimePolicy.maxMaxLifetimeSeconds}s). ` +
+		'Single-task agents should use --lifetime short.'
+	)
+}
+
 /**
- * POST /v1/tokens/bootstrap/redeem with JSON `{ code }` and **no** Authorization
+ * Resolve a required lifetime choice. Aliases expand to idle/max seconds for
+ * validation; the redeem body still sends the alias or explicit seconds only.
+ */
+export function resolveCliTokenLifetime(input: {
+	lifetime?: string | null
+	idleTtlSeconds?: number
+	maxLifetimeSeconds?: number
+}): ResolvedCliTokenLifetime {
+	const aliasRaw = typeof input.lifetime === 'string' ? input.lifetime.trim() : ''
+	const hasAlias = aliasRaw.length > 0
+	const hasIdle = input.idleTtlSeconds !== undefined
+	const hasMax = input.maxLifetimeSeconds !== undefined
+
+	if (!hasAlias && !hasIdle && !hasMax) {
+		throw new Error(cliTokenLifetimeMissingError())
+	}
+	if (hasAlias && (hasIdle || hasMax)) {
+		throw new Error(
+			'Pass --lifetime short|long, or both --idle-ttl-seconds and --max-lifetime-seconds, not both forms.',
+		)
+	}
+	if (hasAlias) {
+		if (!(aliasRaw in cliTokenLifetimeAliases)) {
+			throw new Error(
+				`--lifetime must be short or long (got ${JSON.stringify(aliasRaw)}).`,
+			)
+		}
+		const lifetime = aliasRaw as CliTokenLifetimeAlias
+		const resolved = cliTokenLifetimeAliases[lifetime]
+		return {
+			kind: 'alias',
+			lifetime,
+			idleTtlSeconds: resolved.idleTtlSeconds,
+			maxLifetimeSeconds: resolved.maxLifetimeSeconds,
+		}
+	}
+	if (!hasIdle || !hasMax) {
+		throw new Error(
+			'When not using --lifetime short|long, both --idle-ttl-seconds and --max-lifetime-seconds are required.',
+		)
+	}
+	const idleTtlSeconds = readRequiredInteger({
+		value: input.idleTtlSeconds!,
+		min: cliTokenLifetimePolicy.minIdleTtlSeconds,
+		max: cliTokenLifetimePolicy.maxIdleTtlSeconds,
+		field: '--idle-ttl-seconds',
+	})
+	const maxLifetimeSeconds = readRequiredInteger({
+		value: input.maxLifetimeSeconds!,
+		min: idleTtlSeconds,
+		max: cliTokenLifetimePolicy.maxMaxLifetimeSeconds,
+		field: '--max-lifetime-seconds',
+	})
+	return {
+		kind: 'explicit',
+		idleTtlSeconds,
+		maxLifetimeSeconds,
+	}
+}
+
+/** Build the redeem JSON body (alias or explicit seconds — never both). */
+export function bootstrapRedeemRequestBody(
+	code: string,
+	lifetime: ResolvedCliTokenLifetime,
+): BootstrapRedeemRequestBody {
+	if (lifetime.kind === 'alias') {
+		return { code, lifetime: lifetime.lifetime }
+	}
+	return {
+		code,
+		idle_ttl_seconds: lifetime.idleTtlSeconds,
+		max_lifetime_seconds: lifetime.maxLifetimeSeconds,
+	}
+}
+
+/** Parse a CLI `--idle-ttl-seconds` / `--max-lifetime-seconds` string flag. */
+export function parseCliLifetimeSecondsFlag(
+	raw: string | undefined,
+	flag: '--idle-ttl-seconds' | '--max-lifetime-seconds',
+): number | undefined {
+	if (raw === undefined) return undefined
+	const trimmed = raw.trim()
+	if (!/^-?\d+$/.test(trimmed)) {
+		throw new Error(`${flag} must be an integer.`)
+	}
+	return Number(trimmed)
+}
+
+/**
+ * POST /v1/tokens/bootstrap/redeem with JSON `{ code, lifetime }` or
+ * `{ code, idle_ttl_seconds, max_lifetime_seconds }` and **no** Authorization
  * header (ADR 0056). Returns the minted `kody_at_…` once.
  */
 export async function redeemBootstrapCode(input: {
 	code: string
+	lifetime?: string | null
+	idleTtlSeconds?: number
+	maxLifetimeSeconds?: number
 	apiUrl?: string
 	fetchFn?: typeof fetch
 }): Promise<BootstrapRedeemResponse> {
 	const code = assertCliBootstrapCode(input.code)
+	const lifetime = resolveCliTokenLifetime({
+		lifetime: input.lifetime,
+		idleTtlSeconds: input.idleTtlSeconds,
+		maxLifetimeSeconds: input.maxLifetimeSeconds,
+	})
 	const apiUrl = input.apiUrl || defaultApiUrl
 	assertTokenSafeApiUrl(apiUrl)
 	const url = capabilityProxyUrl(apiUrl, bootstrapRedeemPath)
@@ -70,7 +231,7 @@ export async function redeemBootstrapCode(input: {
 				'content-type': 'application/json',
 				'user-agent': `${cliName}/${readPackageVersion()}`,
 			},
-			body: JSON.stringify({ code }),
+			body: JSON.stringify(bootstrapRedeemRequestBody(code, lifetime)),
 		})
 	} catch (error) {
 		const reason = describeNetworkError(error)
@@ -113,6 +274,9 @@ export function storedApiTokenFromRedeem(input: {
  */
 export async function authBootstrap(input: {
 	code: string
+	lifetime?: string | null
+	idleTtlSeconds?: number
+	maxLifetimeSeconds?: number
 	apiUrl?: string
 	fetchFn?: typeof fetch
 	backend?: SecretBackend
@@ -125,6 +289,9 @@ export async function authBootstrap(input: {
 	const apiUrl = input.apiUrl || defaultApiUrl
 	const redeemed = await redeemBootstrapCode({
 		code: input.code,
+		lifetime: input.lifetime,
+		idleTtlSeconds: input.idleTtlSeconds,
+		maxLifetimeSeconds: input.maxLifetimeSeconds,
 		apiUrl,
 		fetchFn: input.fetchFn,
 	})
@@ -135,6 +302,24 @@ export async function authBootstrap(input: {
 		backendKind: saved.backend.kind,
 		...(saved.backend.path ? { backendPath: saved.backend.path } : {}),
 	}
+}
+
+function readRequiredInteger(input: {
+	value: number
+	min: number
+	max: number
+	field: string
+}): number {
+	if (
+		!Number.isInteger(input.value) ||
+		input.value < input.min ||
+		input.value > input.max
+	) {
+		throw new Error(
+			`${input.field} must be an integer between ${input.min} and ${input.max}.`,
+		)
+	}
+	return input.value
 }
 
 function parseRedeemResponse(body: unknown): BootstrapRedeemResponse {
