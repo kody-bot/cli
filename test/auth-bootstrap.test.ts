@@ -8,8 +8,11 @@ import { after, before, test } from 'node:test'
 import {
 	assertCliBootstrapCode,
 	authBootstrap,
+	cliTokenLifetimeAliases,
+	cliTokenLifetimeMissingError,
 	parseCliBootstrapCode,
 	redeemBootstrapCode,
+	resolveCliTokenLifetime,
 } from '../src/auth-bootstrap.js'
 import {
 	loadStoredApiToken,
@@ -103,10 +106,43 @@ test('parseCliBootstrapCode accepts platform-shaped codes', () => {
 	assert.throws(() => assertCliBootstrapCode('nope'), /cliCredentialBootstrap/)
 })
 
-test('redeemBootstrapCode POSTs JSON code with no Authorization header', async () => {
+test('resolveCliTokenLifetime requires a choice and expands short/long/explicit', () => {
+	assert.throws(() => resolveCliTokenLifetime({}), /Token lifetime is required/)
+	assert.throws(() => resolveCliTokenLifetime({}), /--lifetime short\|long/)
+	assert.throws(() => resolveCliTokenLifetime({}), /Single-task agents should use --lifetime short/)
+	assert.equal(cliTokenLifetimeMissingError().includes('--lifetime short|long'), true)
+	assert.deepEqual(resolveCliTokenLifetime({ lifetime: 'short' }), {
+		kind: 'alias',
+		lifetime: 'short',
+		idleTtlSeconds: cliTokenLifetimeAliases.short.idleTtlSeconds,
+		maxLifetimeSeconds: cliTokenLifetimeAliases.short.maxLifetimeSeconds,
+	})
+	assert.deepEqual(resolveCliTokenLifetime({ lifetime: 'long' }), {
+		kind: 'alias',
+		lifetime: 'long',
+		idleTtlSeconds: cliTokenLifetimeAliases.long.idleTtlSeconds,
+		maxLifetimeSeconds: cliTokenLifetimeAliases.long.maxLifetimeSeconds,
+	})
+	assert.deepEqual(
+		resolveCliTokenLifetime({ idleTtlSeconds: 120, maxLifetimeSeconds: 600 }),
+		{ kind: 'explicit', idleTtlSeconds: 120, maxLifetimeSeconds: 600 },
+	)
+	assert.throws(
+		() =>
+			resolveCliTokenLifetime({
+				lifetime: 'short',
+				idleTtlSeconds: 120,
+				maxLifetimeSeconds: 600,
+			}),
+		/not both forms/,
+	)
+})
+
+test('redeemBootstrapCode POSTs JSON code with lifetime and no Authorization header', async () => {
 	reset()
 	const redeemed = await redeemBootstrapCode({
 		code: goodCode,
+		lifetime: 'short',
 		apiUrl,
 		fetchFn: fetch,
 	})
@@ -114,10 +150,26 @@ test('redeemBootstrapCode POSTs JSON code with no Authorization header', async (
 	assert.equal(requests[0]?.method, 'POST')
 	assert.equal(requests[0]?.url, '/v1/tokens/bootstrap/redeem')
 	assert.equal(requests[0]?.authorization, null)
-	assert.deepEqual(requests[0]?.body, { code: goodCode })
+	assert.deepEqual(requests[0]?.body, { code: goodCode, lifetime: 'short' })
 	assert.equal(redeemed.token, goodToken)
 	assert.equal(redeemed.id, 'tok_bootstrap_1')
 	assert.equal(redeemed.created_via, 'cli-bootstrap')
+})
+
+test('redeemBootstrapCode POSTs explicit idle/max seconds when aliases are omitted', async () => {
+	reset()
+	await redeemBootstrapCode({
+		code: goodCode,
+		idleTtlSeconds: 180,
+		maxLifetimeSeconds: 900,
+		apiUrl,
+		fetchFn: fetch,
+	})
+	assert.deepEqual(requests[0]?.body, {
+		code: goodCode,
+		idle_ttl_seconds: 180,
+		max_lifetime_seconds: 900,
+	})
 })
 
 test('authBootstrap redeems and stores without exposing the token in returned metadata fields used for printing', async () => {
@@ -125,6 +177,7 @@ test('authBootstrap redeems and stores without exposing the token in returned me
 	const backend = tempBackend()
 	const result = await authBootstrap({
 		code: goodCode,
+		lifetime: 'short',
 		apiUrl,
 		backend,
 		fetchFn: fetch,
@@ -133,6 +186,7 @@ test('authBootstrap redeems and stores without exposing the token in returned me
 	assert.equal(result.stored.tokenId, 'tok_bootstrap_1')
 	assert.equal(result.stored.createdVia, 'cli-bootstrap')
 	assert.deepEqual(result.stored.scopes, ['account:read', 'local-execute'])
+	assert.deepEqual(requests[0]?.body, { code: goodCode, lifetime: 'short' })
 	const loaded = loadStoredApiToken(apiUrl, backend)
 	assert.equal(loaded?.token, goodToken)
 	assert.equal(loaded?.tokenId, 'tok_bootstrap_1')
@@ -140,6 +194,7 @@ test('authBootstrap redeems and stores without exposing the token in returned me
 	const onDisk = JSON.parse(readFileSync(backend.path, 'utf8')) as StoredApiToken
 	assert.equal(onDisk.token, goodToken)
 	assert.equal(onDisk.version, 1)
+	assert.equal('lifetime' in onDisk, false)
 })
 
 test('runCli auth bootstrap redeems and never prints the kody_at_ token', async () => {
@@ -152,7 +207,16 @@ test('runCli auth bootstrap redeems and never prints the kody_at_ token', async 
 	let stdout = ''
 	try {
 		const code = await runCli(
-			['auth', 'bootstrap', '--code', goodCode, '--api-url', apiUrl],
+			[
+				'auth',
+				'bootstrap',
+				'--code',
+				goodCode,
+				'--lifetime',
+				'short',
+				'--api-url',
+				apiUrl,
+			],
 			{
 				stdout: (text) => {
 					stdout += text
@@ -166,12 +230,33 @@ test('runCli auth bootstrap redeems and never prints the kody_at_ token', async 
 		assert.doesNotMatch(stdout, /kody_at_/)
 		assert.doesNotMatch(stdout, new RegExp(goodToken.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
 		assert.equal(requests[0]?.authorization, null)
+		assert.deepEqual(requests[0]?.body, { code: goodCode, lifetime: 'short' })
 	} finally {
 		if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME
 		else process.env.XDG_CONFIG_HOME = previousXdg
 		if (previousHome === undefined) delete process.env.HOME
 		else process.env.HOME = previousHome
 	}
+})
+
+test('runCli auth bootstrap fails clearly when lifetime is missing', async () => {
+	reset()
+	let stderr = ''
+	const code = await runCli(
+		['auth', 'bootstrap', '--code', goodCode, '--api-url', apiUrl],
+		{
+			stderr: (text) => {
+				stderr += text
+			},
+		},
+	)
+	assert.equal(code, 1)
+	assert.match(stderr, /Token lifetime is required/)
+	assert.match(stderr, /--lifetime short\|long/)
+	assert.match(stderr, /--idle-ttl-seconds/)
+	assert.match(stderr, /--max-lifetime-seconds/)
+	assert.match(stderr, /Single-task agents should use --lifetime short/)
+	assert.equal(requests.length, 0)
 })
 
 test('resolveLocalExecuteBearer prefers stored bootstrap token over login OAuth', async () => {
@@ -389,7 +474,22 @@ test('redeemBootstrapCode surfaces already-used codes clearly', async () => {
 	redeemStatus = 400
 	redeemBody = { error: { code: 'invalid_request', message: 'already redeemed' } }
 	await assert.rejects(
-		() => redeemBootstrapCode({ code: goodCode, apiUrl, fetchFn: fetch }),
+		() =>
+			redeemBootstrapCode({
+				code: goodCode,
+				lifetime: 'short',
+				apiUrl,
+				fetchFn: fetch,
+			}),
 		/already used|expired|invalid/i,
 	)
+})
+
+test('redeemBootstrapCode rejects missing lifetime before calling the API', async () => {
+	reset()
+	await assert.rejects(
+		() => redeemBootstrapCode({ code: goodCode, apiUrl, fetchFn: fetch }),
+		/--lifetime short\|long/,
+	)
+	assert.equal(requests.length, 0)
 })

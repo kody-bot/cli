@@ -9,7 +9,11 @@ import {
 	deleteStoredApiToken,
 	loadStoredApiToken,
 } from './api-token-store.js'
-import { authBootstrap } from './auth-bootstrap.js'
+import {
+	authBootstrap,
+	parseCliLifetimeSecondsFlag,
+	resolveCliTokenLifetime,
+} from './auth-bootstrap.js'
 import { defaultApiUrl, defaultMcpUrl, modernMcpProtocolVersion } from './defaults.js'
 import { usage } from './help.js'
 import { ensureFreshCredentials, login } from './auth.js'
@@ -35,7 +39,16 @@ export {
 	resolveScopedApiToken,
 } from './api-token.js'
 export { resolveLocalExecuteBearer } from './local-execute-auth.js'
-export { authBootstrap, redeemBootstrapCode } from './auth-bootstrap.js'
+export {
+	authBootstrap,
+	bootstrapRedeemRequestBody,
+	cliTokenLifetimeAliases,
+	cliTokenLifetimeMissingError,
+	cliTokenLifetimePolicy,
+	parseCliLifetimeSecondsFlag,
+	redeemBootstrapCode,
+	resolveCliTokenLifetime,
+} from './auth-bootstrap.js'
 
 export type CommandName =
 	| 'login'
@@ -84,6 +97,9 @@ function parseKnown(args: Array<string>) {
 			'allow-private-network': { type: 'boolean' },
 			token: { type: 'string' },
 			'api-url': { type: 'string' },
+			lifetime: { type: 'string' },
+			'idle-ttl-seconds': { type: 'string' },
+			'max-lifetime-seconds': { type: 'string' },
 			project: { type: 'boolean' },
 			'no-browser': { type: 'boolean' },
 			clients: { type: 'string' },
@@ -253,7 +269,7 @@ async function dispatch(
 			const action = parsed.positionals[0]
 			if (action !== 'bootstrap') {
 				throw new Error(
-					'Usage: kody auth bootstrap --code <kody_bc_…> [--api-url <url>]',
+					'Usage: kody auth bootstrap --code <kody_bc_…> (--lifetime short|long | --idle-ttl-seconds <n> --max-lifetime-seconds <n>) [--api-url <url>]',
 				)
 			}
 			const code =
@@ -263,13 +279,40 @@ async function dispatch(
 					'Provide --code <kody_bc_…> from cliCredentialBootstrap (MCP api / kody.cliCredentialBootstrap).',
 				)
 			}
+			const lifetime = resolveCliTokenLifetime({
+				lifetime:
+					typeof parsed.values.lifetime === 'string'
+						? parsed.values.lifetime
+						: undefined,
+				idleTtlSeconds: parseCliLifetimeSecondsFlag(
+					typeof parsed.values['idle-ttl-seconds'] === 'string'
+						? parsed.values['idle-ttl-seconds']
+						: undefined,
+					'--idle-ttl-seconds',
+				),
+				maxLifetimeSeconds: parseCliLifetimeSecondsFlag(
+					typeof parsed.values['max-lifetime-seconds'] === 'string'
+						? parsed.values['max-lifetime-seconds']
+						: undefined,
+					'--max-lifetime-seconds',
+				),
+			})
 			const apiUrl = apiUrlFrom({
 				apiUrl:
 					typeof parsed.values['api-url'] === 'string'
 						? parsed.values['api-url']
 						: undefined,
 			})
-			const result = await authBootstrap({ code, apiUrl })
+			const result = await authBootstrap({
+				code,
+				apiUrl,
+				...(lifetime.kind === 'alias'
+					? { lifetime: lifetime.lifetime }
+					: {
+							idleTtlSeconds: lifetime.idleTtlSeconds,
+							maxLifetimeSeconds: lifetime.maxLifetimeSeconds,
+						}),
+			})
 			const scopes = result.stored.scopes?.join(', ') || '(none)'
 			write(
 				[

@@ -121,7 +121,7 @@ export function apiTokenMintInstructions(): string {
 
 /** Preferred interactive path for agents already on Kody MCP (ADR 0056). */
 export function cliBootstrapInstructions(): string {
-	return `From MCP, call \`cliCredentialBootstrap\` (MCP \`api\` / \`kody.cliCredentialBootstrap\`), then run \`npx @kodycodes/cli auth bootstrap --code <kody_bc_…>\``
+	return `From MCP, call \`cliCredentialBootstrap\` (MCP \`api\` / \`kody.cliCredentialBootstrap\`), then run \`npx @kodycodes/cli auth bootstrap --code <kody_bc_…> --lifetime short\``
 }
 
 /** Token-only Open API paths (search / whoami / cloud token execute) with no token. */
