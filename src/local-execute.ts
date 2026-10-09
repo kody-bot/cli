@@ -23,6 +23,7 @@ import { apiTokenEnvVar } from './defaults.js'
 import {
 	fetchLocalPackageGraph,
 	hasSavedPackageImports,
+	localExecuteGatewayFetchShimModuleName,
 	type LocalPackageGraph,
 } from './local-package-graph.js'
 import {
@@ -67,21 +68,28 @@ const workerdExitGraceMs = 1_000
 export const savedPackageImportLocalResolveStatus =
 	'Module imports saved packages (kody:@…). Fetching stamped package modules for local workerd bundling (no cloud kody.execute defer).'
 
+export const localExecutePackageGraphResolveStatus =
+	'Fetching local-execute package graph (gateway-fetch shim + any stamped kody:@ modules).'
+
 export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCallResult> {
 	assertLocalExecuteNodeEngine()
 	assertTokenSafeApiUrl(input.apiUrl)
 	const client = { apiUrl: input.apiUrl, token: input.token, fetchFn: input.fetchFn }
 	await openCapabilityProxySession(client)
 
-	let packageGraph: LocalPackageGraph = { modules: [], imports: [] }
-	if (hasSavedPackageImports(input.code)) {
-		input.onStatus?.(savedPackageImportLocalResolveStatus)
-		packageGraph = await fetchLocalPackageGraph({
-			...client,
-			code: input.code,
-			conversationId: input.conversationId,
-		})
-	}
+	// Always fetch package-graph: origin returns the gateway-fetch shim even
+	// when there are no `kody:@` imports so ambient `{{secret:…}}` fetch hops
+	// (or fails closed) instead of sending a raw placeholder (kody#3020).
+	input.onStatus?.(
+		hasSavedPackageImports(input.code)
+			? savedPackageImportLocalResolveStatus
+			: localExecutePackageGraphResolveStatus,
+	)
+	const packageGraph = await fetchLocalPackageGraph({
+		...client,
+		code: input.code,
+		conversationId: input.conversationId,
+	})
 
 	const workerdPath =
 		input.workerdPath ??
@@ -119,7 +127,13 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 				}),
 		})
 		const files = { entry: 'entry.js', user: 'main.js', runtime: 'runtime.js' }
-		await writeFile(join(workDir, files.entry), createLocalEntrySource())
+		const gatewayFetchShimModules = packageGraph.modules
+			.map((module) => module.name)
+			.filter((name) => name === localExecuteGatewayFetchShimModuleName)
+		await writeFile(
+			join(workDir, files.entry),
+			createLocalEntrySource({ sideEffectModules: gatewayFetchShimModules }),
+		)
 		await writeFile(join(workDir, files.user), input.code)
 		await writeFile(join(workDir, files.runtime), createLocalRuntimeModuleSource())
 		const packageModules = await writePackageModuleFiles(workDir, packageGraph)

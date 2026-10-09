@@ -78,14 +78,15 @@ export class LocalPackageGraphError extends Error {
  * Fetch published, stamped package modules for local workerd embedding.
  * Never falls back to CapabilityProxy → `kody.execute`.
  */
+/** Exact workerd module name for the origin-supplied gateway-fetch shim. */
+export const localExecuteGatewayFetchShimModuleName =
+	'.__kody_virtual__/runtime.js'
+
 export async function fetchLocalPackageGraph(
 	input: CapabilityProxyClientInput & { code: string; conversationId?: string },
 ): Promise<LocalPackageGraph> {
 	assertTokenSafeApiUrl(input.apiUrl)
 	const imports = listSavedPackageImports(input.code)
-	if (imports.length === 0) {
-		return { modules: [], imports: [] }
-	}
 	if (hasLiteralDynamicSavedPackageImports(input.code)) {
 		throw new LocalPackageGraphError(
 			`Local execute cannot bind literal dynamic import("kody:@…") yet — use a static import, or wait for runtime package resolution (${localPackageGraphPlatformIssueUrl}).`,

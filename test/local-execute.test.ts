@@ -11,11 +11,24 @@ import { runCli } from '../src/cli.js'
 import {
 	buildLocalExecuteResult,
 	hasSavedPackageImports,
+	localExecutePackageGraphResolveStatus,
 	runLocalExecute,
 	savedPackageImportLocalResolveStatus,
 } from '../src/local-execute.js'
-import { createWorkerdConfig } from '../src/local-runtime-source.js'
-import { localPackageGraphPath, localPackageGraphPlatformIssueUrl } from '../src/local-package-graph.js'
+import {
+	createLocalEntrySource,
+	createWorkerdConfig,
+} from '../src/local-runtime-source.js'
+import {
+	localExecuteGatewayFetchShimModuleName,
+	localPackageGraphPath,
+	localPackageGraphPlatformIssueUrl,
+} from '../src/local-package-graph.js'
+
+const gatewayFetchShimModule = {
+	name: localExecuteGatewayFetchShimModuleName,
+	esModule: 'export {}\n',
+}
 
 const goodToken = 'kody_tok_good'
 
@@ -94,6 +107,7 @@ before(async () => {
 			if (imports.includes('kody:@test/pkg/hello')) {
 				send(200, {
 					imports: ['kody:@test/pkg/hello'],
+					warnings: [],
 					modules: [
 						{
 							name: 'kody:@test/pkg/hello',
@@ -103,7 +117,18 @@ before(async () => {
 export default greet
 `,
 						},
+						gatewayFetchShimModule,
 					],
+				})
+				return
+			}
+			// Origin always returns the gateway-fetch shim, including when the
+			// entry has no kody:@ imports (kentcdodds/kody#3020).
+			if (imports.length === 0) {
+				send(200, {
+					imports: [],
+					warnings: [],
+					modules: [gatewayFetchShimModule],
 				})
 				return
 			}
@@ -162,6 +187,19 @@ test('hasSavedPackageImports detects static and dynamic kody:@ imports', () => {
 	assert.equal(hasSavedPackageImports(`import skill from 'kody:@me/skills/get'`), true)
 	assert.equal(hasSavedPackageImports(`const m = await import("kody:@me/skills/get")`), true)
 	assert.equal(hasSavedPackageImports(`import { kody } from 'kody:runtime'`), false)
+})
+
+test('createLocalEntrySource side-effect imports the gateway-fetch shim before user code', () => {
+	const source = createLocalEntrySource({
+		sideEffectModules: [localExecuteGatewayFetchShimModuleName],
+	})
+	assert.match(
+		source,
+		new RegExp(
+			`^import ${JSON.stringify(localExecuteGatewayFetchShimModuleName)};`,
+		),
+	)
+	assert.match(source, /import\(\s*"\.\/main\.js"\s*\)/)
 })
 
 test(
@@ -343,14 +381,54 @@ export default async function main(params) {
 		assert.deepEqual(structured.logs, ['hello kent', '[warn] careful'])
 		assert.equal(structured.conversationId, 'conv-local')
 		assert.equal(proxyRequests[0]?.url, '/v1/capability-proxy/session')
-		assert.equal(proxyRequests.length, 5)
+		assert.equal(proxyRequests[1]?.url, `/${localPackageGraphPath}`)
+		assert.equal(proxyRequests.length, 6)
 		for (const request of proxyRequests) {
 			assert.equal(request.authorization, `Bearer ${goodToken}`)
 		}
-		assert.deepEqual(proxyRequests[1]?.body, {
+		assert.deepEqual(proxyRequests[2]?.body, {
 			path: ['kody', 'emailSend'],
 			args: [{ to: 'kent' }],
 			conversationId: 'conv-local',
+		})
+	},
+)
+
+test(
+	'runLocalExecute always fetches package-graph for Bearer secret placeholders with no kody:@ imports',
+	{ timeout: 180_000 },
+	async () => {
+		reset()
+		const statuses: Array<string> = []
+		// Keep the Bearer {{secret:…}} shape in-source (kentcdodds/kody#3020) but
+		// do not fetch outbound — this asserts CLI wiring only (always call
+		// package-graph + side-effect import the returned shim). Origin expands
+		// or fails closed once the real shim wraps globalThis.fetch.
+		const code = `export default async function main() {
+	const authorization = 'Bearer {{secret:cloudflarePagesApiToken}}'
+	return { authorization }
+}`
+		const result = await runLocalExecute({
+			code,
+			token: goodToken,
+			apiUrl,
+			onStatus: (message) => statuses.push(message),
+		})
+		assert.equal(result.isError, false)
+		assert.ok(statuses.includes(localExecutePackageGraphResolveStatus))
+		assert.equal(
+			proxyRequests.some((request) => request.url === `/${localPackageGraphPath}`),
+			true,
+		)
+		const graphRequest = proxyRequests.find(
+			(request) => request.url === `/${localPackageGraphPath}`,
+		)
+		assert.deepEqual(
+			(graphRequest?.body as { imports?: Array<string> } | null)?.imports,
+			[],
+		)
+		assert.deepEqual((result.structuredContent as { result: unknown }).result, {
+			authorization: 'Bearer {{secret:cloudflarePagesApiToken}}',
 		})
 	},
 )

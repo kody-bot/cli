@@ -244,9 +244,22 @@ export function __kodyRunInLocalRuntime(callback) {
 `.trimStart()
 }
 
-export function createLocalEntrySource(): string {
+/**
+ * Local workerd entry. Optional `sideEffectModules` are imported for their
+ * evaluation side effects before the user module runs — used to load the
+ * origin-supplied gateway-fetch shim so ambient `{{secret:…}}` fetch hops
+ * even when the entry has no `kody:@` imports (kentcdodds/kody#3020).
+ */
+export function createLocalEntrySource(input: {
+	sideEffectModules?: ReadonlyArray<string>
+} = {}): string {
+	const sideEffectImports = [...new Set(input.sideEffectModules ?? [])]
+		.filter((name) => typeof name === 'string' && name.trim().length > 0)
+		.map((name) => `import ${JSON.stringify(name)};`)
+		.join('\n')
+	const sideEffectBlock = sideEffectImports ? `${sideEffectImports}\n` : ''
 	return `
-import {
+${sideEffectBlock}import {
 	__kodyInstallLocalBridge,
 	__kodyRunInLocalRuntime,
 } from ${JSON.stringify(localWorkerModuleNames.runtime)};

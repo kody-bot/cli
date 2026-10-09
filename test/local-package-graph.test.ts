@@ -6,6 +6,7 @@ import {
 	hasSavedPackageImports,
 	listSavedPackageImports,
 	LocalPackageGraphError,
+	localExecuteGatewayFetchShimModuleName,
 	localPackageGraphPath,
 	localPackageGraphPlatformIssueUrl,
 } from '../src/local-package-graph.js'
@@ -59,6 +60,51 @@ export default async () => m`
 			return true
 		},
 	)
+})
+
+test('fetchLocalPackageGraph posts even when there are no kody:@ imports to load the gateway-fetch shim', async () => {
+	const code = `export default async function main() {
+  return fetch('https://api.example.com', {
+    headers: { authorization: 'Bearer {{secret:cloudflarePagesApiToken}}' },
+  })
+}`
+	const requests: Array<{ url: string; body: unknown }> = []
+	const result = await fetchLocalPackageGraph({
+		apiUrl: 'https://api.kody.codes',
+		token: goodToken,
+		code,
+		fetchFn: async (input, init) => {
+			requests.push({
+				url: String(input),
+				body: init?.body ? JSON.parse(String(init.body)) : null,
+			})
+			return new Response(
+				JSON.stringify({
+					imports: [],
+					warnings: [],
+					modules: [
+						{
+							name: localExecuteGatewayFetchShimModuleName,
+							esModule: 'export {}\n',
+						},
+					],
+				}),
+				{ status: 200, headers: { 'content-type': 'application/json' } },
+			)
+		},
+	})
+	assert.equal(requests.length, 1)
+	assert.match(requests[0]!.url, new RegExp(`${localPackageGraphPath}$`))
+	assert.deepEqual(requests[0]!.body, { code, imports: [] })
+	assert.deepEqual(result, {
+		imports: [],
+		modules: [
+			{
+				name: localExecuteGatewayFetchShimModuleName,
+				esModule: 'export {}\n',
+			},
+		],
+	})
 })
 
 test('fetchLocalPackageGraph posts code + imports and returns embeddable modules', async () => {
