@@ -104,7 +104,7 @@ test('openCapabilityProxySession names insufficient_scope and the required scope
 	})
 	await assert.rejects(
 		() => openCapabilityProxySession({ apiUrl: 'https://api.kody.codes', token, fetchFn }),
-		/insufficient_scope[\s\S]*local-execute[\s\S]*tokenCreate[\s\S]*KODY_API_TOKEN/,
+		/insufficient_scope[\s\S]*local-execute[\s\S]*cliCredentialBootstrap[\s\S]*tokenCreate[\s\S]*KODY_API_TOKEN/,
 	)
 })
 
@@ -203,7 +203,7 @@ test('callCapabilityProxy surfaces capability errors from string or object bodie
 				path: ['kody', 'emailSend'],
 				args: [{}],
 			}),
-		/insufficient_scope[\s\S]*email:send[\s\S]*tokenCreate/,
+		/insufficient_scope[\s\S]*email:send[\s\S]*cliCredentialBootstrap[\s\S]*tokenCreate/,
 	)
 	const { fetchFn } = respondWith(422, { error: { code: 'invalid_args', message: 'to is required' } })
 	await assert.rejects(
