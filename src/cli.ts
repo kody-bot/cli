@@ -17,6 +17,7 @@ import {
 import { defaultApiUrl, defaultMcpUrl, modernMcpProtocolVersion } from './defaults.js'
 import { usage } from './help.js'
 import { ensureFreshCredentials, login } from './auth.js'
+import { orgSlugFromFlag } from './oauth-provider.js'
 import { deleteCredentials, loadCredentials } from './store.js'
 import { callKodyTool, formatToolResult, listKodyTools } from './mcp.js'
 import { runInstall } from './install.js'
@@ -102,6 +103,7 @@ function parseKnown(args: Array<string>) {
 			'max-lifetime-seconds': { type: 'string' },
 			project: { type: 'boolean' },
 			'no-browser': { type: 'boolean' },
+			org: { type: 'string' },
 			clients: { type: 'string' },
 			yes: { type: 'boolean', short: 'y' },
 		},
@@ -175,6 +177,9 @@ async function dispatch(
 	) {
 		throw new Error('--allow-private-network can only be used with execute --local.')
 	}
+	if (parsed.values.org !== undefined && parsed.command !== 'login') {
+		throw new Error('`--org` can only be used with `kody login`.')
+	}
 
 	switch (parsed.command) {
 		case 'help':
@@ -184,9 +189,14 @@ async function dispatch(
 			write(`${readPackageVersion()}\n`)
 			return 0
 		case 'login': {
+			const org =
+				typeof parsed.values.org === 'string'
+					? orgSlugFromFlag(parsed.values.org)
+					: undefined
 			write('Opening the Kody login page in your browser…\n')
 			const result = await login({
 				mcpUrl,
+				...(org ? { org } : {}),
 				openBrowser: parsed.values['no-browser'] !== true,
 				onAuthorizationUrl: (url) => {
 					write(`If the browser does not open, visit:\n${url.href}\n`)

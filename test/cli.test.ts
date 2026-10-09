@@ -58,6 +58,7 @@ test('resolveCommand maps subcommands and flags', () => {
 		resolveCommand(['execute', '--file', 'mod.js']).values.file,
 		'mod.js',
 	)
+	assert.equal(resolveCommand(['login', '--org', 'Acme']).values.org, 'Acme')
 	assert.equal(
 		resolveCommand(['execute', '--invoke', 'kody:@scope/pkg/export']).values.invoke,
 		'kody:@scope/pkg/export',
@@ -447,6 +448,28 @@ test('help documents the api command', async () => {
 	assert.equal(code, 0)
 	assert.match(stdout, /kody api <operationId>/)
 	assert.match(stdout, /usageGet/)
+	assert.match(stdout, /kody login \[--mcp-url <url>\] \[--org <slug>\]/)
+	assert.match(stdout, /kody login --org acme/)
+})
+
+test('--org is login-only and requires a slug', async () => {
+	let stderr = ''
+	const other = await runCli(['search', '--org', 'acme'], {
+		stderr: (text) => {
+			stderr += text
+		},
+	})
+	assert.equal(other, 1)
+	assert.match(stderr, /`--org` can only be used with `kody login`/)
+
+	stderr = ''
+	const blank = await runCli(['login', '--org', '   '], {
+		stderr: (text) => {
+			stderr += text
+		},
+	})
+	assert.equal(blank, 1)
+	assert.match(stderr, /kody login --org acme/)
 })
 
 test('execute with --token (no --local) uses CapabilityProxy and never requires login', async () => {

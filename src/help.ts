@@ -7,7 +7,7 @@ export const usage = `Kody CLI ${readPackageVersion()}
 Install Kody as a remote MCP server in local agents, or use this CLI as a local client.
 
 Usage:
-  kody login [--mcp-url <url>] [--no-browser]
+  kody login [--mcp-url <url>] [--org <slug>] [--no-browser]
   kody logout [--mcp-url <url>] [--api-url <url>]
   kody status [--mcp-url <url>] [--api-url <url>]
   kody auth bootstrap --code <kody_bc_…> (--lifetime short|long | --idle-ttl-seconds <n> --max-lifetime-seconds <n>) [--api-url <url>]
@@ -22,6 +22,11 @@ Usage:
   kody install configures running local MCP clients (Cursor, Claude Desktop,
   VS Code, Goose, and others). For web-based clients (ChatGPT, Claude.ai, Grok),
   see ${onboardingUrl(defaultMcpUrl)}
+
+  --org <slug>
+             Bind this login to an organization.
+             Example: \`kody login --org acme\`
+             Omit \`--org\` and the server binds your only organization.
 
   --clients  Comma-separated ids: ${hostIds.join(', ')}
 

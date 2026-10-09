@@ -17,7 +17,7 @@ import {
 	defaultScopes,
 	loginTimeoutMs,
 } from './defaults.js'
-import { createCliOAuthProvider } from './oauth-provider.js'
+import { createCliOAuthProvider, orgSlugFromFlag } from './oauth-provider.js'
 import { redactError } from './redact.js'
 import {
 	loadCredentials,
@@ -28,6 +28,8 @@ import {
 
 export type LoginOptions = {
 	mcpUrl?: string
+	/** Organization slug. Omit to let the server bind the sole or signup org. */
+	org?: string
 	openBrowser?: boolean
 	backend?: SecretBackend
 	timeoutMs?: number
@@ -245,6 +247,7 @@ export async function login(options: LoginOptions = {}): Promise<{
 	backendPath?: string
 }> {
 	const mcpUrl = options.mcpUrl ?? defaultMcpUrl
+	const org = options.org === undefined ? undefined : orgSlugFromFlag(options.org)
 	const redirectUri = cliRedirectUrl()
 	const expectedState = crypto.randomUUID()
 	const server = await startCallbackServer(redirectUri)
@@ -255,6 +258,7 @@ export async function login(options: LoginOptions = {}): Promise<{
 		loadStoredTokens: false,
 		openBrowser: options.openBrowser !== false,
 		expectedState,
+		...(org ? { org } : {}),
 		onAuthorizationUrl: (url) => {
 			authorizationUrl = url
 			options.onAuthorizationUrl?.(url)
