@@ -106,7 +106,7 @@ test('resolveApiToken prefers --token, falls back to KODY_API_TOKEN, and require
 	assert.equal(resolveApiToken({}, { KODY_API_TOKEN: ' env ' }), 'env')
 	assert.throws(
 		() => resolveApiToken({}, {}),
-		/cliCredentialBootstrap[\s\S]*tokenCreate[\s\S]*local-execute[\s\S]*pass --token or set KODY_API_TOKEN/,
+		/cliCredentialBootstrap[\s\S]*tokenCreate[\s\S]*org:execute[\s\S]*pass --token or set KODY_API_TOKEN/,
 	)
 })
 
@@ -517,7 +517,7 @@ test('execute without token or login prompts clearly', async () => {
 	assert.match(stderr, /Not logged in, and no API token is set/)
 	assert.match(stderr, /cliCredentialBootstrap|auth bootstrap/)
 	assert.match(stderr, /tokenCreate/)
-	assert.match(stderr, /local-execute/)
+	assert.match(stderr, /org:execute/)
 	assert.match(stderr, /KODY_API_TOKEN/)
 	assert.match(stderr, /--token/)
 })
@@ -685,7 +685,7 @@ test('execute token paths surface feature_disabled and insufficient_scope', asyn
 					details: { required_scope: 'local-execute' },
 				},
 			},
-			pattern: /insufficient_scope[\s\S]*tokenCreate[\s\S]*local-execute/,
+			pattern: /insufficient_scope[\s\S]*cliCredentialBootstrap[\s\S]*tokenCreate[\s\S]*local-execute/,
 		},
 		{
 			args: ['execute', '--token', 'tok', ...moduleArgs],
