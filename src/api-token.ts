@@ -116,7 +116,7 @@ export function isScopedApiToken(token: string): boolean {
  * prefer `cliCredentialBootstrap` → `auth bootstrap` instead.
  */
 export function apiTokenMintInstructions(): string {
-	return `Mint one with the Kody MCP \`api\` tool \`tokenCreate\` (include the \`local-execute\` scope plus the capability scopes this command needs) and pass --token or set ${apiTokenEnvVar}.`
+	return `For CI/headless only: mint with the Kody MCP \`api\` tool \`tokenCreate\` (include \`org:execute\` plus the capability scopes this command needs, e.g. \`package:execute\` / \`integration:read\`) and pass --token or set ${apiTokenEnvVar}.`
 }
 
 /** Preferred interactive path for agents already on Kody MCP (ADR 0056). */
@@ -151,13 +151,13 @@ export function rejectedOauthBearerMessage(): string {
 
 export function insufficientScopeMessage(input: {
 	requiredScope?: string | null
-	/** CapabilityProxy execute needs `local-execute` plus the capability scopes. */
+	/** CapabilityProxy / package-graph: prefer bootstrap over tokenCreate. */
 	includeLocalExecute?: boolean
 }): string {
 	const required = input.requiredScope ? ` The server requires "${input.requiredScope}".` : ''
 	const mint = input.includeLocalExecute
-		? apiTokenMintInstructions()
-		: `Mint a token with the Kody MCP \`api\` tool \`tokenCreate\`${
+		? `${cliBootstrapInstructions()} (lifetime short|long). ${apiTokenMintInstructions()}`
+		: `${cliBootstrapInstructions()} (lifetime short|long). Or for CI/headless, mint with tokenCreate${
 				input.requiredScope
 					? ` that includes "${input.requiredScope}"`
 					: ' that includes the required scope'

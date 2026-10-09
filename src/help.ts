@@ -55,9 +55,9 @@ Usage:
              Auth priority matches \`execute --local\`: \`--token\` /
              ${apiTokenEnvVar}; stored bootstrap/API token from
              \`auth bootstrap\`; then \`kody login\` where applicable.
-             Mint with the MCP \`api\` tool \`tokenCreate\` (include
-             \`local-execute\` plus the capability scopes you need), or use
-             \`auth bootstrap\` after \`cliCredentialBootstrap\`.
+             Prefer \`cliCredentialBootstrap\` then \`auth bootstrap\`
+             (\`--lifetime short|long\`). CI/headless: \`tokenCreate\` with
+             \`org:execute\` plus the capability scopes you need.
              For \`execute --local\`, a valid \`kody login\` session can also
              supply Bearer when no scoped token is available (no tokenCreate
              exchange).

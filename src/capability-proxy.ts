@@ -1,5 +1,6 @@
 import {
 	apiTokenMintInstructions,
+	cliBootstrapInstructions,
 	featureDisabledMessage,
 	insufficientScopeMessage,
 	isScopedApiToken,
@@ -202,7 +203,7 @@ function describeFailure(
 	}
 	if (status === 403 && stage === 'session') {
 		return new CapabilityProxyError(
-			`The API token is not allowed to use CapabilityProxy${code ? ` (${code})` : ''}. ${apiTokenMintInstructions()}${detail}`,
+			`The API token is not allowed to use CapabilityProxy${code ? ` (${code})` : ''}. ${cliBootstrapInstructions()} (lifetime short|long). ${apiTokenMintInstructions()}${detail}`,
 			{ status, code },
 		)
 	}

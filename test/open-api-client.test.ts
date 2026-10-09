@@ -67,6 +67,7 @@ test('searchWithApiToken maps insufficient_scope to a mint-token hint', async ()
 			assert.equal(error.code, 'insufficient_scope')
 			assert.match(error.message, /insufficient_scope/)
 			assert.match(error.message, /search:read/)
+			assert.match(error.message, /cliCredentialBootstrap/)
 			assert.match(error.message, /tokenCreate/)
 			return true
 		},
