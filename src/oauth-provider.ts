@@ -29,6 +29,17 @@ export function buildCliClientMetadata(): OAuthClientMetadata {
 	}
 }
 
+/** Public org slug: trim and lowercase, matching the server's `?org=` rules. */
+export function orgSlugFromFlag(value: string): string {
+	const slug = value.trim().toLowerCase()
+	if (!slug) {
+		throw new Error(
+			'`--org` requires an organization slug. Example: `kody login --org acme`.',
+		)
+	}
+	return slug
+}
+
 export function createCliOAuthProvider(input: {
 	mcpUrl: string
 	redirectUri: URL
@@ -36,6 +47,12 @@ export function createCliOAuthProvider(input: {
 	loadStoredTokens: boolean
 	openBrowser: boolean
 	expectedState: string
+	/**
+	 * Bind the grant to this org. Set on the authorize URL (`?org=`).
+	 * Do not put it on the OAuth `resource`: production rejects a resource
+	 * that adds a query (`?org=` or `?profile=`).
+	 */
+	org?: string
 	onAuthorizationUrl?: (url: URL) => void
 }): OAuthClientProvider {
 	const clientMetadataUrl = cliClientMetadataUrl(input.mcpUrl)
@@ -91,6 +108,9 @@ export function createCliOAuthProvider(input: {
 			tokens = next
 		},
 		async redirectToAuthorization(authorizationUrl) {
+			if (input.org !== undefined) {
+				authorizationUrl.searchParams.set('org', orgSlugFromFlag(input.org))
+			}
 			input.onAuthorizationUrl?.(authorizationUrl)
 			if (input.openBrowser) {
 				await openUrl(authorizationUrl.href)

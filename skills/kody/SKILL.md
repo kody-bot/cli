@@ -50,6 +50,7 @@ Kody over MCP.
 ```bash
 npm install -g @kodycodes/cli
 kody login
+kody login --org acme
 kody search "what can you do"
 kody search --domain email
 kody execute --code "import { kody } from 'kody:runtime'\nexport default async function main() { return await kody.search({ query: 'what can you do' }) }"

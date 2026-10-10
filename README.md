@@ -49,6 +49,7 @@ MCP connection.
 ```bash
 npm install -g @kodycodes/cli
 kody login
+kody login --org acme
 ```
 
 Or run via `npx @kodycodes/cli` without a global install.
@@ -59,7 +60,7 @@ Or run via `npx @kodycodes/cli` without a global install.
 | --- | --- |
 | `kody install` | Detect running local MCP clients, write their config, and start host OAuth. **Recommended long-term path.** |
 | `kody skill install` | Copies the getting-started skill into Claude Code / Cursor / Agents. |
-| `kody login` | Browser OAuth (CIMD + PKCE) for the CLI itself. Stores access and refresh tokens. |
+| `kody login` | Browser OAuth (CIMD + PKCE) for the CLI itself. Stores access and refresh tokens. `kody login --org acme` binds that grant to organization `acme`. |
 | `kody logout` | Deletes stored CLI OAuth credentials and any stored bootstrap/API token. |
 | `kody status` | Shows CLI login / stored API token state without printing secrets. |
 | `kody auth bootstrap --code` | Redeems a one-shot `kody_bc_…` from MCP `cliCredentialBootstrap` and stores the resulting `kody_at_…` for `execute --local` (never prints the token). |

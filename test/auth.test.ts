@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import {
 	credentialsFromTokens,
 	isAccessTokenExpired,
+	login,
 } from '../src/auth.js'
 import {
 	cliClientMetadataUrl,
@@ -14,6 +15,7 @@ import {
 import {
 	buildCliClientMetadata,
 	createCliOAuthProvider,
+	orgSlugFromFlag,
 } from '../src/oauth-provider.js'
 import type { StoredCredentials } from '../src/store.js'
 
@@ -120,4 +122,138 @@ test('CLI OAuth identity is CIMD with a fixed loopback redirect', async () => {
 	const client = await provider.clientInformation()
 	assert.equal(client?.client_id, provider.clientMetadataUrl)
 	assert.equal(provider.clientMetadata.scope, 'openid profile email')
+})
+
+test('orgSlugFromFlag lowercases and rejects a blank slug', () => {
+	assert.equal(orgSlugFromFlag('Acme'), 'acme')
+	assert.equal(orgSlugFromFlag('  KentCDodds  '), 'kentcdodds')
+	assert.throws(() => orgSlugFromFlag('   '), /kody login --org acme/)
+})
+
+test('login authorize URL gets ?org= and keeps the canonical resource', async () => {
+	const seen: Array<URL> = []
+	const provider = createCliOAuthProvider({
+		mcpUrl: 'https://kody.codes/mcp',
+		redirectUri: cliRedirectUrl(),
+		loadStoredTokens: false,
+		openBrowser: false,
+		expectedState: 'state',
+		org: 'Acme',
+		onAuthorizationUrl: (url) => {
+			seen.push(new URL(url.href))
+		},
+	})
+	const authorizationUrl = new URL(
+		'https://kody.codes/oauth/authorize?response_type=code&resource=https%3A%2F%2Fkody.codes%2Fmcp&profile=CI+Bot',
+	)
+	await provider.redirectToAuthorization(authorizationUrl)
+	assert.equal(seen.length, 1)
+	const url = seen[0]
+	assert.ok(url)
+	assert.equal(url.searchParams.get('org'), 'acme')
+	assert.equal(url.searchParams.get('profile'), 'CI Bot')
+	assert.equal(url.searchParams.get('resource'), 'https://kody.codes/mcp')
+	assert.equal(new URL(url.searchParams.get('resource') ?? '').search, '')
+})
+
+function oauthDiscoveryFetch(origin: string): typeof fetch {
+	const metadata = {
+		issuer: origin,
+		authorization_endpoint: `${origin}/oauth/authorize`,
+		token_endpoint: `${origin}/oauth/token`,
+		response_types_supported: ['code'],
+		code_challenge_methods_supported: ['S256'],
+		grant_types_supported: ['authorization_code', 'refresh_token'],
+		token_endpoint_auth_methods_supported: ['none'],
+		client_id_metadata_document_supported: true,
+	}
+	const resource = {
+		resource: `${origin}/mcp`,
+		authorization_servers: [origin],
+		scopes_supported: ['openid', 'profile', 'email'],
+		bearer_methods_supported: ['header'],
+	}
+	return async (input) => {
+		const url = new URL(
+			typeof input === 'string'
+				? input
+				: input instanceof URL
+					? input.href
+					: input.url,
+		)
+		if (url.pathname.includes('oauth-protected-resource')) {
+			return Response.json(resource)
+		}
+		if (
+			url.pathname.includes('oauth-authorization-server') ||
+			url.pathname.includes('openid-configuration')
+		) {
+			return Response.json(metadata)
+		}
+		return new Response('not found', { status: 404 })
+	}
+}
+
+test('login appends ?org= on the authorize URL and omits it otherwise', async () => {
+	const origin = 'https://oauth.test'
+	const fetchFn = oauthDiscoveryFetch(origin)
+	const withOrg: Array<URL> = []
+	await assert.rejects(
+		() =>
+			login({
+				mcpUrl: `${origin}/mcp`,
+				org: 'Acme',
+				openBrowser: false,
+				timeoutMs: 200,
+				fetchFn,
+				onAuthorizationUrl: (url) => {
+					withOrg.push(new URL(url.href))
+				},
+			}),
+		/Timed out waiting for the browser login/,
+	)
+	assert.equal(withOrg.length, 1)
+	const url = withOrg[0]
+	assert.ok(url)
+	assert.equal(url.origin + url.pathname, `${origin}/oauth/authorize`)
+	assert.equal(url.searchParams.get('org'), 'acme')
+	assert.equal(url.searchParams.get('resource'), `${origin}/mcp`)
+
+	const withoutOrg: Array<URL> = []
+	await assert.rejects(
+		() =>
+			login({
+				mcpUrl: `${origin}/mcp`,
+				openBrowser: false,
+				timeoutMs: 200,
+				fetchFn,
+				onAuthorizationUrl: (url) => {
+					withoutOrg.push(new URL(url.href))
+				},
+			}),
+		/Timed out waiting for the browser login/,
+	)
+	assert.equal(withoutOrg.length, 1)
+	assert.equal(withoutOrg[0]?.searchParams.get('org'), null)
+	assert.equal(withoutOrg[0]?.searchParams.get('resource'), `${origin}/mcp`)
+})
+
+test('authorize URL omits org when the flag is absent', async () => {
+	let seen: URL | undefined
+	const provider = createCliOAuthProvider({
+		mcpUrl: 'https://kody.codes/mcp',
+		redirectUri: cliRedirectUrl(),
+		loadStoredTokens: false,
+		openBrowser: false,
+		expectedState: 'state',
+		onAuthorizationUrl: (url) => {
+			seen = new URL(url.href)
+		},
+	})
+	const authorizationUrl = new URL(
+		'https://kody.codes/oauth/authorize?response_type=code&resource=https%3A%2F%2Fkody.codes%2Fmcp',
+	)
+	await provider.redirectToAuthorization(authorizationUrl)
+	assert.equal(seen?.searchParams.get('org'), null)
+	assert.equal(seen?.searchParams.get('resource'), 'https://kody.codes/mcp')
 })
