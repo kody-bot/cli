@@ -1,0 +1,7 @@
+{
+	"--version": 60,
+	"status": 60,
+	"execute --local empty": 200,
+	"execute --local kody:@ import": 200,
+	"execute --local runtime call": 200
+}

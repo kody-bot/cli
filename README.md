@@ -254,6 +254,15 @@ Access tokens refresh automatically on expiry or HTTP 401.
 uses stored CLI credentials from `kody login`. Token-only cloud execute still
 only reads `--token` / `KODY_API_TOKEN`.
 
+## Benchmark
+
+`npm run build && npm run bench` times the built CLI (startup, `status`, and
+`execute --local` against a loopback stand-in for api.kody.codes) over 20 runs
+and prints p50/p95. The `bench` workflow runs it on every pull request and
+weekly, failing when a scenario's p50 exceeds the budget in
+`scripts/bench-budgets.json` (milliseconds over the bare Node startup of the
+same run).
+
 ## Releases
 
 This repo uses [semantic-release](https://github.com/semantic-release/semantic-release)

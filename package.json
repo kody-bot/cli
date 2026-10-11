@@ -20,6 +20,7 @@
 	],
 	"scripts": {
 		"build": "tsc -p tsconfig.build.json",
+		"bench": "node scripts/bench.mjs",
 		"typecheck": "tsc --noEmit",
 		"test": "tsx --test test/*.test.ts",
 		"validate": "npm run typecheck && npm run test && npm run build"
