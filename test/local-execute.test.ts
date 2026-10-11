@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdtempSync, readdirSync } from 'node:fs'
+import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -466,6 +466,67 @@ test(
 			String(syntaxError.content[0]?.text),
 			/^Error: Local execute could not load the module \(workerd exit 1\)\n[\s\S]*SyntaxError/,
 		)
+	},
+)
+
+test('runLocalExecute rejects non-erasable TypeScript before any network call', async () => {
+	reset()
+	await assert.rejects(
+		() =>
+			runLocalExecute({
+				code: 'enum Color { Red = 1 }\nexport default () => Color.Red\n',
+				modulePath: 'scan-step.ts',
+				token: goodToken,
+				apiUrl,
+				workerdPath: '/nonexistent/workerd',
+			}),
+		(error: unknown) => {
+			assert.ok(error instanceof Error)
+			assert.match(
+				error.message,
+				/Could not strip TypeScript from scan-step\.ts before local execute wrote main\.js/,
+			)
+			assert.match(error.message, /enum/i)
+			return true
+		},
+	)
+	assert.equal(proxyRequests.length, 0)
+})
+
+test(
+	'kody execute --local --file strips TypeScript before workerd loads the module',
+	{ timeout: 180_000 },
+	async () => {
+		reset()
+		const dir = mkdtempSync(join(tmpdir(), 'kody-ts-file-'))
+		const file = join(dir, 'x.ts')
+		writeFileSync(
+			file,
+			`export default async function main(p: { a?: string }) {
+	const value: string = p.a ?? 'fallback'
+	return { value }
+}
+`,
+		)
+		let stdout = ''
+		let stderr = ''
+		const code = await runCli(
+			[
+				'execute',
+				'--local',
+				'--token',
+				goodToken,
+				'--api-url',
+				apiUrl,
+				'--params',
+				'{"a":"kept"}',
+				'--file',
+				file,
+			],
+			{ stdout: (text) => (stdout += text), stderr: (text) => (stderr += text) },
+		)
+		assert.equal(code, 0, stderr)
+		assert.deepEqual(JSON.parse(stdout), { value: 'kept' })
 	},
 )
 

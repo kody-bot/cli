@@ -34,6 +34,7 @@ import {
 	runSecretHeader,
 	type WorkerdPackageModuleFile,
 } from './local-runtime-source.js'
+import { localUserModuleSource } from './local-typescript.js'
 import type { ToolCallResult } from './mcp.js'
 import { redact } from './redact.js'
 import { ensureWorkerdBinary } from './workerd-binary.js'
@@ -46,6 +47,11 @@ export {
 
 export type LocalExecuteInput = {
 	code: string
+	/**
+	 * `--file` path when that file supplied `code`.
+	 * `.ts`, `.mts`, and `.cts` are type-stripped before `main.js` is written.
+	 */
+	modulePath?: string
 	params?: unknown
 	conversationId?: string
 	token: string
@@ -74,6 +80,7 @@ export const localExecutePackageGraphResolveStatus =
 export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCallResult> {
 	assertLocalExecuteNodeEngine()
 	assertTokenSafeApiUrl(input.apiUrl)
+	const code = localUserModuleSource(input.code, input.modulePath)
 	const client = { apiUrl: input.apiUrl, token: input.token, fetchFn: input.fetchFn }
 	await openCapabilityProxySession(client)
 
@@ -81,13 +88,13 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 	// when there are no `kody:@` imports so ambient `{{secret:…}}` fetch hops
 	// (or fails closed) instead of sending a raw placeholder (kody#3020).
 	input.onStatus?.(
-		hasSavedPackageImports(input.code)
+		hasSavedPackageImports(code)
 			? savedPackageImportLocalResolveStatus
 			: localExecutePackageGraphResolveStatus,
 	)
 	const packageGraph = await fetchLocalPackageGraph({
 		...client,
-		code: input.code,
+		code,
 		conversationId: input.conversationId,
 	})
 
@@ -134,7 +141,7 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 			join(workDir, files.entry),
 			createLocalEntrySource({ sideEffectModules: gatewayFetchShimModules }),
 		)
-		await writeFile(join(workDir, files.user), input.code)
+		await writeFile(join(workDir, files.user), code)
 		await writeFile(join(workDir, files.runtime), createLocalRuntimeModuleSource())
 		const packageModules = await writePackageModuleFiles(workDir, packageGraph)
 		const configPath = join(workDir, 'config.capnp')

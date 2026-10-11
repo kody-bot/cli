@@ -462,16 +462,20 @@ async function dispatch(
 				)
 			}
 			if (local) assertLocalExecuteNodeEngine()
+			const fileArg = hasFileFlag ? (parsed.values.file as string) : undefined
+			// `--code` wins over `--file`. Only attribute the path when the file is the source.
+			const modulePath =
+				!hasCodeFlag && fileArg !== undefined && fileArg !== '-' ? fileArg : undefined
 			const code =
 				invoke !== undefined
 					? undefined
 					: hasCodeFlag
 						? parsed.values.code
-						: hasFileFlag
-							? parsed.values.file === '-'
+						: modulePath !== undefined
+							? await readFile(modulePath, 'utf8')
+							: fileArg === '-'
 								? await readStdin()
-								: await readFile(parsed.values.file as string, 'utf8')
-							: positionalModule || undefined
+								: positionalModule || undefined
 			const args = buildExecuteToolArgs({
 				invoke,
 				code: typeof code === 'string' ? code : undefined,
@@ -499,6 +503,7 @@ async function dispatch(
 			const result = local
 				? await runLocalExecute({
 						code: args.code as string,
+						...(modulePath !== undefined ? { modulePath } : {}),
 						params: args.params,
 						conversationId: args.conversationId as string | undefined,
 						token: await resolveLocalExecuteBearer({

@@ -79,7 +79,9 @@ Modules with static `kody:@…` imports keep `--local`: the CLI fetches stamped
 package modules via `POST /v1/local-execute/package-graph` and embeds them in
 local workerd (CapabilityProxy only for per-call `kody:runtime` hops — not a
 whole-module cloud defer). If that package-graph API is missing, `--local`
-fails clearly rather than silently billing a remote execute.
+fails clearly rather than silently billing a remote execute. `--file`
+paths ending in `.ts`, `.mts`, or `.cts` are type-stripped before workerd
+loads them (Node.js 22.13+). `--code` and `.js` files are not rewritten.
 
 For `execute --local` auth: `--token` / `KODY_API_TOKEN` wins when set;
 otherwise a stored token from `kody auth bootstrap --code` (after MCP
