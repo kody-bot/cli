@@ -35,7 +35,7 @@ import {
 	type WorkerdPackageModuleFile,
 } from './local-runtime-source.js'
 import { localUserModuleSource } from './local-typescript.js'
-import type { ToolCallResult } from './mcp.js'
+import type { ToolCallResult } from './tool-result.js'
 import { redact } from './redact.js'
 import { ensureWorkerdBinary } from './workerd-binary.js'
 

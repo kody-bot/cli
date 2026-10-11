@@ -13,6 +13,7 @@ import { ensureFreshCredentials, refreshStoredCredentials } from './auth.js'
 import { readPackageVersion } from './package-info.js'
 import { redactError } from './redact.js'
 import type { SecretBackend } from './store.js'
+import type { ToolCallResult } from './tool-result.js'
 
 export type CallToolInput = {
 	name: 'search' | 'execute' | 'api'
@@ -20,12 +21,6 @@ export type CallToolInput = {
 	mcpUrl?: string
 	backend?: SecretBackend
 	fetchFn?: typeof fetch
-}
-
-export type ToolCallResult = {
-	content: Array<{ type: string; text?: string; [key: string]: unknown }>
-	structuredContent?: unknown
-	isError?: boolean
 }
 
 async function connect(
@@ -161,31 +156,6 @@ export async function listKodyTools(input: {
 	} catch (error) {
 		throw withOpenidScopeHint(error, credentials.scope)
 	}
-}
-
-export function formatToolResult(
-	result: ToolCallResult,
-	json: boolean,
-): string {
-	if (json) {
-		return `${JSON.stringify(
-			{
-				isError: result.isError ?? false,
-				structuredContent: result.structuredContent ?? null,
-				content: result.content,
-			},
-			null,
-			2,
-		)}\n`
-	}
-	const texts = result.content
-		.filter((part) => part.type === 'text' && typeof part.text === 'string')
-		.map((part) => part.text ?? '')
-	if (texts.length > 0) return texts.join('\n\n').replace(/\n*$/, '\n')
-	if (result.structuredContent != null) {
-		return `${JSON.stringify(result.structuredContent, null, 2)}\n`
-	}
-	return `${JSON.stringify(result.content, null, 2)}\n`
 }
 
 function isUnauthorized(error: unknown): boolean {

@@ -2,7 +2,7 @@ import { insufficientScopeMessage, readInsufficientScopeDetails } from './api-to
 import { apiTokenEnvVar, cliName, defaultApiUrl } from './defaults.js'
 import { assertTokenSafeApiUrl, capabilityProxyUrl } from './capability-proxy.js'
 import { describeNetworkError } from './network-error.js'
-import type { ToolCallResult } from './mcp.js'
+import type { ToolCallResult } from './tool-result.js'
 import { readPackageVersion } from './package-info.js'
 
 export type OpenApiClientInput = {

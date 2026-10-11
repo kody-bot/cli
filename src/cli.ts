@@ -22,21 +22,10 @@ import {
 } from './auth-bootstrap.js'
 import { defaultApiUrl, defaultMcpUrl, modernMcpProtocolVersion } from './defaults.js'
 import { usage } from './help.js'
-import { ensureFreshCredentials, login } from './auth.js'
-import { orgSlugFromFlag } from './oauth-provider.js'
 import { deleteCredentials, loadCredentials } from './store.js'
-import { callKodyApiOperation, callKodyTool, formatToolResult, listKodyTools } from './mcp.js'
-import { runInstall } from './install.js'
+import { formatToolResult } from './tool-result.js'
 import { resolveLocalExecuteBearer } from './local-execute-auth.js'
-import { runLocalExecute } from './local-execute.js'
 import { assertLocalExecuteNodeEngine } from './node-engine.js'
-import {
-	callOpenApiOperation,
-	searchWithApiToken,
-	whoamiWithApiToken,
-} from './open-api-client.js'
-import { runRemoteExecuteWithToken } from './remote-execute.js'
-import { installSkill } from './skill.js'
 import { readPackageVersion } from './package-info.js'
 import { redactError } from './redact.js'
 
@@ -198,6 +187,10 @@ async function dispatch(
 			write(`${readPackageVersion()}\n`)
 			return 0
 		case 'login': {
+			const [{ login }, { orgSlugFromFlag }] = await Promise.all([
+				import('./auth.js'),
+				import('./oauth-provider.js'),
+			])
 			const org =
 				typeof parsed.values.org === 'string'
 					? orgSlugFromFlag(parsed.values.org)
@@ -385,6 +378,7 @@ async function dispatch(
 					allowEnvWithoutLogin: true,
 				})
 			) {
+				const { whoamiWithApiToken } = await import('./open-api-client.js')
 				const identity = await whoamiWithApiToken({
 					token: requireApiToken(tokenValues, process.env, 'whoami', { apiUrl }),
 					apiUrl,
@@ -409,6 +403,10 @@ async function dispatch(
 				)
 				return 0
 			}
+			const [{ ensureFreshCredentials }, { listKodyTools }] = await Promise.all([
+				import('./auth.js'),
+				import('./mcp.js'),
+			])
 			const credentials = await ensureFreshCredentials({ mcpUrl })
 			const tools = await listKodyTools({ mcpUrl })
 			if (json) {
@@ -448,6 +446,7 @@ async function dispatch(
 					allowEnvWithoutLogin: true,
 				})
 			) {
+				const { searchWithApiToken } = await import('./open-api-client.js')
 				const result = await searchWithApiToken({
 					token: requireApiToken(tokenValues, process.env, 'search', { apiUrl }),
 					apiUrl,
@@ -469,6 +468,7 @@ async function dispatch(
 			if (typeof parsed.values.entity === 'string') args.entity = parsed.values.entity
 			if (typeof parsed.values.domain === 'string') args.domain = parsed.values.domain
 			if (typeof parsed.values.limit === 'string') args.limit = Number(parsed.values.limit)
+			const { callKodyTool } = await import('./mcp.js')
 			const result = await callKodyTool({ name: 'search', args, mcpUrl })
 			write(formatToolResult(result, json))
 			return result.isError ? 1 : 0
@@ -531,7 +531,7 @@ async function dispatch(
 					allowEnvWithoutLogin: true,
 				})
 			const result = local
-				? await runLocalExecute({
+				? await (await import('./local-execute.js')).runLocalExecute({
 						code: args.code as string,
 						...(modulePath !== undefined ? { modulePath } : {}),
 						params: args.params,
@@ -548,7 +548,7 @@ async function dispatch(
 						onStatus: (message) => writeErr(`${message}\n`),
 					})
 				: useToken
-					? await runRemoteExecuteWithToken({
+					? await (await import('./remote-execute.js')).runRemoteExecuteWithToken({
 							code: typeof args.code === 'string' ? args.code : undefined,
 							invoke,
 							params: args.params,
@@ -561,7 +561,7 @@ async function dispatch(
 							),
 							apiUrl,
 						})
-					: await callKodyTool({ name: 'execute', args, mcpUrl })
+					: await (await import('./mcp.js')).callKodyTool({ name: 'execute', args, mcpUrl })
 			write(formatToolResult(result, json))
 			return result.isError ? 1 : 0
 		}
@@ -582,6 +582,7 @@ async function dispatch(
 			const params = parseApiParamsJson(
 				typeof parsed.values.params === 'string' ? parsed.values.params : undefined,
 			)
+			const { callOpenApiOperation } = await import('./open-api-client.js')
 			const result = await callOpenApiOperation({
 				operationId,
 				params,
@@ -593,6 +594,7 @@ async function dispatch(
 			return 0
 		}
 		case 'install': {
+			const { runInstall } = await import('./install.js')
 			const result = await runInstall(
 				{
 					mcpUrl,
@@ -611,6 +613,7 @@ async function dispatch(
 			if (action !== 'install') {
 				throw new Error('Usage: kody skill install [--project]')
 			}
+			const { installSkill } = await import('./skill.js')
 			const targets = await installSkill({ project: parsed.values.project === true })
 			write(
 				`Installed the Kody skill to:\n${targets.map((target) => `- ${target.host}: ${target.path}`).join('\n')}\n`,
@@ -710,6 +713,7 @@ function bootstrapMinter(input: {
 			apiUrl: input.apiUrl,
 		})
 		return async (params) => {
+			const { callOpenApiOperation } = await import('./open-api-client.js')
 			try {
 				return await callOpenApiOperation({
 					token,
@@ -728,8 +732,8 @@ function bootstrapMinter(input: {
 		}
 	}
 	if (loadCredentials(input.mcpUrl)) {
-		return (params) =>
-			callKodyApiOperation({
+		return async (params) =>
+			(await import('./mcp.js')).callKodyApiOperation({
 				operationId: cliCredentialBootstrapOperationId,
 				params,
 				mcpUrl: input.mcpUrl,

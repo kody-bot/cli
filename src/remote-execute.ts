@@ -3,7 +3,7 @@ import {
 	callCapabilityProxy,
 	openCapabilityProxySession,
 } from './capability-proxy.js'
-import type { ToolCallResult } from './mcp.js'
+import type { ToolCallResult } from './tool-result.js'
 import { resolveExecuteInvokeCode } from './invoke-passthrough.js'
 
 export type RemoteExecuteInput = {

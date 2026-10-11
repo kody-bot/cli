@@ -1,4 +1,4 @@
-import { ensureFreshCredentials } from './auth.js'
+import type { ensureFreshCredentials } from './auth.js'
 import {
 	missingLocalExecuteAuthMessage,
 	expectedPairedApiOrigin,
@@ -52,7 +52,8 @@ export async function resolveLocalExecuteBearer(
 		)
 	}
 
-	const ensure = input.ensureCredentials ?? ensureFreshCredentials
+	const ensure =
+		input.ensureCredentials ?? (await import('./auth.js')).ensureFreshCredentials
 	try {
 		const credentials = await ensure({
 			mcpUrl: input.mcpUrl,

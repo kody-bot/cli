@@ -17,7 +17,8 @@ import {
 import { isPairedApiUrl } from '../src/api-token.js'
 import type { StoredApiToken } from '../src/api-token-store.js'
 import { modernMcpProtocolVersion } from '../src/defaults.js'
-import { formatToolResult, listKodyTools } from '../src/mcp.js'
+import { listKodyTools } from '../src/mcp.js'
+import { formatToolResult } from '../src/tool-result.js'
 import { clearOpenApiRouteCache } from '../src/open-api-client.js'
 import { redact } from '../src/redact.js'
 import {
