@@ -1,19 +1,19 @@
 ---
 name: kody
 description: >
-  Install Kody as a remote MCP server, then use `search` and `execute`
-  from the host agent. Use when the user mentions Kody, kody.codes,
-  durable agent tasks, or wants to search/execute via Kody.
+  Install Kody as a remote MCP server, then use `search` / MCP tools and
+  prefer `kody execute --local` when the CLI and Node are available. Use
+  when the user mentions Kody, kody.codes, durable agent tasks, or wants
+  to search/execute via Kody.
 ---
 
 # Kody
 
-Kody is a remote MCP personal assistant. **Long term, install it as an MCP
-server in this agent** and call `search` / `execute` directly. Do not keep
-using the CLI as the everyday interface once the server is connected.
+Kody is a remote MCP personal assistant. Install it as an MCP server in this
+agent for `search`, `api`, and discovery. Prefer local CLI execute when Node ≥22 and `@kodycodes/cli` are available. Use MCP / hosted paths when the CLI or Node cannot run.
 
-`@kodycodes/cli` is a bootstrapper: it writes host MCP config and can act as
-a local client when MCP is not available.
+`@kodycodes/cli` installs host MCP config and runs local execute against real
+secrets while keeping `kody:runtime` hops on CapabilityProxy.
 
 ## Install the MCP server (recommended)
 
@@ -25,13 +25,17 @@ That command lists **running local** agents and writes each host's remote
 MCP entry for `https://kody.codes/mcp`. Host OAuth stays in that client —
 do not run `kody login` for the host connection.
 
-After install, prefer the Kody MCP tools in this agent:
+After install, use the Kody MCP tools in this agent for discovery and Open API:
 
 - `search` — discover capabilities, packages, and entity detail
-- `execute` — run one-off modules against those capabilities
+- `api` — call one Open API operation directly (no sandbox)
+- Prefer `search` before composing work
 
-Prefer `search` before `execute`. If Kody is already connected here, skip
-the CLI and use those tools.
+For one-off modules, smoke tests, and composition: when Node ≥22 and the CLI
+are available, prefer `npx @kodycodes/cli execute --local` (see
+[Local CLI execute](https://kody.codes/docs/local-execute)). If `--local`
+cannot run, use Open API / MCP `api`, or fix the environment — do **not** use
+hosted MCP `execute` for agent work when a local or Open API path exists.
 
 For web-based clients (ChatGPT, Claude.ai, Grok), point the user at
 https://kody.codes/onboarding.
@@ -42,10 +46,7 @@ To copy this skill into Claude Code / Cursor / Agents:
 npx @kodycodes/cli skill install
 ```
 
-## CLI fallback
-
-Use the CLI only for bootstrap, scripting, or when this agent cannot reach
-Kody over MCP.
+## CLI
 
 ```bash
 npm install -g @kodycodes/cli
@@ -53,7 +54,7 @@ kody login
 kody login --org acme
 kody search "what can you do"
 kody search --domain email
-kody execute --code "import { kody } from 'kody:runtime'\nexport default async function main() { return await kody.search({ query: 'what can you do' }) }"
+kody execute --local --code "import { kody } from 'kody:runtime'\nexport default async function main() { return await kody.search({ query: 'what can you do' }) }"
 kody status
 kody whoami
 kody logout

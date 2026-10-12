@@ -20,6 +20,14 @@ test('installSkill writes the bundled skill to user host directories', async () 
 		assert.match(body, /npx @kodycodes\/cli install/)
 		assert.match(body, /kody login/)
 		assert.match(body, /auth bootstrap|cliCredentialBootstrap/)
+		assert.match(
+			body,
+			/Prefer local CLI execute when\s+Node ≥22 and `@kodycodes\/cli` are available/,
+		)
+		assert.match(body, /execute --local/)
+		assert.doesNotMatch(body, /skip the CLI/i)
+		assert.doesNotMatch(body, /Do not keep using the CLI as the everyday interface/)
+		assert.doesNotMatch(body, /CLI fallback/)
 	}
 })
 
