@@ -1,9 +1,13 @@
+import { createHash } from 'node:crypto'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { insufficientScopeMessage, readInsufficientScopeDetails } from './api-token.js'
 import { apiTokenEnvVar, cliName, defaultApiUrl } from './defaults.js'
 import { assertTokenSafeApiUrl, capabilityProxyUrl } from './capability-proxy.js'
 import { describeNetworkError } from './network-error.js'
 import type { ToolCallResult } from './tool-result.js'
 import { readPackageVersion } from './package-info.js'
+import { userCacheDir } from './workerd-binary.js'
 
 export type OpenApiClientInput = {
 	apiUrl?: string
@@ -43,7 +47,96 @@ export type OpenApiOperationRoute = {
 	pathParamNames: Array<string>
 }
 
-const openApiRouteCache = new Map<string, Map<string, OpenApiOperationRoute>>()
+type OpenApiRouteCacheEntry = {
+	/** The document's content hash from the `ETag` header; null when the server sent none. */
+	etag: string | null
+	operations: Map<string, OpenApiOperationRoute>
+}
+
+/** Per API origin, for the lifetime of the process. */
+const openApiRouteCache = new Map<string, OpenApiRouteCacheEntry>()
+
+/**
+ * Parsed route maps persist under `<cache dir>/openapi/<sha256(etag)>.json`,
+ * keyed by the document's content hash, with `<sha256(origin)>.etag` naming
+ * the current hash per API origin. Every process revalidates once with
+ * `If-None-Match`: 304 reuses the stored map without downloading the ~400KB
+ * document, 200 replaces it. There is no time-based expiry.
+ */
+const openApiRouteCacheVersion = 1
+
+function openApiCacheDir(): string {
+	return join(userCacheDir(), 'openapi')
+}
+
+function sha256Hex(text: string): string {
+	return createHash('sha256').update(text).digest('hex')
+}
+
+function originPointerPath(origin: string): string {
+	return join(openApiCacheDir(), `${sha256Hex(origin)}.etag`)
+}
+
+function routeMapPath(etag: string): string {
+	return join(openApiCacheDir(), `${sha256Hex(etag)}.json`)
+}
+
+function isOperationRoute(value: unknown): value is OpenApiOperationRoute {
+	if (!value || typeof value !== 'object') return false
+	const route = value as Record<string, unknown>
+	return (
+		typeof route.operationId === 'string' &&
+		typeof route.method === 'string' &&
+		typeof route.pathTemplate === 'string' &&
+		Array.isArray(route.pathParamNames) &&
+		route.pathParamNames.every((name) => typeof name === 'string')
+	)
+}
+
+/** Unreadable, corrupt or mismatched files count as a miss and get replaced by the next 200. */
+async function readPersistedRoutes(origin: string): Promise<OpenApiRouteCacheEntry | null> {
+	try {
+		const etag = (await readFile(originPointerPath(origin), 'utf8')).trim()
+		if (!etag) return null
+		const raw: unknown = JSON.parse(await readFile(routeMapPath(etag), 'utf8'))
+		if (!raw || typeof raw !== 'object') return null
+		const entry = raw as Record<string, unknown>
+		if (entry.version !== openApiRouteCacheVersion || entry.etag !== etag) return null
+		if (!Array.isArray(entry.operations) || !entry.operations.every(isOperationRoute)) return null
+		return {
+			etag,
+			operations: new Map(entry.operations.map((route) => [route.operationId, route])),
+		}
+	} catch {
+		return null
+	}
+}
+
+/** Best effort: the response is already parsed, so a read-only cache dir must not fail the command. */
+async function persistRoutes(
+	origin: string,
+	previousEtag: string | null,
+	entry: OpenApiRouteCacheEntry,
+): Promise<void> {
+	if (!entry.etag) return
+	try {
+		await mkdir(openApiCacheDir(), { recursive: true })
+		await writeFile(
+			routeMapPath(entry.etag),
+			JSON.stringify({
+				version: openApiRouteCacheVersion,
+				etag: entry.etag,
+				operations: [...entry.operations.values()],
+			}),
+		)
+		await writeFile(originPointerPath(origin), entry.etag)
+		if (previousEtag && previousEtag !== entry.etag) {
+			await rm(routeMapPath(previousEtag), { force: true })
+		}
+	} catch {
+		// Cache writes are an optimization only.
+	}
+}
 
 export async function openApiGet(
 	input: OpenApiClientInput & { path: string; query?: Record<string, string | number | undefined> },
@@ -209,8 +302,9 @@ export async function loadOpenApiOperations(input: {
 	const cacheKey = new URL(apiUrl).origin
 	if (!input.bustCache) {
 		const cached = openApiRouteCache.get(cacheKey)
-		if (cached) return cached
+		if (cached) return cached.operations
 	}
+	const persisted = input.bustCache ? null : await readPersistedRoutes(cacheKey)
 	const url = capabilityProxyUrl(apiUrl, openApiDocumentPath)
 	const fetchFn = input.fetchFn ?? fetch
 	let response: Response
@@ -220,6 +314,7 @@ export async function loadOpenApiOperations(input: {
 			headers: {
 				accept: 'application/json',
 				'user-agent': `${cliName}/${readPackageVersion()}`,
+				...(persisted?.etag ? { 'if-none-match': persisted.etag } : {}),
 			},
 		})
 	} catch (error) {
@@ -228,6 +323,10 @@ export async function loadOpenApiOperations(input: {
 			`Could not load OpenAPI from ${url.href} (${reason}). Check --api-url / KODY_API_URL and your network.`,
 		)
 	}
+	if (response.status === 304 && persisted) {
+		openApiRouteCache.set(cacheKey, persisted)
+		return persisted.operations
+	}
 	const body = await readJson(response)
 	if (!response.ok) {
 		throw new OpenApiError(
@@ -235,9 +334,10 @@ export async function loadOpenApiOperations(input: {
 			{ status: response.status },
 		)
 	}
-	const operations = indexOpenApiOperations(body)
-	openApiRouteCache.set(cacheKey, operations)
-	return operations
+	const entry = { etag: response.headers.get('etag'), operations: indexOpenApiOperations(body) }
+	openApiRouteCache.set(cacheKey, entry)
+	await persistRoutes(cacheKey, persisted?.etag ?? null, entry)
+	return entry.operations
 }
 
 /** Visible for tests. */

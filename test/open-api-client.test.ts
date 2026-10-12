@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import {
 	OpenApiError,
@@ -8,6 +11,7 @@ import {
 	clearOpenApiRouteCache,
 	cliCredentialBootstrapRedeemOperationId,
 	indexOpenApiOperations,
+	loadOpenApiOperations,
 	searchWithApiToken,
 	whoamiWithApiToken,
 } from '../src/open-api-client.js'
@@ -341,4 +345,65 @@ test('callOpenApiOperation POSTs body params for write ops', async () => {
 		fetchFn,
 	})
 	assert.deepEqual(result, { id: 'tok_1', name: 'cli' })
+})
+
+test('loadOpenApiOperations keeps the parsed route map on disk by content hash and revalidates with If-None-Match', async () => {
+	const previousCacheDir = process.env.KODY_CACHE_DIR
+	const cacheDir = mkdtempSync(join(tmpdir(), 'kody-openapi-cache-'))
+	process.env.KODY_CACHE_DIR = cacheDir
+	const apiUrl = 'https://api.openapi-cache.test'
+	const document = (path: string) => ({ paths: { [path]: { get: { operationId: 'usageGet' } } } })
+	let serve: { etag: string; path: string } = { etag: '"hash-a"', path: '/v1/account/usage' }
+	const conditionals: Array<string | null> = []
+	const statuses: Array<number> = []
+	const fetchFn = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+		const ifNoneMatch = new Headers(init?.headers).get('if-none-match')
+		conditionals.push(ifNoneMatch)
+		const status = ifNoneMatch === serve.etag ? 304 : 200
+		statuses.push(status)
+		if (status === 304) return new Response(null, { status, headers: { etag: serve.etag } })
+		return new Response(JSON.stringify(document(serve.path)), {
+			status,
+			headers: { 'content-type': 'application/json', etag: serve.etag },
+		})
+	}) as typeof fetch
+	const files = () => readdirSync(join(cacheDir, 'openapi')).sort()
+	const load = async () => {
+		clearOpenApiRouteCache()
+		const operations = await loadOpenApiOperations({ apiUrl, fetchFn })
+		return operations.get('usageGet')?.pathTemplate
+	}
+	try {
+		assert.equal(await load(), '/v1/account/usage')
+		assert.deepEqual(conditionals, [null])
+		assert.equal(files().length, 2)
+		const pointer = files().find((name) => name.endsWith('.etag'))
+		const routeMap = files().find((name) => name.endsWith('.json'))
+		assert.ok(pointer && routeMap)
+
+		assert.equal(await load(), '/v1/account/usage')
+		assert.deepEqual(conditionals.at(-1), '"hash-a"')
+		assert.deepEqual(statuses, [200, 304])
+		assert.deepEqual(files(), [pointer, routeMap].sort())
+
+		serve = { etag: '"hash-b"', path: '/v1/account/usage-v2' }
+		assert.equal(await load(), '/v1/account/usage-v2')
+		assert.deepEqual(conditionals.at(-1), '"hash-a"')
+		assert.deepEqual(statuses.at(-1), 200)
+		const after = files()
+		assert.equal(after.length, 2)
+		assert.ok(after.includes(pointer ?? ''))
+		assert.ok(!after.includes(routeMap ?? ''))
+
+		const newRouteMap = after.find((name) => name.endsWith('.json')) ?? ''
+		writeFileSync(join(cacheDir, 'openapi', newRouteMap), '{not json')
+		assert.equal(await load(), '/v1/account/usage-v2')
+		assert.deepEqual(conditionals.at(-1), null)
+		assert.deepEqual(statuses.at(-1), 200)
+		assert.deepEqual(files(), after)
+	} finally {
+		clearOpenApiRouteCache()
+		if (previousCacheDir === undefined) delete process.env.KODY_CACHE_DIR
+		else process.env.KODY_CACHE_DIR = previousCacheDir
+	}
 })
