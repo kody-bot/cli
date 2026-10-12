@@ -257,11 +257,11 @@ test('CapabilityProxy HTTP timeouts outlast the 5-minute gateway deadline plus o
 
 test('the CapabilityProxy dispatcher governs how long a call waits for headers', async () => {
 	await withDelayedHeadersServer(2_500, async (apiUrl) => {
-		const call = (timeoutMs: number) =>
+		const call = async (timeoutMs: number) =>
 			callCapabilityProxy({
 				apiUrl,
 				token,
-				dispatcher: createCapabilityProxyAgent(timeoutMs),
+				dispatcher: await createCapabilityProxyAgent(timeoutMs),
 				path: ['kody', 'emailSend'],
 				args: [{}],
 			})
@@ -298,14 +298,14 @@ test('callCapabilityProxy reaches a real server through global fetch and the def
 	})
 })
 
-test('nodeUsesEnvProxy mirrors Node\'s NODE_USE_ENV_PROXY / --use-env-proxy opt-in', () => {
+test('nodeUsesEnvProxy mirrors Node\'s NODE_USE_ENV_PROXY / --use-env-proxy opt-in', async () => {
 	assert.equal(nodeUsesEnvProxy({}, []), false)
 	assert.equal(nodeUsesEnvProxy({ HTTPS_PROXY: 'http://proxy.test:8080' }, []), false)
 	assert.equal(nodeUsesEnvProxy({ NODE_USE_ENV_PROXY: '1' }, []), true)
 	assert.equal(nodeUsesEnvProxy({}, ['--use-env-proxy']), true)
 	assert.equal(nodeUsesEnvProxy({ NODE_OPTIONS: '--max-old-space-size=4096 --use-env-proxy' }, []), true)
-	assert.ok(createCapabilityProxyAgent(1_000, { useEnvProxy: true }) instanceof EnvHttpProxyAgent)
-	assert.ok(createCapabilityProxyAgent(1_000, { useEnvProxy: false }) instanceof Agent)
+	assert.ok((await createCapabilityProxyAgent(1_000, { useEnvProxy: true })) instanceof EnvHttpProxyAgent)
+	assert.ok((await createCapabilityProxyAgent(1_000, { useEnvProxy: false })) instanceof Agent)
 })
 
 test('with env proxy enabled, CapabilityProxy calls go through HTTP_PROXY', async () => {
@@ -332,7 +332,7 @@ test('with env proxy enabled, CapabilityProxy calls go through HTTP_PROXY', asyn
 		const previous = { HTTP_PROXY: process.env.HTTP_PROXY, NO_PROXY: process.env.NO_PROXY }
 		process.env.HTTP_PROXY = `http://127.0.0.1:${port}`
 		delete process.env.NO_PROXY
-		const dispatcher = createCapabilityProxyAgent(5_000, { useEnvProxy: true })
+		const dispatcher = await createCapabilityProxyAgent(5_000, { useEnvProxy: true })
 		try {
 			const result = await callCapabilityProxy({
 				apiUrl,

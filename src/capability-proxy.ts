@@ -1,4 +1,4 @@
-import { Agent, EnvHttpProxyAgent, type Dispatcher } from 'undici'
+import type { Dispatcher } from 'undici'
 import {
 	apiTokenMintInstructions,
 	cliBootstrapInstructions,
@@ -58,19 +58,21 @@ export function nodeUsesEnvProxy(
 	return flags.includes('--use-env-proxy')
 }
 
-export function createCapabilityProxyAgent(
+export async function createCapabilityProxyAgent(
 	timeoutMs: number = capabilityProxyHttpTimeoutMs,
 	options: { useEnvProxy?: boolean } = {},
-): Dispatcher {
+): Promise<Dispatcher> {
+	// undici costs ~55ms to load, so only the commands that send a request pay for it.
+	const { Agent, EnvHttpProxyAgent } = await import('undici')
 	const timeouts = { headersTimeout: timeoutMs, bodyTimeout: timeoutMs }
 	return (options.useEnvProxy ?? nodeUsesEnvProxy())
 		? new EnvHttpProxyAgent(timeouts)
 		: new Agent(timeouts)
 }
 
-let defaultCapabilityProxyAgent: Dispatcher | null = null
+let defaultCapabilityProxyAgent: Promise<Dispatcher> | null = null
 
-function capabilityProxyAgent(): Dispatcher {
+function capabilityProxyAgent(): Promise<Dispatcher> {
 	defaultCapabilityProxyAgent ??= createCapabilityProxyAgent()
 	return defaultCapabilityProxyAgent
 }
@@ -179,7 +181,7 @@ async function send(
 ): Promise<Response> {
 	const fetchFn = input.fetchFn ?? fetch
 	// Global fetch on Node 22+ (bundled undici 6–8) accepts undici 7 dispatchers.
-	const dispatcherInit = { dispatcher: input.dispatcher ?? capabilityProxyAgent() }
+	const dispatcherInit = { dispatcher: input.dispatcher ?? (await capabilityProxyAgent()) }
 	try {
 		return await fetchFn(url, {
 			...init,
