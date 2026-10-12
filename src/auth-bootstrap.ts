@@ -1,5 +1,6 @@
 import { assertTokenSafeApiUrl, capabilityProxyUrl } from './capability-proxy.js'
 import { cliName, defaultApiUrl } from './defaults.js'
+import { summarizeNonJsonErrorBody } from './http-error-body.js'
 import { describeNetworkError } from './network-error.js'
 import { readPackageVersion } from './package-info.js'
 import {
@@ -505,7 +506,9 @@ async function readJson(response: Response): Promise<unknown> {
 
 function readErrorBody(body: unknown): { code: string | null; message: string } | null {
 	if (!isRecord(body) || body.error == null) {
-		if (typeof body === 'string' && body.trim()) return { code: null, message: body }
+		if (typeof body === 'string' && body.trim()) {
+			return { code: null, message: summarizeNonJsonErrorBody(body) }
+		}
 		if (isRecord(body) && typeof body.message === 'string') {
 			return { code: null, message: body.message }
 		}
