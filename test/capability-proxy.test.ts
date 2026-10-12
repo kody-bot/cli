@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { connect, type AddressInfo } from 'node:net'
 import { test } from 'node:test'
-import { Agent, EnvHttpProxyAgent } from 'undici'
 import {
 	assertTokenSafeApiUrl,
 	callCapabilityProxy,
@@ -10,7 +9,8 @@ import {
 	capabilityProxyHttpTimeoutMs,
 	capabilityProxyUrl,
 	checkCredentialCallMap,
-	createCapabilityProxyAgent,
+	createCapabilityProxyFetch,
+	nodeAgentHonorsEnvProxy,
 	nodeUsesEnvProxy,
 	openCapabilityProxySession,
 } from '../src/capability-proxy.js'
@@ -332,36 +332,67 @@ test('CapabilityProxy HTTP timeouts outlast the 5-minute gateway deadline plus o
 	assert.ok(capabilityProxyHttpTimeoutMs >= capabilityProxyGatewayDeadlineMs + 60_000)
 })
 
-test('the CapabilityProxy dispatcher governs how long a call waits for headers', async () => {
+test('the CapabilityProxy sender governs how long a call waits for headers', async () => {
 	await withDelayedHeadersServer(2_500, async (apiUrl) => {
-		const call = async (timeoutMs: number) =>
+		const call = (timeoutMs: number) =>
 			callCapabilityProxy({
 				apiUrl,
 				token,
-				dispatcher: await createCapabilityProxyAgent(timeoutMs),
+				fetchFn: createCapabilityProxyFetch({ timeoutMs, useEnvProxy: false }),
 				path: ['kody', 'emailSend'],
 				args: [{}],
 			})
-		await assert.rejects(() => call(1_000), /Could not reach the Kody API[\s\S]*UND_ERR_HEADERS_TIMEOUT/)
+		await assert.rejects(() => call(1_000), /Could not reach the Kody API[\s\S]*sent nothing for 1000ms/)
 		assert.deepEqual(await call(10_000), { ok: true })
 	})
 })
 
-test('callCapabilityProxy passes the shared long-timeout Agent to fetch by default', async () => {
-	const dispatchers: Array<unknown> = []
-	const fetchFn = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-		dispatchers.push((init as { dispatcher?: unknown } | undefined)?.dispatcher)
-		return new Response(JSON.stringify({ result: 1 }), { status: 200 })
-	}) as typeof fetch
-	const client = { apiUrl: 'https://api.kody.codes', token, fetchFn }
-	await openCapabilityProxySession(client)
-	await callCapabilityProxy({ ...client, path: ['kody', 'emailSend'], args: [{}] })
-	assert.equal(dispatchers.length, 2)
-	assert.ok(dispatchers[0] instanceof Agent)
-	assert.equal(dispatchers[0], dispatchers[1])
+test('the CapabilityProxy sender reuses one connection across session and calls', async () => {
+	const sockets = new Set<string>()
+	const server = createServer((request, response) => {
+		sockets.add(`${request.socket.remoteAddress}:${request.socket.remotePort}`)
+		request.resume()
+		response.writeHead(200, { 'content-type': 'application/json' })
+		response.end(JSON.stringify({ result: { ok: true } }))
+	})
+	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+	const { port } = server.address() as AddressInfo
+	try {
+		const client = {
+			apiUrl: `http://127.0.0.1:${port}`,
+			token,
+			fetchFn: createCapabilityProxyFetch({ useEnvProxy: false }),
+		}
+		await openCapabilityProxySession(client)
+		await callCapabilityProxy({ ...client, path: ['kody', 'emailSend'], args: [{}] })
+		await callCapabilityProxy({ ...client, path: ['kody', 'emailSend'], args: [{}] })
+		assert.equal(sockets.size, 1)
+	} finally {
+		server.closeAllConnections()
+		await new Promise<void>((resolve) => server.close(() => resolve()))
+	}
 })
 
-test('callCapabilityProxy reaches a real server through global fetch and the default Agent', async () => {
+test('the CapabilityProxy sender honors an AbortSignal', async () => {
+	await withDelayedHeadersServer(5_000, async (apiUrl) => {
+		const controller = new AbortController()
+		setTimeout(() => controller.abort(), 50)
+		await assert.rejects(
+			() =>
+				callCapabilityProxy({
+					apiUrl,
+					token,
+					fetchFn: createCapabilityProxyFetch({ useEnvProxy: false }),
+					signal: controller.signal,
+					path: ['kody', 'emailSend'],
+					args: [{}],
+				}),
+			/Could not reach the Kody API[\s\S]*aborted/,
+		)
+	})
+})
+
+test('callCapabilityProxy reaches a real server through the default node:http sender', async () => {
 	await withDelayedHeadersServer(0, async (apiUrl, seen) => {
 		const result = await callCapabilityProxy({
 			apiUrl,
@@ -381,16 +412,44 @@ test('nodeUsesEnvProxy mirrors Node\'s NODE_USE_ENV_PROXY / --use-env-proxy opt-
 	assert.equal(nodeUsesEnvProxy({ NODE_USE_ENV_PROXY: '1' }, []), true)
 	assert.equal(nodeUsesEnvProxy({}, ['--use-env-proxy']), true)
 	assert.equal(nodeUsesEnvProxy({ NODE_OPTIONS: '--max-old-space-size=4096 --use-env-proxy' }, []), true)
-	assert.ok((await createCapabilityProxyAgent(1_000, { useEnvProxy: true })) instanceof EnvHttpProxyAgent)
-	assert.ok((await createCapabilityProxyAgent(1_000, { useEnvProxy: false })) instanceof Agent)
+})
+
+test('nodeAgentHonorsEnvProxy names the Node releases that ship http.Agent proxyEnv', () => {
+	assert.equal(nodeAgentHonorsEnvProxy('22.20.0'), false)
+	assert.equal(nodeAgentHonorsEnvProxy('22.21.0'), true)
+	assert.equal(nodeAgentHonorsEnvProxy('24.4.1'), false)
+	assert.equal(nodeAgentHonorsEnvProxy('24.5.0'), true)
+	assert.equal(nodeAgentHonorsEnvProxy('23.11.0'), false)
+	assert.equal(nodeAgentHonorsEnvProxy('26.0.0'), true)
+	assert.equal(nodeAgentHonorsEnvProxy(), nodeAgentHonorsEnvProxy(process.versions.node))
+})
+
+test('with env proxy enabled on older Node, createCapabilityProxyFetch fails closed', () => {
+	if (nodeAgentHonorsEnvProxy()) return
+	assert.throws(
+		() => createCapabilityProxyFetch({ useEnvProxy: true }),
+		/upgrade Node or unset NODE_USE_ENV_PROXY/,
+	)
 })
 
 test('with env proxy enabled, CapabilityProxy calls go through HTTP_PROXY', async () => {
+	if (!nodeAgentHonorsEnvProxy()) return
 	await withDelayedHeadersServer(0, async (apiUrl, seen) => {
 		const proxied: Array<string> = []
 		const proxy = createServer((request, response) => {
 			proxied.push(`${request.method} ${request.url}`)
-			response.writeHead(502).end()
+			// Node's env-proxy Agent forwards plain-http targets as absolute-URI requests.
+			const target = new URL(request.url ?? '', 'http://invalid')
+			if (!/^https?:$/.test(target.protocol) || !target.host) {
+				response.writeHead(502).end()
+				return
+			}
+			const upstream = httpRequest(target, { method: request.method, headers: request.headers }, (res) => {
+				response.writeHead(res.statusCode ?? 502, res.headers)
+				res.pipe(response)
+			})
+			upstream.on('error', () => response.writeHead(502).end())
+			request.pipe(upstream)
 		})
 		proxy.on('connect', (request, clientSocket, head) => {
 			proxied.push(`CONNECT ${request.url}`)
@@ -409,12 +468,12 @@ test('with env proxy enabled, CapabilityProxy calls go through HTTP_PROXY', asyn
 		const previous = { HTTP_PROXY: process.env.HTTP_PROXY, NO_PROXY: process.env.NO_PROXY }
 		process.env.HTTP_PROXY = `http://127.0.0.1:${port}`
 		delete process.env.NO_PROXY
-		const dispatcher = await createCapabilityProxyAgent(5_000, { useEnvProxy: true })
+		const fetchFn = createCapabilityProxyFetch({ timeoutMs: 5_000, useEnvProxy: true })
 		try {
 			const result = await callCapabilityProxy({
 				apiUrl,
 				token,
-				dispatcher,
+				fetchFn,
 				path: ['kody', 'emailSend'],
 				args: [{}],
 			})
@@ -427,7 +486,6 @@ test('with env proxy enabled, CapabilityProxy calls go through HTTP_PROXY', asyn
 				if (value === undefined) delete process.env[key]
 				else process.env[key] = value
 			}
-			await dispatcher.destroy()
 			proxy.closeAllConnections()
 			await new Promise<void>((resolve) => proxy.close(() => resolve()))
 		}

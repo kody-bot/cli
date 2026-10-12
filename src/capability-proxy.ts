@@ -1,4 +1,4 @@
-import type { Dispatcher } from 'undici'
+import type { Agent as HttpAgent, IncomingMessage, request as httpRequest } from 'node:http'
 import {
 	apiTokenMintInstructions,
 	cliBootstrapInstructions,
@@ -42,18 +42,19 @@ export const capabilityProxyCallPath = 'v1/capability-proxy/call'
  * Origin runs a placeholder `fetch` under a 5-minute deadline that starts only
  * after quota checks and placeholder fill, buffers the whole upstream body,
  * and sends headers once that body has ended. Node's global fetch gives up
- * after 300s without headers (undici `headersTimeout`), which would cut the
- * call before the gateway's own deadline fires, so CapabilityProxy requests
- * use a dedicated undici Agent that waits longer than the deadline plus
- * origin overhead.
+ * after 300s without headers and that limit cannot be raised without the
+ * undici package, so CapabilityProxy requests go through Node's own HTTP
+ * client (`node:http` / `node:https`) with an idle timeout that outlasts the
+ * deadline plus origin overhead.
  */
 export const capabilityProxyGatewayDeadlineMs = 5 * 60_000
 export const capabilityProxyHttpTimeoutMs = 7 * 60_000
 
 /**
  * Node routes global fetch through `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`
- * only when `NODE_USE_ENV_PROXY=1` or `--use-env-proxy` is set. A dispatcher
- * passed to fetch replaces that global proxy agent, so mirror the same opt-in.
+ * only when `NODE_USE_ENV_PROXY=1` or `--use-env-proxy` is set. The
+ * CapabilityProxy agents mirror the same opt-in through the Agent `proxyEnv`
+ * option.
  */
 export function nodeUsesEnvProxy(
 	env: NodeJS.ProcessEnv = process.env,
@@ -64,23 +65,138 @@ export function nodeUsesEnvProxy(
 	return flags.includes('--use-env-proxy')
 }
 
-export async function createCapabilityProxyAgent(
-	timeoutMs: number = capabilityProxyHttpTimeoutMs,
-	options: { useEnvProxy?: boolean } = {},
-): Promise<Dispatcher> {
-	// undici costs ~55ms to load, so only the commands that send a request pay for it.
-	const { Agent, EnvHttpProxyAgent } = await import('undici')
-	const timeouts = { headersTimeout: timeoutMs, bodyTimeout: timeoutMs }
-	return (options.useEnvProxy ?? nodeUsesEnvProxy())
-		? new EnvHttpProxyAgent(timeouts)
-		: new Agent(timeouts)
+/** `http.Agent({ proxyEnv })` exists from these releases; older Node ignores the option. */
+const envProxyAgentMinimumNode: Record<number, number> = { 22: 21, 24: 5 }
+
+export function nodeAgentHonorsEnvProxy(version: string = process.versions.node): boolean {
+	const [major = 0, minor = 0] = version.split('.').map(Number)
+	const minimumMinor = envProxyAgentMinimumNode[major]
+	if (minimumMinor === undefined) return major > 24
+	return minor >= minimumMinor
 }
 
-let defaultCapabilityProxyAgent: Promise<Dispatcher> | null = null
+export type CapabilityProxyFetchOptions = {
+	/** Idle limit while waiting for headers or between body chunks. */
+	timeoutMs?: number
+	useEnvProxy?: boolean
+}
 
-function capabilityProxyAgent(): Promise<Dispatcher> {
-	defaultCapabilityProxyAgent ??= createCapabilityProxyAgent()
-	return defaultCapabilityProxyAgent
+/**
+ * fetch-shaped sender for CapabilityProxy built on `node:http(s)`: keep-alive
+ * across the session, package-graph and proxied calls, `timeoutMs` as the
+ * only idle limit, and `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` when Node's
+ * env-proxy opt-in is set. Bodies are strings; responses are buffered.
+ */
+export function createCapabilityProxyFetch(
+	options: CapabilityProxyFetchOptions = {},
+): typeof fetch {
+	const timeoutMs = options.timeoutMs ?? capabilityProxyHttpTimeoutMs
+	const useEnvProxy = options.useEnvProxy ?? nodeUsesEnvProxy()
+	if (useEnvProxy && !nodeAgentHonorsEnvProxy()) {
+		throw new Error(
+			`Node ${process.version} cannot route CapabilityProxy requests through HTTP_PROXY / HTTPS_PROXY: env-proxy support needs Node 22.21 or 24.5 and later. Upgrade Node or unset NODE_USE_ENV_PROXY / --use-env-proxy.`,
+		)
+	}
+	let transports: Promise<Transports> | null = null
+	return async (input, init = {}) => {
+		const url = input instanceof URL ? input : new URL(input instanceof Request ? input.url : input)
+		// node:http and node:https cost ~7ms to load, so only commands that send a request pay for it.
+		transports ??= loadTransports(useEnvProxy)
+		const transport = (await transports)[url.protocol as keyof Transports]
+		if (!transport) {
+			throw new TypeError(`Unsupported protocol for the Kody API: ${url.protocol}`)
+		}
+		const body = init.body
+		if (body !== undefined && body !== null && typeof body !== 'string') {
+			throw new TypeError('CapabilityProxy requests send string bodies.')
+		}
+		return new Promise<Response>((resolve, reject) => {
+			const request = transport.request(
+				url,
+				{
+					agent: transport.agent,
+					method: init.method ?? 'GET',
+					headers: Object.fromEntries(new Headers(init.headers)),
+				},
+				(response) => {
+					const chunks: Array<Buffer> = []
+					response.on('data', (chunk: Buffer) => chunks.push(chunk))
+					response.on('error', reject)
+					response.on('end', () => resolve(toResponse(response, Buffer.concat(chunks))))
+				},
+			)
+			request.setTimeout(timeoutMs, () =>
+				request.destroy(
+					new Error(`Kody API sent nothing for ${timeoutMs}ms (${url.pathname}).`),
+				),
+			)
+			request.on('error', reject)
+			const { signal } = init
+			if (signal) {
+				const abort = () => request.destroy(abortError(signal.reason))
+				if (signal.aborted) {
+					abort()
+				} else {
+					signal.addEventListener('abort', abort, { once: true })
+					request.once('close', () => signal.removeEventListener('abort', abort))
+				}
+			}
+			request.end(body ?? undefined)
+		})
+	}
+}
+
+type Transport = { agent: HttpAgent; request: typeof httpRequest }
+type Transports = { 'http:': Transport; 'https:': Transport }
+
+async function loadTransports(useEnvProxy: boolean): Promise<Transports> {
+	const [http, https] = await Promise.all([import('node:http'), import('node:https')])
+	const agentOptions = { keepAlive: true, ...(useEnvProxy ? { proxyEnv: process.env } : {}) }
+	return {
+		'http:': { agent: unrefFreeSockets(new http.Agent(agentOptions)), request: http.request },
+		'https:': { agent: unrefFreeSockets(new https.Agent(agentOptions)), request: https.request },
+	}
+}
+
+/** Keep-alive free sockets must not pin the event loop after the last request. */
+function unrefFreeSockets(agent: HttpAgent): HttpAgent {
+	agent.on('free', (socket) => {
+		socket.unref()
+	})
+	return agent
+}
+
+function abortError(reason: unknown): Error {
+	if (reason instanceof Error) return reason
+	return new DOMException(
+		typeof reason === 'string' ? reason : 'This operation was aborted',
+		'AbortError',
+	)
+}
+
+function toResponse(response: IncomingMessage, body: Buffer): Response {
+	const headers = new Headers()
+	for (const [name, value] of Object.entries(response.headers)) {
+		if (Array.isArray(value)) {
+			for (const entry of value) headers.append(name, entry)
+		} else if (value !== undefined) {
+			headers.set(name, value)
+		}
+	}
+	const status = response.statusCode ?? 0
+	const bodyless = status === 204 || status === 205 || status === 304
+	return new Response(bodyless ? null : body, {
+		status,
+		statusText: response.statusMessage ?? '',
+		headers,
+	})
+}
+
+let defaultCapabilityProxyFetch: typeof fetch | null = null
+
+function capabilityProxyFetch(): typeof fetch {
+	defaultCapabilityProxyFetch ??= createCapabilityProxyFetch()
+	return defaultCapabilityProxyFetch
 }
 
 export type CapabilityProxySession = {
@@ -101,10 +217,9 @@ export type CapabilityProxyCall = {
 export type CapabilityProxyClientInput = {
 	apiUrl: string
 	token: string
+	/** Defaults to the shared `createCapabilityProxyFetch()` sender. */
 	fetchFn?: typeof fetch
 	signal?: AbortSignal
-	/** Defaults to the shared Agent from `createCapabilityProxyAgent()`. */
-	dispatcher?: Dispatcher
 }
 
 export class CapabilityProxyError extends Error {
@@ -210,7 +325,6 @@ export async function checkCredentialCallMap(
 		token: input.token,
 		fetchFn: input.fetchFn,
 		signal: input.signal,
-		dispatcher: input.dispatcher,
 		path: ['kody', 'credentialClientCheck'],
 		args: [args],
 		conversationId: input.conversationId,
@@ -236,13 +350,10 @@ async function send(
 	url: URL,
 	init: RequestInit,
 ): Promise<Response> {
-	const fetchFn = input.fetchFn ?? fetch
-	// Global fetch on Node 22+ (bundled undici 6–8) accepts undici 7 dispatchers.
-	const dispatcherInit = { dispatcher: input.dispatcher ?? (await capabilityProxyAgent()) }
+	const fetchFn = input.fetchFn ?? capabilityProxyFetch()
 	try {
 		return await fetchFn(url, {
 			...init,
-			...dispatcherInit,
 			signal: input.signal,
 			headers: {
 				...(init.headers as Record<string, string> | undefined),

@@ -210,12 +210,14 @@ npx @kodycodes/cli execute --local --credential github=work --credential resend=
   imports `kody:@…`, it also calls `POST /v1/local-execute/package-graph` to
   download stamped package modules for local embedding
   ([platform issue](https://github.com/kentcdodds/kody/issues/2808)).
-  CapabilityProxy requests use a dedicated HTTP agent that waits up to 7
-  minutes for headers and between body chunks. Origin's 5-minute deadline for
-  a `fetch` with `{{secret:…}}` placeholders ends that call first, with its own
-  error. Node's default 300-second limit no longer cuts it short. With
-  `NODE_USE_ENV_PROXY=1` or `--use-env-proxy`, these requests still honor
-  `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`, like Node's own fetch.
+  CapabilityProxy requests go through Node's own `node:http(s)` client with
+  one keep-alive connection and a 7-minute idle limit for headers and body
+  chunks. Origin's 5-minute deadline for a `fetch` with `{{secret:…}}`
+  placeholders ends that call first, with its own error. Node's default
+  300-second fetch limit no longer cuts it short. With `NODE_USE_ENV_PROXY=1`
+  or `--use-env-proxy`, these requests honor `HTTP_PROXY` / `HTTPS_PROXY` /
+  `NO_PROXY` like Node's own fetch (Node 22.21 / 24.5 or later; older Node
+  fails with a clear error instead of silently bypassing the proxy).
   A PR preview's API host is `https://kody-pr-<n>-api.<subdomain>.workers.dev`;
   the app origin (`kody-pr-<n>`) answers `/v1/*` with an HTML 404.
 - **Errors:** an expired/revoked token or an account without the

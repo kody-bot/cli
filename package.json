@@ -53,8 +53,7 @@
 		"@napi-rs/keyring": "^2.1.0",
 		"add-mcp": "^2.4.0",
 		"esbuild": "^0.25.12",
-		"ps-list": "^9.0.0",
-		"undici": "^7.30.0"
+		"ps-list": "^9.0.0"
 	},
 	"devDependencies": {
 		"@types/node": "^24.5.2",

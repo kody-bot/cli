@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -473,23 +475,49 @@ test('--org is login-only and requires a slug', async () => {
 	assert.match(stderr, /kody login --org acme/)
 })
 
+type ApiStub = {
+	apiUrl: string
+	requests: Array<{ method: string; url: string; authorization: string | null }>
+	close: () => Promise<void>
+}
+
+/** Loopback stand-in for api.kody.codes; CapabilityProxy requests go over node:http. */
+async function startApiStub(
+	respond: (request: { method: string; url: string }) => { status: number; body: unknown },
+): Promise<ApiStub> {
+	const requests: ApiStub['requests'] = []
+	const server = createServer((request, response) => {
+		request.resume()
+		const entry = {
+			method: request.method ?? '',
+			url: request.url ?? '',
+			authorization: request.headers.authorization ?? null,
+		}
+		requests.push(entry)
+		const { status, body } = respond(entry)
+		response.writeHead(status, { 'content-type': 'application/json' })
+		response.end(JSON.stringify(body))
+	})
+	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+	const { port } = server.address() as AddressInfo
+	return {
+		apiUrl: `http://127.0.0.1:${port}`,
+		requests,
+		close: async () => {
+			server.closeAllConnections()
+			await new Promise<void>((resolve) => server.close(() => resolve()))
+		},
+	}
+}
+
 test('execute with --token (no --local) uses CapabilityProxy and never requires login', async () => {
 	const previousMcpUrl = process.env.KODY_MCP_URL
 	process.env.KODY_MCP_URL = 'http://127.0.0.1:9/unreachable-mcp'
-	const calls: Array<string> = []
-	const fetchFn = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-		const url = String(input)
-		calls.push(`${(init?.method ?? 'GET').toUpperCase()} ${url}`)
-		if (url.includes('/session')) {
-			return new Response(JSON.stringify({ scopes: ['local-execute'] }), { status: 200 })
-		}
-		return new Response(
-			JSON.stringify({ result: { ok: true, result: { cloud: true }, logs: [] } }),
-			{ status: 200 },
-		)
-	}) as typeof fetch
-	const previousFetch = globalThis.fetch
-	globalThis.fetch = fetchFn
+	const api = await startApiStub((request) =>
+		request.url.includes('/session')
+			? { status: 200, body: { scopes: ['local-execute'] } }
+			: { status: 200, body: { result: { ok: true, result: { cloud: true }, logs: [] } } },
+	)
 	let stdout = ''
 	let stderr = ''
 	try {
@@ -499,7 +527,7 @@ test('execute with --token (no --local) uses CapabilityProxy and never requires 
 				'--token',
 				'tok',
 				'--api-url',
-				'https://api.kody.codes',
+				api.apiUrl,
 				'--code',
 				'export default async () => ({ cloud: true })',
 			],
@@ -507,17 +535,13 @@ test('execute with --token (no --local) uses CapabilityProxy and never requires 
 		)
 		assert.equal(code, 0, stderr)
 	} finally {
-		globalThis.fetch = previousFetch
+		await api.close()
 		if (previousMcpUrl === undefined) delete process.env.KODY_MCP_URL
 		else process.env.KODY_MCP_URL = previousMcpUrl
 	}
 	assert.deepEqual(JSON.parse(stdout), { cloud: true })
-	assert.ok(calls.some((call) => call.includes('/v1/capability-proxy/session')))
-	assert.ok(calls.some((call) => call.includes('/v1/capability-proxy/call')))
-	assert.equal(
-		calls.some((call) => call.includes('unreachable-mcp')),
-		false,
-	)
+	assert.ok(api.requests.some((request) => request.url === '/v1/capability-proxy/session'))
+	assert.ok(api.requests.some((request) => request.url === '/v1/capability-proxy/call'))
 })
 
 test('execute without token or login prompts clearly', async () => {
@@ -580,23 +604,15 @@ test('execute --local with login (no API token) sends OAuth access token as Bear
 	const xdg = mkdtempSync(join(tmpdir(), 'kody-cli-login-local-'))
 	process.env.XDG_CONFIG_HOME = xdg
 	delete process.env.KODY_API_TOKEN
-	const mcpUrl = 'https://login-local.test/mcp'
+	// Loopback API origins pair only with a loopback MCP origin; the stored login is fresh, so it is never contacted.
+	const mcpUrl = 'http://127.0.0.1:9/mcp'
 	process.env.KODY_MCP_URL = mcpUrl
 	const credentials = sampleLoginCredentials({ mcpUrl, resource: mcpUrl })
 	saveCredentials(credentials, createFileBackend(fileStorePath(mcpUrl)))
-
-	const bearers: Array<string> = []
-	const previousFetch = globalThis.fetch
-	globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-		const headers = new Headers(init?.headers)
-		bearers.push(headers.get('authorization') ?? '')
-		return new Response(
-			JSON.stringify({
-				error: { code: 'feature_disabled', message: 'local-execute is off' },
-			}),
-			{ status: 403 },
-		)
-	}) as typeof fetch
+	const api = await startApiStub(() => ({
+		status: 403,
+		body: { error: { code: 'feature_disabled', message: 'local-execute is off' } },
+	}))
 
 	let stderr = ''
 	try {
@@ -607,7 +623,7 @@ test('execute --local with login (no API token) sends OAuth access token as Bear
 				'--mcp-url',
 				mcpUrl,
 				'--api-url',
-				'https://api.login-local.test',
+				api.apiUrl,
 				'--code',
 				'export default () => 1',
 			],
@@ -615,7 +631,7 @@ test('execute --local with login (no API token) sends OAuth access token as Bear
 		)
 		assert.equal(code, 1)
 	} finally {
-		globalThis.fetch = previousFetch
+		await api.close()
 		if (previousToken === undefined) delete process.env.KODY_API_TOKEN
 		else process.env.KODY_API_TOKEN = previousToken
 		if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME
@@ -623,7 +639,10 @@ test('execute --local with login (no API token) sends OAuth access token as Bear
 		if (previousMcpUrl === undefined) delete process.env.KODY_MCP_URL
 		else process.env.KODY_MCP_URL = previousMcpUrl
 	}
-	assert.deepEqual(bearers, [`Bearer ${credentials.accessToken}`])
+	assert.deepEqual(
+		api.requests.map((request) => request.authorization),
+		[`Bearer ${credentials.accessToken}`],
+	)
 	assert.match(stderr, /feature_disabled[\s\S]*local-execute/)
 	assert.equal(stderr.includes(credentials.accessToken), false)
 })
@@ -645,18 +664,10 @@ test('execute --local prefers --token over a stored login session', async () => 
 		}),
 		createFileBackend(fileStorePath(mcpUrl)),
 	)
-
-	const bearers: Array<string> = []
-	const previousFetch = globalThis.fetch
-	globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-		bearers.push(new Headers(init?.headers).get('authorization') ?? '')
-		return new Response(
-			JSON.stringify({
-				error: { code: 'feature_disabled', message: 'local-execute is off' },
-			}),
-			{ status: 403 },
-		)
-	}) as typeof fetch
+	const api = await startApiStub(() => ({
+		status: 403,
+		body: { error: { code: 'feature_disabled', message: 'local-execute is off' } },
+	}))
 
 	let stderr = ''
 	try {
@@ -669,7 +680,7 @@ test('execute --local prefers --token over a stored login session', async () => 
 				'--mcp-url',
 				mcpUrl,
 				'--api-url',
-				'https://api.kody.codes',
+				api.apiUrl,
 				'--code',
 				'export default () => 1',
 			],
@@ -677,7 +688,7 @@ test('execute --local prefers --token over a stored login session', async () => 
 		)
 		assert.equal(code, 1)
 	} finally {
-		globalThis.fetch = previousFetch
+		await api.close()
 		if (previousToken === undefined) delete process.env.KODY_API_TOKEN
 		else process.env.KODY_API_TOKEN = previousToken
 		if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME
@@ -685,15 +696,30 @@ test('execute --local prefers --token over a stored login session', async () => 
 		if (previousMcpUrl === undefined) delete process.env.KODY_MCP_URL
 		else process.env.KODY_MCP_URL = previousMcpUrl
 	}
-	assert.deepEqual(bearers, ['Bearer kody_at_explicit'])
+	assert.deepEqual(
+		api.requests.map((request) => request.authorization),
+		['Bearer kody_at_explicit'],
+	)
 	assert.match(stderr, /feature_disabled/)
 })
 
 test('execute token paths surface feature_disabled and insufficient_scope', async () => {
 	const previousToken = process.env.KODY_API_TOKEN
 	delete process.env.KODY_API_TOKEN
-	const previousFetch = globalThis.fetch
-	const moduleArgs = ['--api-url', 'https://api.kody.codes', '--code', 'export default () => 1']
+	let statusBody: unknown = null
+	const server = createServer((request, response) => {
+		request.resume()
+		response.writeHead(403, { 'content-type': 'application/json' })
+		response.end(JSON.stringify(statusBody))
+	})
+	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+	const { port } = server.address() as AddressInfo
+	const moduleArgs = [
+		'--api-url',
+		`http://127.0.0.1:${port}`,
+		'--code',
+		'export default () => 1',
+	]
 	const cases: Array<{ args: Array<string>; statusBody: unknown; pattern: RegExp }> = [
 		{
 			args: ['execute', '--local', '--token', 'tok', ...moduleArgs],
@@ -730,11 +756,7 @@ test('execute token paths surface feature_disabled and insufficient_scope', asyn
 	]
 	try {
 		for (const entry of cases) {
-			globalThis.fetch = (async () =>
-				new Response(JSON.stringify(entry.statusBody), {
-					status: 403,
-					headers: { 'content-type': 'application/json' },
-				})) as typeof fetch
+			statusBody = entry.statusBody
 			let stderr = ''
 			const code = await runCli(entry.args, {
 				stdout: () => {},
@@ -744,7 +766,8 @@ test('execute token paths surface feature_disabled and insufficient_scope', asyn
 			assert.match(stderr, entry.pattern)
 		}
 	} finally {
-		globalThis.fetch = previousFetch
+		server.closeAllConnections()
+		await new Promise<void>((resolve) => server.close(() => resolve()))
 		if (previousToken === undefined) delete process.env.KODY_API_TOKEN
 		else process.env.KODY_API_TOKEN = previousToken
 	}
