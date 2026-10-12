@@ -23,8 +23,12 @@ import { readPackageVersion } from './package-info.js'
  * a Bearer from `--token` / `KODY_API_TOKEN` or (when unset) `kody login`
  * OAuth access token.
  *
- * - `GET  /v1/capability-proxy/session` validates the token before workerd
- *   starts. 200 → `{ scopes?: string[], expiresAt?: string, features?: string[] }`.
+ * - `GET  /v1/capability-proxy/session` validates the token up front for
+ *   token-only cloud execute (and local `--credential` feature detection).
+ *   200 → `{ scopes?: string[], expiresAt?: string, features?: string[] }`.
+ *   Ordinary local execute skips it: `POST /v1/local-execute/package-graph`
+ *   runs the same authentication and `org:execute` authorization and is needed
+ *   anyway.
  * - `POST /v1/capability-proxy/call` with
  *   `{ path, args, conversationId?, credentials? }` where `path` is the runtime
  *   property path (`['kody', 'emailSend']`, `['kody', 'mcp', server, tool]`,

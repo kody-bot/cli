@@ -204,12 +204,12 @@ npx @kodycodes/cli execute --local --credential github=work --credential resend=
   `KODY_WORKERD_PATH` at your own binary. No Docker required. Linux and macOS
   (x64/arm64) only for now.
 - **API:** `https://api.kody.codes` by default (`--api-url` or `KODY_API_URL`
-  to override). The CLI calls `GET /v1/capability-proxy/session` before
-  starting workerd and `POST /v1/capability-proxy/call` with
-  `{ path, args, conversationId? }` for each runtime call. When the module
-  imports `kody:@…`, it also calls `POST /v1/local-execute/package-graph` to
-  download stamped package modules for local embedding
-  ([platform issue](https://github.com/kentcdodds/kody/issues/2808)).
+  to override). The CLI calls `POST /v1/local-execute/package-graph` before
+  starting workerd (it authenticates the bearer and, when the module imports
+  `kody:@…`, downloads stamped package modules for local embedding,
+  [platform issue](https://github.com/kentcdodds/kody/issues/2808)) and
+  `POST /v1/capability-proxy/call` with `{ path, args, conversationId? }` for
+  each runtime call.
   CapabilityProxy requests go through Node's own `node:http(s)` client with
   one keep-alive connection and a 7-minute idle limit for headers and body
   chunks. Origin's 5-minute deadline for a `fetch` with `{{secret:…}}`

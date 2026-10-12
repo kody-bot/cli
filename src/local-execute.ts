@@ -69,7 +69,7 @@ export type LocalExecuteInput = {
 	credentials?: CredentialCallMapInput
 	token: string
 	apiUrl: string
-	/** Used for CapabilityProxy requests (session + proxied calls). */
+	/** Used for the package-graph request and proxied CapabilityProxy calls. */
 	fetchFn?: typeof fetch
 	/** Skip the pinned download and run this workerd binary. */
 	workerdPath?: string
@@ -98,10 +98,11 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 			? await bundleLocalUserModule(input.modulePath)
 			: input.code
 	const client = { apiUrl: input.apiUrl, token: input.token, fetchFn: input.fetchFn }
-	const session = await openCapabilityProxySession(client)
-	assertCredentialCallMapSupported(session, input)
-
+	// Skip the session preflight on the hot path (package-graph authenticates).
+	// `--credential` still opens a session for feature detection + call-map check.
 	if (input.credentials) {
+		const session = await openCapabilityProxySession(client)
+		assertCredentialCallMapSupported(session, input)
 		input.onStatus?.('Checking --credential picks against CapabilityProxy…')
 		const { warnings } = await checkCredentialCallMap({
 			...client,

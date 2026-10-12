@@ -4,6 +4,7 @@ import {
 	type CapabilityProxyClientInput,
 } from './capability-proxy.js'
 import {
+	featureDisabledMessage,
 	insufficientScopeMessage,
 	isScopedApiToken,
 	readInsufficientScopeDetails,
@@ -210,7 +211,7 @@ function describePackageGraphFailure(
 	}
 	if (code === 'feature_disabled') {
 		return new LocalPackageGraphError(
-			`Kody returned feature_disabled while fetching the local package graph.${detail}`,
+			`${featureDisabledMessage()}${detail}`,
 			{ status, code },
 		)
 	}
