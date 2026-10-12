@@ -10,7 +10,8 @@ Usage:
   kody login [--mcp-url <url>] [--org <slug>] [--no-browser]
   kody logout [--mcp-url <url>] [--api-url <url>]
   kody status [--mcp-url <url>] [--api-url <url>]
-  kody auth bootstrap --code <kody_bc_…> (--lifetime short|long | --idle-ttl-seconds <n> --max-lifetime-seconds <n>) [--api-url <url>]
+  kody auth bootstrap (--code <kody_bc_…> | --scopes <list>) (--lifetime short|long | --idle-ttl-seconds <n> --max-lifetime-seconds <n>)
+                      [--token <token>] [--mcp-url <url>] [--api-url <url>]
   kody whoami [--mcp-url <url>] [--token <token>] [--api-url <url>] [--json]
   kody search [query] [--entity <ref>] [--domain <id>] [--limit <n>] [--token <token>] [--api-url <url>] [--json]
   kody api <operationId> [--params <json>] [--token <token>] [--api-url <url>] [--json]
@@ -43,6 +44,21 @@ Usage:
              already on MCP. Interactive humans can use \`kody login\`
              instead. Do not call \`kody api cliCredentialBootstrapRedeem\`
              — that would print the token.
+
+  --scopes <list>
+             Opt in to scopes beyond the cliCredentialBootstrap defaults
+             (comma- or space-separated, e.g.
+             \`--scopes org:execute,org:read,package:read,package:write\`).
+             The list replaces the defaults, so include every scope you
+             need. Instead of \`--code\`, the CLI mints the code itself by
+             passing \`scopes\` to cliCredentialBootstrap, then redeems and
+             stores it. It mints with \`--token\` if given, else the
+             \`kody login\` session (any scope your org role grants), else
+             ${apiTokenEnvVar} / a stored token (only scopes that token
+             already holds). A bootstrap code's scopes are fixed when it is
+             minted, so \`--code\` with \`--scopes\` is an error. Defaults
+             stay least-privilege; \`insufficient_scope\` errors print the
+             exact \`--scopes\` command to run.
 
   api        Call one Open API operation by operationId + flat --params
              JSON (same shape as the MCP \`api\` tool). Uses scoped API

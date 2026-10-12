@@ -15,7 +15,7 @@ import { redactError } from './redact.js'
 import type { SecretBackend } from './store.js'
 
 export type CallToolInput = {
-	name: 'search' | 'execute'
+	name: 'search' | 'execute' | 'api'
 	args: Record<string, unknown>
 	mcpUrl?: string
 	backend?: SecretBackend
@@ -96,6 +96,43 @@ async function invoke(
 	}
 }
 
+/**
+ * Call one operation through the Kody MCP `api` tool as the `kody login`
+ * session and return its `structuredContent.result`. Throws the platform error
+ * message when the tool reports `isError`.
+ */
+export async function callKodyApiOperation(input: {
+	operationId: string
+	params: Record<string, unknown>
+	mcpUrl?: string
+	backend?: SecretBackend
+	fetchFn?: typeof fetch
+}): Promise<unknown> {
+	const result = await callKodyTool({
+		name: 'api',
+		args: { operationId: input.operationId, params: input.params },
+		mcpUrl: input.mcpUrl,
+		backend: input.backend,
+		fetchFn: input.fetchFn,
+	})
+	const structured = isRecord(result.structuredContent) ? result.structuredContent : null
+	if (result.isError) {
+		const error = structured && isRecord(structured.error) ? structured.error : null
+		const message =
+			error && typeof error.message === 'string'
+				? error.message
+				: result.content
+						.map((part) => (typeof part.text === 'string' ? part.text : ''))
+						.join('\n')
+						.trim()
+		throw new Error(message || `Kody api ${input.operationId} failed.`)
+	}
+	if (!structured || !('result' in structured)) {
+		throw new Error(`Kody api ${input.operationId} returned no result.`)
+	}
+	return structured.result
+}
+
 export async function listKodyTools(input: {
 	mcpUrl?: string
 	backend?: SecretBackend
@@ -169,4 +206,8 @@ function withOpenidScopeHint(error: unknown, scope: string | undefined): Error {
 		return new Error(`${redacted.message}\n${missingOpenidReloginHint}`)
 	}
 	return redacted
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === 'object' && !Array.isArray(value)
 }

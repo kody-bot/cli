@@ -1,4 +1,4 @@
-import { insufficientScopeMessage } from './api-token.js'
+import { insufficientScopeMessage, readInsufficientScopeDetails } from './api-token.js'
 import { apiTokenEnvVar, cliName, defaultApiUrl } from './defaults.js'
 import { assertTokenSafeApiUrl, capabilityProxyUrl } from './capability-proxy.js'
 import { describeNetworkError } from './network-error.js'
@@ -430,14 +430,8 @@ function describeOpenApiFailure(status: number, body: unknown, url: URL): OpenAp
 		)
 	}
 	if (status === 403 && code === 'insufficient_scope') {
-		const required =
-			isRecord(body) && isRecord(body.error) && isRecord(body.error.details)
-				? body.error.details.required_scope
-				: null
 		return new OpenApiError(
-			`${insufficientScopeMessage({
-				requiredScope: typeof required === 'string' ? required : null,
-			})}${detail}`,
+			`${insufficientScopeMessage(readInsufficientScopeDetails(body))}${detail}`,
 			{ status, code },
 		)
 	}

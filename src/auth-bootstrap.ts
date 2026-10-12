@@ -304,6 +304,105 @@ export async function authBootstrap(input: {
 	}
 }
 
+export const cliCredentialBootstrapOperationId = 'cliCredentialBootstrap'
+
+export type BootstrapMintResponse = {
+	bootstrap_code: string
+	scopes: Array<string>
+	idle_ttl_seconds: number
+	max_lifetime_seconds: number
+}
+
+/**
+ * Parse `--scopes`. Comma- or space-separated, deduped, order kept. The list
+ * replaces cliCredentialBootstrap's default scopes; the server validates names.
+ */
+export function parseCliScopesFlag(raw: string | undefined): Array<string> | undefined {
+	if (raw === undefined) return undefined
+	const scopes = [
+		...new Set(
+			raw
+				.split(/[\s,]+/)
+				.map((scope) => scope.trim())
+				.filter(Boolean),
+		),
+	]
+	if (scopes.length === 0) {
+		throw new Error('--scopes needs at least one scope (e.g. --scopes org:execute,package:write).')
+	}
+	return scopes
+}
+
+/** cliCredentialBootstrap params for an explicit scope list and lifetime. */
+export function bootstrapMintParams(
+	scopes: ReadonlyArray<string>,
+	lifetime: ResolvedCliTokenLifetime,
+): Record<string, unknown> {
+	return {
+		scopes: [...scopes],
+		...bootstrapMintLifetimeFields(lifetime),
+	}
+}
+
+export function bootstrapMintLifetimeFields(
+	lifetime: ResolvedCliTokenLifetime,
+): Record<string, string | number> {
+	return lifetime.kind === 'alias'
+		? { lifetime: lifetime.lifetime }
+		: {
+				idle_ttl_seconds: lifetime.idleTtlSeconds,
+				max_lifetime_seconds: lifetime.maxLifetimeSeconds,
+			}
+}
+
+export function parseBootstrapMintResponse(body: unknown): BootstrapMintResponse {
+	if (
+		!isRecord(body) ||
+		typeof body.bootstrap_code !== 'string' ||
+		typeof body.idle_ttl_seconds !== 'number' ||
+		typeof body.max_lifetime_seconds !== 'number'
+	) {
+		throw new Error('cliCredentialBootstrap returned an unexpected response.')
+	}
+	return {
+		bootstrap_code: body.bootstrap_code,
+		scopes: Array.isArray(body.scopes)
+			? body.scopes.filter((scope): scope is string => typeof scope === 'string')
+			: [],
+		idle_ttl_seconds: body.idle_ttl_seconds,
+		max_lifetime_seconds: body.max_lifetime_seconds,
+	}
+}
+
+/**
+ * Mint a bootstrap code with explicit `scopes` through the caller's current
+ * Kody credential, then redeem and store it like `authBootstrap`. Redeems with
+ * the minted idle/max seconds because the server may clamp the max lifetime to
+ * a parent API token's remaining lifetime.
+ */
+export async function authBootstrapWithScopes(input: {
+	scopes: ReadonlyArray<string>
+	lifetime: ResolvedCliTokenLifetime
+	mint: (params: Record<string, unknown>) => Promise<unknown>
+	apiUrl?: string
+	fetchFn?: typeof fetch
+	backend?: SecretBackend
+	resolution?: StoreResolution
+}): Promise<Awaited<ReturnType<typeof authBootstrap>>> {
+	const minted = parseBootstrapMintResponse(
+		await input.mint(bootstrapMintParams(input.scopes, input.lifetime)),
+	)
+	return authBootstrap({
+		code: minted.bootstrap_code,
+		idleTtlSeconds: minted.idle_ttl_seconds,
+		maxLifetimeSeconds: minted.max_lifetime_seconds,
+		apiUrl: input.apiUrl,
+		fetchFn: input.fetchFn,
+		backend: input.backend,
+		resolution: input.resolution,
+	})
+}
+
 function readRequiredInteger(input: {
 	value: number
 	min: number

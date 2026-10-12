@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util'
 import { readFile } from 'node:fs/promises'
 import {
+	cliBootstrapMintCall,
 	hasExplicitTokenFlag,
 	requireApiToken,
 	resolveScopedApiToken,
@@ -11,15 +12,20 @@ import {
 } from './api-token-store.js'
 import {
 	authBootstrap,
+	authBootstrapWithScopes,
+	bootstrapMintLifetimeFields,
+	cliCredentialBootstrapOperationId,
 	parseCliLifetimeSecondsFlag,
+	parseCliScopesFlag,
 	resolveCliTokenLifetime,
+	type ResolvedCliTokenLifetime,
 } from './auth-bootstrap.js'
 import { defaultApiUrl, defaultMcpUrl, modernMcpProtocolVersion } from './defaults.js'
 import { usage } from './help.js'
 import { ensureFreshCredentials, login } from './auth.js'
 import { orgSlugFromFlag } from './oauth-provider.js'
 import { deleteCredentials, loadCredentials } from './store.js'
-import { callKodyTool, formatToolResult, listKodyTools } from './mcp.js'
+import { callKodyApiOperation, callKodyTool, formatToolResult, listKodyTools } from './mcp.js'
 import { runInstall } from './install.js'
 import { resolveLocalExecuteBearer } from './local-execute-auth.js'
 import { runLocalExecute } from './local-execute.js'
@@ -42,11 +48,13 @@ export {
 export { resolveLocalExecuteBearer } from './local-execute-auth.js'
 export {
 	authBootstrap,
+	authBootstrapWithScopes,
 	bootstrapRedeemRequestBody,
 	cliTokenLifetimeAliases,
 	cliTokenLifetimeMissingError,
 	cliTokenLifetimePolicy,
 	parseCliLifetimeSecondsFlag,
+	parseCliScopesFlag,
 	redeemBootstrapCode,
 	resolveCliTokenLifetime,
 } from './auth-bootstrap.js'
@@ -101,6 +109,7 @@ function parseKnown(args: Array<string>) {
 			lifetime: { type: 'string' },
 			'idle-ttl-seconds': { type: 'string' },
 			'max-lifetime-seconds': { type: 'string' },
+			scopes: { type: 'string' },
 			project: { type: 'boolean' },
 			'no-browser': { type: 'boolean' },
 			org: { type: 'string' },
@@ -279,14 +288,17 @@ async function dispatch(
 			const action = parsed.positionals[0]
 			if (action !== 'bootstrap') {
 				throw new Error(
-					'Usage: kody auth bootstrap --code <kody_bc_…> (--lifetime short|long | --idle-ttl-seconds <n> --max-lifetime-seconds <n>) [--api-url <url>]',
+					'Usage: kody auth bootstrap (--code <kody_bc_…> | --scopes <list>) (--lifetime short|long | --idle-ttl-seconds <n> --max-lifetime-seconds <n>) [--api-url <url>]',
 				)
 			}
 			const code =
 				typeof parsed.values.code === 'string' ? parsed.values.code.trim() : ''
-			if (!code) {
+			const scopes = parseCliScopesFlag(
+				typeof parsed.values.scopes === 'string' ? parsed.values.scopes : undefined,
+			)
+			if (!code && !scopes) {
 				throw new Error(
-					'Provide --code <kody_bc_…> from cliCredentialBootstrap (MCP api / kody.cliCredentialBootstrap).',
+					'Provide --code <kody_bc_…> from cliCredentialBootstrap (MCP api / kody.cliCredentialBootstrap), or --scopes <list> to mint one with the current kody login session or API token.',
 				)
 			}
 			const lifetime = resolveCliTokenLifetime({
@@ -313,23 +325,41 @@ async function dispatch(
 						? parsed.values['api-url']
 						: undefined,
 			})
-			const result = await authBootstrap({
-				code,
-				apiUrl,
-				...(lifetime.kind === 'alias'
-					? { lifetime: lifetime.lifetime }
-					: {
-							idleTtlSeconds: lifetime.idleTtlSeconds,
-							maxLifetimeSeconds: lifetime.maxLifetimeSeconds,
+			if (code && scopes) {
+				throw new Error(
+					`--scopes cannot change a bootstrap code: its scopes are fixed when it is minted. From Kody MCP, call \`${cliBootstrapMintCall(scopes, bootstrapMintLifetimeFields(lifetime))}\` and redeem the new code, or drop --code to mint with the current kody login session or API token.`,
+				)
+			}
+			const result = scopes
+				? await authBootstrapWithScopes({
+						scopes,
+						lifetime,
+						apiUrl,
+						mint: bootstrapMinter({
+							scopes,
+							lifetime,
+							mcpUrl,
+							apiUrl,
+							tokenValues: tokenFlagValues(parsed.values),
 						}),
-			})
-			const scopes = result.stored.scopes?.join(', ') || '(none)'
+					})
+				: await authBootstrap({
+						code,
+						apiUrl,
+						...(lifetime.kind === 'alias'
+							? { lifetime: lifetime.lifetime }
+							: {
+									idleTtlSeconds: lifetime.idleTtlSeconds,
+									maxLifetimeSeconds: lifetime.maxLifetimeSeconds,
+								}),
+					})
+			const storedScopes = result.stored.scopes?.join(', ') || '(none)'
 			write(
 				[
 					`Bootstrap API token stored for execute --local, search, whoami, api, and token-auth cloud execute.`,
 					`api: ${result.stored.apiUrl}`,
 					`token id: ${result.stored.tokenId}`,
-					`scopes: ${scopes}`,
+					`scopes: ${storedScopes}`,
 					`expires: ${result.stored.expiresAt ?? 'unknown'}`,
 					result.backendKind === 'file' && result.backendPath
 						? `OS keychain was unavailable; token saved at ${result.backendPath} (mode 0600).`
@@ -653,6 +683,61 @@ function attachExecuteCommonArgs(
 		args.conversationId = input.conversationId
 	}
 	return args
+}
+
+/**
+ * Pick the credential that mints a scoped bootstrap code: `--token`, else the
+ * `kody login` session (MCP `api`), else KODY_API_TOKEN / a stored token (Open
+ * API). A token can only mint scopes it already holds; a login session can mint
+ * any scope the account's org role grants.
+ */
+function bootstrapMinter(input: {
+	scopes: ReadonlyArray<string>
+	lifetime: ResolvedCliTokenLifetime
+	mcpUrl: string
+	apiUrl: string
+	tokenValues: { token?: string }
+}): (params: Record<string, unknown>) => Promise<unknown> {
+	if (
+		shouldUseApiToken({
+			tokenValues: input.tokenValues,
+			mcpUrl: input.mcpUrl,
+			apiUrl: input.apiUrl,
+			allowEnvWithoutLogin: true,
+		})
+	) {
+		const token = requireApiToken(input.tokenValues, process.env, 'auth bootstrap --scopes', {
+			apiUrl: input.apiUrl,
+		})
+		return async (params) => {
+			try {
+				return await callOpenApiOperation({
+					token,
+					apiUrl: input.apiUrl,
+					operationId: cliCredentialBootstrapOperationId,
+					params,
+				})
+			} catch (error) {
+				if (error instanceof Error && /cannot grant scopes it does not hold/i.test(error.message)) {
+					throw new Error(
+						`${error.message} A token can only mint scopes it already holds. Run \`kody login\` and retry without --token (a login session can mint any scope your org role grants), or from Kody MCP call \`${cliBootstrapMintCall(input.scopes, bootstrapMintLifetimeFields(input.lifetime))}\` and run the returned cli_command.`,
+					)
+				}
+				throw error
+			}
+		}
+	}
+	if (loadCredentials(input.mcpUrl)) {
+		return (params) =>
+			callKodyApiOperation({
+				operationId: cliCredentialBootstrapOperationId,
+				params,
+				mcpUrl: input.mcpUrl,
+			})
+	}
+	throw new Error(
+		`auth bootstrap --scopes mints with your current Kody credential, and none was found. Run \`kody login\` and retry, or from Kody MCP call \`${cliBootstrapMintCall(input.scopes, bootstrapMintLifetimeFields(input.lifetime))}\` and run the returned cli_command.`,
+	)
 }
 
 function tokenFlagValues(values: ReturnType<typeof parseKnown>['values']): {

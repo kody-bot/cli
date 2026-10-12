@@ -98,9 +98,13 @@ CapabilityProxy / package-graph
 scoped token with the MCP `api` tool `tokenCreate` — include `local-execute`
 plus the capability scopes the module calls — and pass `--token` or
 `KODY_API_TOKEN`. If none of those are available, the CLI error says that
-(bootstrap → login → tokenCreate for CI). `insufficient_scope` means the
-token is missing a scope; `feature_disabled` means the account
-`local-execute` flag is off. Never read MCP OAuth tokens from the host.
+(bootstrap → login → tokenCreate for CI). `insufficient_scope` names the
+missing scope and prints the exact command to mint a token that adds it:
+`npx @kodycodes/cli auth bootstrap --lifetime short --scopes <list>` after
+`kody login`, or `cliCredentialBootstrap({ lifetime: "short", scopes: [...] })`
+from MCP. Default bootstrap scopes stay least-privilege (no `package:write`),
+and `--scopes` replaces them, so list every scope you need.
+`feature_disabled` means the account `local-execute` flag is off. Never read MCP OAuth tokens from the host.
 
 ```bash
 # Agents on MCP:

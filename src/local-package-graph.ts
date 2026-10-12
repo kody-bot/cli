@@ -3,7 +3,12 @@ import {
 	capabilityProxyUrl,
 	type CapabilityProxyClientInput,
 } from './capability-proxy.js'
-import { isScopedApiToken, rejectedOauthBearerMessage } from './api-token.js'
+import {
+	insufficientScopeMessage,
+	isScopedApiToken,
+	readInsufficientScopeDetails,
+	rejectedOauthBearerMessage,
+} from './api-token.js'
 import { cliName } from './defaults.js'
 import { describeNetworkError } from './network-error.js'
 import { readPackageVersion } from './package-info.js'
@@ -211,7 +216,7 @@ function describePackageGraphFailure(
 	}
 	if (code === 'insufficient_scope') {
 		return new LocalPackageGraphError(
-			`The API token is missing a scope required to fetch the local package graph.${detail}`,
+			`Fetching the local package graph failed. ${insufficientScopeMessage(readInsufficientScopeDetails(body))}${detail}`,
 			{ status, code },
 		)
 	}

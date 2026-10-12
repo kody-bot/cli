@@ -149,20 +149,95 @@ export function rejectedOauthBearerMessage(): string {
 	return `Kody rejected the bearer from \`kody login\`: the Open API still accepts only scoped \`kody_at_…\` API tokens on CapabilityProxy / package-graph (not MCP OAuth). See ${localExecuteOauthPlatformIssueUrl}. Until that lands, ${apiTokenMintInstructions()}`
 }
 
-export function insufficientScopeMessage(input: {
-	requiredScope?: string | null
-	/** CapabilityProxy / package-graph: prefer bootstrap over tokenCreate. */
-	includeLocalExecute?: boolean
-}): string {
-	const required = input.requiredScope ? ` The server requires "${input.requiredScope}".` : ''
-	const mint = input.includeLocalExecute
-		? `${cliBootstrapInstructions()} (lifetime short|long). ${apiTokenMintInstructions()}`
-		: `${cliBootstrapInstructions()} (lifetime short|long). Or for CI/headless, mint with tokenCreate${
-				input.requiredScope
-					? ` that includes "${input.requiredScope}"`
-					: ' that includes the required scope'
-			}, then pass --token or set ${apiTokenEnvVar}.`
-	return `Kody returned insufficient_scope.${required} ${mint}`
+/** What an `insufficient_scope` error body says about the missing scope. */
+export type InsufficientScopeDetails = {
+	requiredScope: string | null
+	/** Full scope list for a replacement token (the caller's scopes plus the missing one). */
+	mintScopes: Array<string> | null
+	/** Platform denial code, e.g. `credential_scope` or `missing_permission`. */
+	denial: string | null
+}
+
+export function readInsufficientScopeDetails(body: unknown): InsufficientScopeDetails {
+	const details =
+		isRecord(body) && isRecord(body.error) && isRecord(body.error.details)
+			? body.error.details
+			: null
+	if (!details) return { requiredScope: null, mintScopes: null, denial: null }
+	const requiredScope =
+		readNonEmptyString(details.required_scope) ??
+		readNonEmptyString(details.required_permission) ??
+		readStringList(details.required_scopes)?.join(', ') ??
+		null
+	return {
+		requiredScope,
+		mintScopes: readStringList(details.mint_scopes),
+		denial: readNonEmptyString(details.denial),
+	}
+}
+
+/** `npx @kodycodes/cli auth bootstrap --lifetime short --scopes a,b` */
+export function cliBootstrapScopesCommand(
+	scopes: ReadonlyArray<string>,
+	lifetimeFlags: string = '--lifetime short',
+): string {
+	return `npx @kodycodes/cli auth bootstrap ${lifetimeFlags} --scopes ${scopes.join(',')}`
+}
+
+/** `cliCredentialBootstrap({ lifetime: "short", scopes: ["a", "b"] })` */
+export function cliBootstrapMintCall(
+	scopes: ReadonlyArray<string>,
+	lifetime: Record<string, string | number> = { lifetime: 'short' },
+): string {
+	const fields = [
+		...Object.entries(lifetime).map(([key, value]) => `${key}: ${JSON.stringify(value)}`),
+		`scopes: [${scopes.map((scope) => JSON.stringify(scope)).join(', ')}]`,
+	]
+	return `cliCredentialBootstrap({ ${fields.join(', ')} })`
+}
+
+export function insufficientScopeMessage(
+	input: Partial<InsufficientScopeDetails> & {
+		/** Scopes the CLI already knows the current token holds. */
+		currentScopes?: ReadonlyArray<string> | null
+	},
+): string {
+	const required = input.requiredScope ?? null
+	if (input.denial === 'missing_permission') {
+		return `Kody returned insufficient_scope: your org role does not grant ${
+			required ? `"${required}"` : 'the required permission'
+		}. A new token cannot add it; an org Owner can grant it.`
+	}
+	if (!required) {
+		return `Kody returned insufficient_scope. Mint a token that includes the missing scope: run \`${cliBootstrapScopesCommand(['<scope>', '…'])}\` after \`kody login\`, or from Kody MCP call \`${cliBootstrapMintCall(['<scope>', '…'])}\` and run its cli_command. Scopes replace the defaults, so list every scope you need. For CI/headless, mint with tokenCreate and pass --token or set ${apiTokenEnvVar}.`
+	}
+	const mintScopes =
+		input.mintScopes && input.mintScopes.length > 0
+			? input.mintScopes
+			: input.currentScopes && input.currentScopes.length > 0
+				? [...new Set([...input.currentScopes, ...required.split(/,\s*/)])].sort()
+				: null
+	if (!mintScopes) {
+		return `Kody returned insufficient_scope: this token is missing "${required}". Mint a token whose scopes include "${required}" plus the ones you already use (scopes replace the defaults): run \`${cliBootstrapScopesCommand(['<current scopes>', required])}\` after \`kody login\`, or from Kody MCP call \`${cliBootstrapMintCall(['<current scopes>', required])}\` and run its cli_command. For CI/headless, mint with tokenCreate including "${required}" and pass --token or set ${apiTokenEnvVar}.`
+	}
+	return `Kody returned insufficient_scope: this token is missing "${required}". Mint one that includes it: run \`${cliBootstrapScopesCommand(mintScopes)}\` after \`kody login\`, or from Kody MCP call \`${cliBootstrapMintCall(mintScopes)}\` and run its cli_command. For CI/headless, mint with tokenCreate using those scopes and pass --token or set ${apiTokenEnvVar}.`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function readNonEmptyString(value: unknown): string | null {
+	return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function readStringList(value: unknown): Array<string> | null {
+	if (!Array.isArray(value)) return null
+	const list = value
+		.filter((item): item is string => typeof item === 'string')
+		.map((item) => item.trim())
+		.filter(Boolean)
+	return list.length > 0 ? list : null
 }
 
 export function featureDisabledMessage(): string {

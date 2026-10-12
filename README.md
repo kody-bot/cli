@@ -64,6 +64,7 @@ Or run via `npx @kodycodes/cli` without a global install.
 | `kody logout` | Deletes stored CLI OAuth credentials and any stored bootstrap/API token. |
 | `kody status` | Shows CLI login / stored API token state without printing secrets. |
 | `kody auth bootstrap --code` | Redeems a one-shot `kody_bc_…` from MCP `cliCredentialBootstrap` and stores the resulting `kody_at_…` for `execute --local` (never prints the token). |
+| `kody auth bootstrap --scopes` | Opt-in extra scopes: mints the code itself by passing `scopes` to `cliCredentialBootstrap` (with `--token`, else the `kody login` session, else a stored token), then redeems and stores it. See [Opt-in scopes](#opt-in-scopes). |
 | `kody whoami` | Confirms the CLI MCP connection and lists tools. With a scoped API token (and no login), shows token identity via the Open API. |
 | `kody search [query]` | Calls Kody `search` from the CLI (prefer the host MCP tool). Token-only auth uses Open API `GET /v1/search`. |
 | `kody api <operationId>` | Thin Open API wrapper matching the MCP `api` tool: `operationId` + flat `--params` JSON. Auth: `--token` / `KODY_API_TOKEN` / stored `auth bootstrap` token. |
@@ -114,12 +115,39 @@ npx @kodycodes/cli api usageGet --params '{}'
   until then use bootstrap or a scoped `kody_at_…` token.
 - Wrong/expired token → 401 with a mint-fresh-token message (or the OAuth
   platform-gap message when the bearer is login OAuth).
-- Wrong scopes → the error includes `insufficient_scope` and the required
-  scope when Kody sends one.
+- Wrong scopes → the error names the missing scope and the exact command to
+  mint a token that adds it (see [Opt-in scopes](#opt-in-scopes)). When your
+  org role lacks the permission, it says so instead: a new token cannot add
+  it, and an org Owner has to grant it.
 - Account flag off → the error includes `feature_disabled` and the
   `local-execute` feature flag. Another token does not bypass that flag.
 - Prefer the env var so the token stays out of shell history and `ps`.
 - Never scavenge host MCP OAuth tokens from disk (ADR 0053).
+
+## Opt-in scopes
+
+Bootstrap tokens default to least-privilege local-execute scopes (no
+`package:write`, for example). Opt in to more when a task needs them:
+
+```bash
+# After `kody login` (mints any scope your org role grants):
+npx @kodycodes/cli auth bootstrap --lifetime short \
+  --scopes org:execute,org:read,package:execute,package:read,package:write
+
+# Agents on MCP without `kody login`: pass scopes when minting the code
+# cliCredentialBootstrap({ lifetime: "short", scopes: ["org:execute", "org:read", "package:execute", "package:read", "package:write"] })
+npx @kodycodes/cli auth bootstrap --code 'kody_bc_…' --lifetime short
+```
+
+- `--scopes` replaces the default list, so include every scope you need.
+- The CLI passes the list straight to `cliCredentialBootstrap`. It mints with
+  `--token` when given, else the `kody login` session, else `KODY_API_TOKEN` /
+  the stored token. A token can only mint scopes it already holds.
+- A bootstrap code's scopes are fixed when it is minted, so `--code` with
+  `--scopes` is an error that prints the matching `cliCredentialBootstrap`
+  call.
+- `insufficient_scope` errors print both commands with the full scope list
+  (your current scopes plus the missing one), so you can copy one and retry.
 
 ## Local execute
 

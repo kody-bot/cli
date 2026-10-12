@@ -3,6 +3,7 @@ import {
 	cliBootstrapInstructions,
 	featureDisabledMessage,
 	insufficientScopeMessage,
+	readInsufficientScopeDetails,
 	isScopedApiToken,
 	rejectedOauthBearerMessage,
 } from './api-token.js'
@@ -194,10 +195,7 @@ function describeFailure(
 	}
 	if (code === 'insufficient_scope') {
 		return new CapabilityProxyError(
-			`${insufficientScopeMessage({
-				requiredScope: requiredScopeFrom(body),
-				includeLocalExecute: true,
-			})}${detail}`,
+			`${insufficientScopeMessage(readInsufficientScopeDetails(body))}${detail}`,
 			{ status, code },
 		)
 	}
@@ -217,18 +215,6 @@ function describeFailure(
 		failure?.message ?? `Kody API request failed with HTTP ${status} (${url.pathname}).`,
 		{ status, code },
 	)
-}
-
-function requiredScopeFrom(body: unknown): string | null {
-	if (!isRecord(body) || !isRecord(body.error) || !isRecord(body.error.details)) return null
-	const required = body.error.details.required_scope
-	if (typeof required === 'string' && required.trim()) return required.trim()
-	const requiredList = body.error.details.required_scopes
-	if (!Array.isArray(requiredList)) return null
-	const scopes = requiredList.filter(
-		(scope): scope is string => typeof scope === 'string' && scope.trim().length > 0,
-	)
-	return scopes.length > 0 ? scopes.join(', ') : null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
