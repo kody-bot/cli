@@ -4,7 +4,8 @@ import { resolve } from 'node:path'
 /**
  * Bundle a `--file` entry for local workerd the same way hosted execute /
  * publish resolves code: follow relative imports and npm packages, keep
- * `kody:*` external for package-graph + runtime binding.
+ * `kody:*` external for package-graph + runtime binding, and leave `node:*`
+ * external for workerd `nodejs_compat` (same as unbundled `--code`).
  */
 export async function bundleLocalUserModule(modulePath: string): Promise<string> {
 	const entry = resolve(modulePath)
@@ -20,7 +21,7 @@ export async function bundleLocalUserModule(modulePath: string): Promise<string>
 			target: 'esnext',
 			logLevel: 'silent',
 			packages: 'bundle',
-			external: ['kody:*'],
+			external: ['kody:*', 'node:*'],
 		})
 	} catch (error) {
 		throw new Error(formatBundleError(modulePath, error))

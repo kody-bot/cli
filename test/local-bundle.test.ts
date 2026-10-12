@@ -33,9 +33,10 @@ test('bundleLocalUserModule keeps kody:* imports external', async () => {
 	const dir = writeFixture({
 		'entry.ts': `import type { Foo } from 'kody:@me/pkg/types'
 import { greet } from 'kody:@test/pkg/hello'
+import deep from 'kody:@owner/leaf/a/b/c'
 import { helper } from './helper.js'
 export default async function main(p: { a?: string }): Promise<string> {
-	return greet(helper(p.a ?? 'fallback'))
+	return greet(helper(p.a ?? 'fallback')) + deep
 }
 `,
 		'helper.js': `export function helper(value) { return value }
@@ -43,9 +44,25 @@ export default async function main(p: { a?: string }): Promise<string> {
 	})
 	const source = await bundleLocalUserModule(join(dir, 'entry.ts'))
 	assert.match(source, /from\s+["']kody:@test\/pkg\/hello["']/)
+	assert.match(source, /from\s+["']kody:@owner\/leaf\/a\/b\/c["']/)
 	assert.doesNotMatch(source, /kody:@me\/pkg\/types/)
 	assert.doesNotMatch(source, /from\s+['"]\.\/helper\.js['"]/)
-	assert.deepEqual(listSavedPackageImports(source), ['kody:@test/pkg/hello'])
+	assert.deepEqual(new Set(listSavedPackageImports(source)), new Set([
+		'kody:@owner/leaf/a/b/c',
+		'kody:@test/pkg/hello',
+	]))
+})
+
+test('bundleLocalUserModule keeps node:* imports external for workerd nodejs_compat', async () => {
+	const dir = writeFixture({
+		'entry.mjs': `import { readFile } from 'node:fs/promises'
+import path from 'node:path'
+export default async () => path.join('a', await readFile('x', 'utf8'))
+`,
+	})
+	const source = await bundleLocalUserModule(join(dir, 'entry.mjs'))
+	assert.match(source, /from\s+["']node:fs\/promises["']/)
+	assert.match(source, /from\s+["']node:path["']/)
 })
 
 test('bundleLocalUserModule bundles bare npm imports from node_modules', async () => {
