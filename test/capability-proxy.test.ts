@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import type { AddressInfo } from 'node:net'
+import { connect, type AddressInfo } from 'node:net'
 import { test } from 'node:test'
-import { Agent } from 'undici'
+import { Agent, EnvHttpProxyAgent } from 'undici'
 import {
 	assertTokenSafeApiUrl,
 	callCapabilityProxy,
@@ -10,6 +10,7 @@ import {
 	capabilityProxyHttpTimeoutMs,
 	capabilityProxyUrl,
 	createCapabilityProxyAgent,
+	nodeUsesEnvProxy,
 	openCapabilityProxySession,
 } from '../src/capability-proxy.js'
 
@@ -294,5 +295,64 @@ test('callCapabilityProxy reaches a real server through global fetch and the def
 		assert.deepEqual(result, { ok: true })
 		assert.equal(seen[0]?.url, '/v1/capability-proxy/call')
 		assert.equal(seen[0]?.authorization, `Bearer ${token}`)
+	})
+})
+
+test('nodeUsesEnvProxy mirrors Node\'s NODE_USE_ENV_PROXY / --use-env-proxy opt-in', () => {
+	assert.equal(nodeUsesEnvProxy({}, []), false)
+	assert.equal(nodeUsesEnvProxy({ HTTPS_PROXY: 'http://proxy.test:8080' }, []), false)
+	assert.equal(nodeUsesEnvProxy({ NODE_USE_ENV_PROXY: '1' }, []), true)
+	assert.equal(nodeUsesEnvProxy({}, ['--use-env-proxy']), true)
+	assert.equal(nodeUsesEnvProxy({ NODE_OPTIONS: '--max-old-space-size=4096 --use-env-proxy' }, []), true)
+	assert.ok(createCapabilityProxyAgent(1_000, { useEnvProxy: true }) instanceof EnvHttpProxyAgent)
+	assert.ok(createCapabilityProxyAgent(1_000, { useEnvProxy: false }) instanceof Agent)
+})
+
+test('with env proxy enabled, CapabilityProxy calls go through HTTP_PROXY', async () => {
+	await withDelayedHeadersServer(0, async (apiUrl, seen) => {
+		const proxied: Array<string> = []
+		const proxy = createServer((request, response) => {
+			proxied.push(`${request.method} ${request.url}`)
+			response.writeHead(502).end()
+		})
+		proxy.on('connect', (request, clientSocket, head) => {
+			proxied.push(`CONNECT ${request.url}`)
+			const [host, port] = (request.url ?? '').split(':')
+			const upstream = connect(Number(port), host, () => {
+				clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n')
+				upstream.write(head)
+				upstream.pipe(clientSocket)
+				clientSocket.pipe(upstream)
+			})
+			upstream.on('error', () => clientSocket.destroy())
+			clientSocket.on('error', () => upstream.destroy())
+		})
+		await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve))
+		const { port } = proxy.address() as AddressInfo
+		const previous = { HTTP_PROXY: process.env.HTTP_PROXY, NO_PROXY: process.env.NO_PROXY }
+		process.env.HTTP_PROXY = `http://127.0.0.1:${port}`
+		delete process.env.NO_PROXY
+		const dispatcher = createCapabilityProxyAgent(5_000, { useEnvProxy: true })
+		try {
+			const result = await callCapabilityProxy({
+				apiUrl,
+				token,
+				dispatcher,
+				path: ['kody', 'emailSend'],
+				args: [{}],
+			})
+			assert.deepEqual(result, { ok: true })
+			assert.equal(proxied.length, 1)
+			assert.match(proxied[0] ?? '', new RegExp(`^(CONNECT ${new URL(apiUrl).host}|POST ${apiUrl}/v1/capability-proxy/call)$`))
+			assert.equal(seen[0]?.url, '/v1/capability-proxy/call')
+		} finally {
+			for (const [key, value] of Object.entries(previous)) {
+				if (value === undefined) delete process.env[key]
+				else process.env[key] = value
+			}
+			await dispatcher.destroy()
+			proxy.closeAllConnections()
+			await new Promise<void>((resolve) => proxy.close(() => resolve()))
+		}
 	})
 })

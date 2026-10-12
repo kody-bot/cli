@@ -1,4 +1,4 @@
-import { Agent } from 'undici'
+import { Agent, EnvHttpProxyAgent, type Dispatcher } from 'undici'
 import {
 	apiTokenMintInstructions,
 	cliBootstrapInstructions,
@@ -44,15 +44,33 @@ export const capabilityProxyCallPath = 'v1/capability-proxy/call'
 export const capabilityProxyGatewayDeadlineMs = 5 * 60_000
 export const capabilityProxyHttpTimeoutMs = 7 * 60_000
 
-export function createCapabilityProxyAgent(
-	timeoutMs: number = capabilityProxyHttpTimeoutMs,
-): Agent {
-	return new Agent({ headersTimeout: timeoutMs, bodyTimeout: timeoutMs })
+/**
+ * Node routes global fetch through `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`
+ * only when `NODE_USE_ENV_PROXY=1` or `--use-env-proxy` is set. A dispatcher
+ * passed to fetch replaces that global proxy agent, so mirror the same opt-in.
+ */
+export function nodeUsesEnvProxy(
+	env: NodeJS.ProcessEnv = process.env,
+	execArgv: ReadonlyArray<string> = process.execArgv,
+): boolean {
+	if (env.NODE_USE_ENV_PROXY === '1') return true
+	const flags = [...execArgv, ...(env.NODE_OPTIONS ?? '').split(/\s+/)]
+	return flags.includes('--use-env-proxy')
 }
 
-let defaultCapabilityProxyAgent: Agent | null = null
+export function createCapabilityProxyAgent(
+	timeoutMs: number = capabilityProxyHttpTimeoutMs,
+	options: { useEnvProxy?: boolean } = {},
+): Dispatcher {
+	const timeouts = { headersTimeout: timeoutMs, bodyTimeout: timeoutMs }
+	return (options.useEnvProxy ?? nodeUsesEnvProxy())
+		? new EnvHttpProxyAgent(timeouts)
+		: new Agent(timeouts)
+}
 
-function capabilityProxyAgent(): Agent {
+let defaultCapabilityProxyAgent: Dispatcher | null = null
+
+function capabilityProxyAgent(): Dispatcher {
 	defaultCapabilityProxyAgent ??= createCapabilityProxyAgent()
 	return defaultCapabilityProxyAgent
 }
@@ -74,7 +92,7 @@ export type CapabilityProxyClientInput = {
 	fetchFn?: typeof fetch
 	signal?: AbortSignal
 	/** Defaults to the shared Agent from `createCapabilityProxyAgent()`. */
-	dispatcher?: Agent
+	dispatcher?: Dispatcher
 }
 
 export class CapabilityProxyError extends Error {
@@ -160,7 +178,7 @@ async function send(
 	init: RequestInit,
 ): Promise<Response> {
 	const fetchFn = input.fetchFn ?? fetch
-	// Global fetch on Node 22+ (bundled undici 6–8) accepts this undici 7 Agent as `dispatcher`.
+	// Global fetch on Node 22+ (bundled undici 6–8) accepts undici 7 dispatchers.
 	const dispatcherInit = { dispatcher: input.dispatcher ?? capabilityProxyAgent() }
 	try {
 		return await fetchFn(url, {
