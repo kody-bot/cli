@@ -84,10 +84,11 @@ Usage:
              exchange).
 
   --local    Run the execute module on this machine (workerd, Linux/macOS).
-             Requires Node.js 22 or newer. \`--file\` modules ending in
-             \`.ts\`, \`.mts\`, or \`.cts\` are type-stripped before workerd
-             loads them; syntax that cannot be erased fails with that strip
-             error. Auth: \`--token\` /
+             Requires Node.js 22 or newer. \`--file\` entries are bundled
+             (relative imports and npm packages; \`kody:*\` stays external)
+             before workerd loads them — same shape as hosted execute /
+             publish. Unresolvable imports fail with a clear bundle error.
+             Auth: \`--token\` /
              ${apiTokenEnvVar}, else stored \`auth bootstrap\` token, else
              paired \`kody login\` credentials. Static kody:@… imports are fetched via POST
              /v1/local-execute/package-graph and embedded in local workerd

@@ -34,7 +34,7 @@ import {
 	runSecretHeader,
 	type WorkerdPackageModuleFile,
 } from './local-runtime-source.js'
-import { localUserModuleSource } from './local-typescript.js'
+import { bundleLocalUserModule } from './local-bundle.js'
 import type { ToolCallResult } from './tool-result.js'
 import { redact } from './redact.js'
 import { ensureWorkerdBinary } from './workerd-binary.js'
@@ -49,7 +49,8 @@ export type LocalExecuteInput = {
 	code: string
 	/**
 	 * `--file` path when that file supplied `code`.
-	 * `.ts`, `.mts`, and `.cts` are type-stripped before `main.js` is written.
+	 * Bundled (relative + npm imports; `kody:*` external) before `main.js` is
+	 * written — same resolution shape as hosted execute / publish.
 	 */
 	modulePath?: string
 	params?: unknown
@@ -80,7 +81,10 @@ export const localExecutePackageGraphResolveStatus =
 export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCallResult> {
 	assertLocalExecuteNodeEngine()
 	assertTokenSafeApiUrl(input.apiUrl)
-	const code = localUserModuleSource(input.code, input.modulePath)
+	const code =
+		input.modulePath !== undefined
+			? await bundleLocalUserModule(input.modulePath)
+			: input.code
 	const client = { apiUrl: input.apiUrl, token: input.token, fetchFn: input.fetchFn }
 	await openCapabilityProxySession(client)
 

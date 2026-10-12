@@ -186,12 +186,13 @@ npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.
   `kody_at_…` token in that case.
 - **Node.js:** 22 or newer (`package.json` `engines` is `>=22`). Older Node
   fails immediately with that requirement, before workerd is downloaded or
-  started. Stripping `.ts` / `.mts` / `.cts` files needs Node.js 22.13 or
-  newer (`module.stripTypeScriptTypes`).
-- **TypeScript:** `--file` paths ending in `.ts`, `.mts`, or `.cts` are
-  type-stripped before workerd loads `main.js`. `--code`, stdin (`--file -`),
-  and `.js` files are left as written. Syntax that type erasure cannot remove
-  (such as `enum`) fails with that strip error.
+  started.
+- **Bundling:** `--file` entries are bundled with esbuild before workerd
+  loads `main.js` (relative local imports and bare npm packages from
+  `node_modules`; `kody:*` stays external for package-graph / runtime). That
+  matches hosted execute and publish. Unresolvable imports fail with a clear
+  bundle error before any network call. `--code` and stdin (`--file -`) are
+  left as written (no filesystem graph to follow).
 - **Runtime:** a pinned [workerd](https://github.com/cloudflare/workerd)
   release, downloaded once from GitHub, sha256-verified, and cached under
   `~/.cache/kody` (Linux, or `$XDG_CACHE_HOME/kody`) or

@@ -469,24 +469,29 @@ test(
 	},
 )
 
-test('runLocalExecute rejects non-erasable TypeScript before any network call', async () => {
+test('runLocalExecute rejects unresolvable --file imports before any network call', async () => {
 	reset()
+	const dir = mkdtempSync(join(tmpdir(), 'kody-unresolvable-'))
+	const file = join(dir, 'entry.mjs')
+	writeFileSync(
+		file,
+		`import { missing } from './nope.js'
+export default () => missing
+`,
+	)
 	await assert.rejects(
 		() =>
 			runLocalExecute({
-				code: 'enum Color { Red = 1 }\nexport default () => Color.Red\n',
-				modulePath: 'scan-step.ts',
+				code: 'unused — bundler reads modulePath',
+				modulePath: file,
 				token: goodToken,
 				apiUrl,
 				workerdPath: '/nonexistent/workerd',
 			}),
 		(error: unknown) => {
 			assert.ok(error instanceof Error)
-			assert.match(
-				error.message,
-				/Could not strip TypeScript from scan-step\.ts before local execute wrote main\.js/,
-			)
-			assert.match(error.message, /enum/i)
+			assert.match(error.message, /Could not bundle .+entry\.mjs for local execute/)
+			assert.match(error.message, /Could not resolve|nope\.js/i)
 			return true
 		},
 	)
@@ -494,16 +499,24 @@ test('runLocalExecute rejects non-erasable TypeScript before any network call', 
 })
 
 test(
-	'kody execute --local --file strips TypeScript before workerd loads the module',
+	'kody execute --local --file bundles relative imports and TypeScript before workerd',
 	{ timeout: 180_000 },
 	async () => {
 		reset()
-		const dir = mkdtempSync(join(tmpdir(), 'kody-ts-file-'))
+		const dir = mkdtempSync(join(tmpdir(), 'kody-bundle-file-'))
+		writeFileSync(
+			join(dir, 'helper.ts'),
+			`export function pick(p: { a?: string }): string {
+	return p.a ?? 'fallback'
+}
+`,
+		)
 		const file = join(dir, 'x.ts')
 		writeFileSync(
 			file,
-			`export default async function main(p: { a?: string }) {
-	const value: string = p.a ?? 'fallback'
+			`import { pick } from './helper.js'
+export default async function main(p: { a?: string }) {
+	const value: string = pick(p)
 	return { value }
 }
 `,
