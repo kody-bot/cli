@@ -10,7 +10,10 @@ import {
 	readInsufficientScopeDetails,
 } from '../src/api-token.js'
 import { loadStoredApiToken } from '../src/api-token-store.js'
-import { parseCliScopesFlag } from '../src/auth-bootstrap.js'
+import {
+	parseCliScopesFlag,
+	resolveMintedRedeemLifetime,
+} from '../src/auth-bootstrap.js'
 import { openCapabilityProxySession } from '../src/capability-proxy.js'
 import { runCli } from '../src/cli.js'
 import { modernMcpProtocolVersion } from '../src/defaults.js'
@@ -219,6 +222,60 @@ test('auth bootstrap --scopes with --token mints through the Open API, then rede
 			})
 			assert.match(result.stdout, /scopes: org:execute, package:read, package:write/)
 			assert.doesNotMatch(result.stdout, /kody_at_|kody_bc_/)
+			assert.equal(loadStoredApiToken(apiUrl)?.tokenId, 'tok_scoped_1')
+		},
+	)
+})
+
+test('resolveMintedRedeemLifetime trusts server clamp and coerces idle when max is lower', () => {
+	assert.deepEqual(
+		resolveMintedRedeemLifetime({ idle_ttl_seconds: 3600, max_lifetime_seconds: 86400 }),
+		{ kind: 'explicit', idleTtlSeconds: 3600, maxLifetimeSeconds: 86400 },
+	)
+	assert.deepEqual(
+		resolveMintedRedeemLifetime({ idle_ttl_seconds: 3600, max_lifetime_seconds: 45 }),
+		{ kind: 'explicit', idleTtlSeconds: 45, maxLifetimeSeconds: 45 },
+	)
+})
+
+test('auth bootstrap --scopes redeems server-clamped lifetimes without CLI flag validation', async () => {
+	await withCliEnv(
+		(url) => {
+			if (url.endsWith('/openapi.json')) return json(openApiDocument)
+			if (url.endsWith('/v1/tokens/bootstrap')) {
+				return json({
+					...mintResponse(requestedScopes),
+					// Parent token remaining lifetime clamps max below requested idle
+					// and below the CLI --idle-ttl-seconds minimum (60).
+					idle_ttl_seconds: 3600,
+					max_lifetime_seconds: 45,
+				})
+			}
+			if (url.endsWith('/v1/tokens/bootstrap/redeem')) return json(redeemResponse)
+			return json({ error: { code: 'not_found', message: url } }, 404)
+		},
+		async ({ requests }) => {
+			const result = await capture([
+				'auth',
+				'bootstrap',
+				'--scopes',
+				requestedScopes.join(','),
+				'--lifetime',
+				'short',
+				'--token',
+				'kody_at_parent',
+				'--api-url',
+				apiUrl,
+			])
+			assert.equal(result.code, 0, result.stderr)
+			const redeem = requests.find((request) =>
+				request.url.endsWith('/v1/tokens/bootstrap/redeem'),
+			)
+			assert.deepEqual(redeem?.body, {
+				code: mintedCode,
+				idle_ttl_seconds: 45,
+				max_lifetime_seconds: 45,
+			})
 			assert.equal(loadStoredApiToken(apiUrl)?.tokenId, 'tok_scoped_1')
 		},
 	)

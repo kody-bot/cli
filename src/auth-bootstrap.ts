@@ -200,24 +200,52 @@ export function parseCliLifetimeSecondsFlag(
 }
 
 /**
+ * Lifetime for redeem after a successful mint. Trusts the server's clamped
+ * idle/max seconds (may be below CLI flag mins, or max below the requested
+ * idle). Only coerces idle down when max < idle so the pair stays consistent.
+ */
+export function resolveMintedRedeemLifetime(minted: {
+	idle_ttl_seconds: number
+	max_lifetime_seconds: number
+}): Extract<ResolvedCliTokenLifetime, { kind: 'explicit' }> {
+	const maxLifetimeSeconds = minted.max_lifetime_seconds
+	const idleTtlSeconds = Math.min(minted.idle_ttl_seconds, maxLifetimeSeconds)
+	return {
+		kind: 'explicit',
+		idleTtlSeconds,
+		maxLifetimeSeconds,
+	}
+}
+
+/**
  * POST /v1/tokens/bootstrap/redeem with JSON `{ code, lifetime }` or
  * `{ code, idle_ttl_seconds, max_lifetime_seconds }` and **no** Authorization
  * header (ADR 0056). Returns the minted `kody_at_…` once.
+ *
+ * Pass `trustedMintLifetime` after cliCredentialBootstrap so server-clamped
+ * seconds are redeemed without re-applying CLI flag mins (max may be below
+ * the requested idle or below `--idle-ttl-seconds` minimum).
  */
 export async function redeemBootstrapCode(input: {
 	code: string
 	lifetime?: string | null
 	idleTtlSeconds?: number
 	maxLifetimeSeconds?: number
+	trustedMintLifetime?: {
+		idle_ttl_seconds: number
+		max_lifetime_seconds: number
+	}
 	apiUrl?: string
 	fetchFn?: typeof fetch
 }): Promise<BootstrapRedeemResponse> {
 	const code = assertCliBootstrapCode(input.code)
-	const lifetime = resolveCliTokenLifetime({
-		lifetime: input.lifetime,
-		idleTtlSeconds: input.idleTtlSeconds,
-		maxLifetimeSeconds: input.maxLifetimeSeconds,
-	})
+	const lifetime = input.trustedMintLifetime
+		? resolveMintedRedeemLifetime(input.trustedMintLifetime)
+		: resolveCliTokenLifetime({
+				lifetime: input.lifetime,
+				idleTtlSeconds: input.idleTtlSeconds,
+				maxLifetimeSeconds: input.maxLifetimeSeconds,
+			})
 	const apiUrl = input.apiUrl || defaultApiUrl
 	assertTokenSafeApiUrl(apiUrl)
 	const url = capabilityProxyUrl(apiUrl, bootstrapRedeemPath)
@@ -378,7 +406,8 @@ export function parseBootstrapMintResponse(body: unknown): BootstrapMintResponse
  * Mint a bootstrap code with explicit `scopes` through the caller's current
  * Kody credential, then redeem and store it like `authBootstrap`. Redeems with
  * the minted idle/max seconds because the server may clamp the max lifetime to
- * a parent API token's remaining lifetime.
+ * a parent API token's remaining lifetime — those values must not be
+ * re-validated as CLI lifetime flags (which would burn the one-shot code).
  */
 export async function authBootstrapWithScopes(input: {
 	scopes: ReadonlyArray<string>
@@ -392,15 +421,23 @@ export async function authBootstrapWithScopes(input: {
 	const minted = parseBootstrapMintResponse(
 		await input.mint(bootstrapMintParams(input.scopes, input.lifetime)),
 	)
-	return authBootstrap({
+	const apiUrl = input.apiUrl || defaultApiUrl
+	const redeemed = await redeemBootstrapCode({
 		code: minted.bootstrap_code,
-		idleTtlSeconds: minted.idle_ttl_seconds,
-		maxLifetimeSeconds: minted.max_lifetime_seconds,
-		apiUrl: input.apiUrl,
+		trustedMintLifetime: {
+			idle_ttl_seconds: minted.idle_ttl_seconds,
+			max_lifetime_seconds: minted.max_lifetime_seconds,
+		},
+		apiUrl,
 		fetchFn: input.fetchFn,
-		backend: input.backend,
-		resolution: input.resolution,
 	})
+	const stored = storedApiTokenFromRedeem({ apiUrl, redeemed })
+	const saved = saveStoredApiToken(stored, input.backend, input.resolution)
+	return {
+		stored,
+		backendKind: saved.backend.kind,
+		...(saved.backend.path ? { backendPath: saved.backend.path } : {}),
+	}
 }
 
 function readRequiredInteger(input: {
