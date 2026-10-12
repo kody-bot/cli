@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { test } from 'node:test'
+import { Agent } from 'undici'
 import {
 	assertTokenSafeApiUrl,
 	callCapabilityProxy,
+	capabilityProxyGatewayDeadlineMs,
+	capabilityProxyHttpTimeoutMs,
 	capabilityProxyUrl,
+	createCapabilityProxyAgent,
 	openCapabilityProxySession,
 } from '../src/capability-proxy.js'
 
@@ -217,4 +223,76 @@ test('callCapabilityProxy surfaces capability errors from string or object bodie
 			}),
 		/to is required/,
 	)
+})
+
+async function withDelayedHeadersServer(
+	delayMs: number,
+	run: (apiUrl: string, seen: Array<{ url: string; authorization: string | null }>) => Promise<void>,
+) {
+	const seen: Array<{ url: string; authorization: string | null }> = []
+	const server = createServer((request, response) => {
+		seen.push({ url: request.url ?? '', authorization: request.headers.authorization ?? null })
+		request.resume()
+		setTimeout(() => {
+			response.writeHead(200, { 'content-type': 'application/json' })
+			response.end(JSON.stringify({ result: { ok: true } }))
+		}, delayMs)
+	})
+	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+	const { port } = server.address() as AddressInfo
+	try {
+		await run(`http://127.0.0.1:${port}`, seen)
+	} finally {
+		server.closeAllConnections()
+		await new Promise<void>((resolve) => server.close(() => resolve()))
+	}
+}
+
+test('CapabilityProxy HTTP timeouts outlast the 5-minute gateway deadline plus overhead', () => {
+	assert.equal(capabilityProxyGatewayDeadlineMs, 5 * 60_000)
+	// Node's global fetch defaults headersTimeout to 300s, the same as the deadline.
+	assert.ok(capabilityProxyHttpTimeoutMs >= capabilityProxyGatewayDeadlineMs + 60_000)
+})
+
+test('the CapabilityProxy dispatcher governs how long a call waits for headers', async () => {
+	await withDelayedHeadersServer(2_500, async (apiUrl) => {
+		const call = (timeoutMs: number) =>
+			callCapabilityProxy({
+				apiUrl,
+				token,
+				dispatcher: createCapabilityProxyAgent(timeoutMs),
+				path: ['kody', 'emailSend'],
+				args: [{}],
+			})
+		await assert.rejects(() => call(1_000), /Could not reach the Kody API[\s\S]*UND_ERR_HEADERS_TIMEOUT/)
+		assert.deepEqual(await call(10_000), { ok: true })
+	})
+})
+
+test('callCapabilityProxy passes the shared long-timeout Agent to fetch by default', async () => {
+	const dispatchers: Array<unknown> = []
+	const fetchFn = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+		dispatchers.push((init as { dispatcher?: unknown } | undefined)?.dispatcher)
+		return new Response(JSON.stringify({ result: 1 }), { status: 200 })
+	}) as typeof fetch
+	const client = { apiUrl: 'https://api.kody.codes', token, fetchFn }
+	await openCapabilityProxySession(client)
+	await callCapabilityProxy({ ...client, path: ['kody', 'emailSend'], args: [{}] })
+	assert.equal(dispatchers.length, 2)
+	assert.ok(dispatchers[0] instanceof Agent)
+	assert.equal(dispatchers[0], dispatchers[1])
+})
+
+test('callCapabilityProxy reaches a real server through global fetch and the default Agent', async () => {
+	await withDelayedHeadersServer(0, async (apiUrl, seen) => {
+		const result = await callCapabilityProxy({
+			apiUrl,
+			token,
+			path: ['kody', 'emailSend'],
+			args: [{}],
+		})
+		assert.deepEqual(result, { ok: true })
+		assert.equal(seen[0]?.url, '/v1/capability-proxy/call')
+		assert.equal(seen[0]?.authorization, `Bearer ${token}`)
+	})
 })

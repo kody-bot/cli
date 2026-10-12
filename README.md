@@ -205,9 +205,17 @@ npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.
   imports `kody:@…`, it also calls `POST /v1/local-execute/package-graph` to
   download stamped package modules for local embedding
   ([platform issue](https://github.com/kentcdodds/kody/issues/2808)).
+  CapabilityProxy requests use a dedicated HTTP agent that waits up to 7
+  minutes for headers and between body chunks. Origin's 5-minute deadline for
+  a `fetch` with `{{secret:…}}` placeholders ends that call first, with its own
+  error. Node's default 300-second limit no longer cuts it short.
+  A PR preview's API host is `https://kody-pr-<n>-api.<subdomain>.workers.dev`;
+  the app origin (`kody-pr-<n>`) answers `/v1/*` with an HTML 404.
 - **Errors:** an expired/revoked token or an account without the
   `local-execute` flag fails fast with a clear message before any code runs.
   The token is only sent over https (plain http is allowed for localhost).
+  A non-JSON error body, such as an HTML page from the wrong `--api-url`, is
+  shortened to its title or a 200-character excerpt plus its size.
   Missing package-graph API, unresolved imports, or missing artifacts fail
   clearly — there is **no silent fallback** to cloud `kody.execute`.
 - **Lifetime:** no execution time limit locally; Ctrl-C (or SIGTERM) stops

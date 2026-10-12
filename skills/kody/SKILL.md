@@ -91,7 +91,9 @@ it, never mint via `tokenCreate` under the hood). The default pair is
 `https://api.kody.codes` and `https://kody.codes/mcp`; preview workers pair
 when the API worker name adds `-api`, and loopback hosts pair at any port.
 For another API origin, use `auth bootstrap --api-url <origin>` or set
-`KODY_API_TOKEN`. Prefer bootstrap over `tokenCreate` for agents already on
+`KODY_API_TOKEN`. A PR preview's API host is
+`https://kody-pr-<n>-api.<subdomain>.workers.dev`, not the app origin
+`kody-pr-<n>` (which 404s `/v1/*` with HTML). Prefer bootstrap over `tokenCreate` for agents already on
 MCP so `kody_at_…` never appears in chat. Until the Open API accepts MCP OAuth on
 CapabilityProxy / package-graph
 (https://github.com/kentcdodds/kody/issues/2812), use bootstrap or mint a
