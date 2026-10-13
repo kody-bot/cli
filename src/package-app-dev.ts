@@ -397,7 +397,7 @@ async function writeWorkerFiles(input: {
 		writeFile,
 		join,
 	)
-	let gatewayFetchShimModules = packageGraph.modules
+	let gatewayFetchShimModules: Array<string> = packageGraph.modules
 		.map((module) => module.name)
 		.filter((name) => name === localExecuteGatewayFetchShimModuleName)
 	if (input.mockFetchGateway) {

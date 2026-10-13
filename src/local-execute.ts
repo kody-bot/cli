@@ -217,7 +217,7 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 		})
 		const files = { entry: 'entry.js', user: 'main.js', runtime: 'runtime.js' }
 		let packageModules = await writePackageModuleFiles(workDir, packageGraph)
-		let gatewayFetchShimModules = packageGraph.modules
+		let gatewayFetchShimModules: Array<string> = packageGraph.modules
 			.map((module) => module.name)
 			.filter((name) => name === localExecuteGatewayFetchShimModuleName)
 		if (mockFetchGateway) {

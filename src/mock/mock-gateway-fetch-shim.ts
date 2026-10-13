@@ -1,8 +1,9 @@
 /**
- * Mock-only workerd side-effect module (`.__kody_virtual__/runtime.js`).
+ * Mock-only workerd side-effect module (flat name
+ * `.__kody_mock_gateway_fetch__.js` — see install-mock-fetch-shim.ts).
  * Wraps ambient `fetch` so every outbound request hops through the Node bridge
  * as `kody.gatewayFetch` (MSW matching / passthrough / unmocked_request).
- * Prod keeps the origin package-graph shim instead.
+ * Origin's `.__kody_virtual__/runtime.js` stays for CAF / packageStorage.
  */
 
 import { localWorkerModuleNames } from '../local-runtime-source.js'
@@ -10,6 +11,9 @@ import { localWorkerModuleNames } from '../local-runtime-source.js'
 /**
  * Source for the CLI-owned mock gateway-fetch shim. Side-effect imported before
  * user code; fetch calls happen after `__kodyInstallLocalBridge`.
+ *
+ * Registered under a flat module name so bare `"kody:runtime"` resolves to the
+ * host module (path-like names like `.__kody_virtual__/runtime.js` path-join).
  */
 export function createMockGatewayFetchShimSource(): string {
 	return `

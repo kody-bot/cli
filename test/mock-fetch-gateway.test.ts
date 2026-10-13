@@ -4,6 +4,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { http, HttpResponse } from 'msw'
 import { test } from 'node:test'
+import {
+	installMockFetchShimModules,
+	mockGatewayFetchShimModuleName,
+} from '../src/mock/install-mock-fetch-shim.js'
 import { loadPackageMocks } from '../src/mock/load-package-mocks.js'
 import {
 	buildHandlerStub,
@@ -13,6 +17,7 @@ import {
 	parsePassthroughHosts,
 	unmockedRequestError,
 } from '../src/mock/mock-fetch-gateway.js'
+import { createMockGatewayFetchShimSource } from '../src/mock/mock-gateway-fetch-shim.js'
 import { StructuredCliError } from '../src/structured-error.js'
 
 test('parsePassthroughHosts splits and lowercases', () => {
@@ -157,4 +162,34 @@ test('buildHandlerStub and unmockedRequestError are agent-friendly', () => {
 	const error = unmockedRequestError('GET', 'https://api.example.com/x')
 	assert.equal(error.code, 'unmocked_request')
 	assert.match(error.fix ?? '', /--passthrough api\.example\.com/)
+})
+
+test('mock gateway fetch shim uses a flat module name (no path-join)', async () => {
+	assert.equal(mockGatewayFetchShimModuleName.includes('/'), false)
+	const source = createMockGatewayFetchShimSource()
+	assert.match(source, /from "kody:runtime"/)
+	assert.doesNotMatch(source, /from "\.\.\/kody:runtime"/)
+
+	const root = await mkdtemp(join(tmpdir(), 'kody-mock-shim-'))
+	try {
+		const installed = await installMockFetchShimModules({
+			workDir: root,
+			packageModules: [
+				{ name: '.__kody_virtual__/runtime.js', file: 'pkg-0.js' },
+				{ name: 'kody:@demo/pkg', file: 'pkg-1.js' },
+			],
+		})
+		assert.ok(
+			installed.packageModules.some((m) => m.name === '.__kody_virtual__/runtime.js'),
+		)
+		assert.ok(
+			installed.packageModules.some((m) => m.name === mockGatewayFetchShimModuleName),
+		)
+		assert.deepEqual(installed.sideEffectModules, [
+			'.__kody_virtual__/runtime.js',
+			mockGatewayFetchShimModuleName,
+		])
+	} finally {
+		await rm(root, { recursive: true, force: true })
+	}
 })

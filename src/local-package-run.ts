@@ -191,7 +191,7 @@ export async function runLocalPackageModule(
 			writeFile,
 			join,
 		)
-		let gatewayFetchShimModules = packageGraph.modules
+		let gatewayFetchShimModules: Array<string> = packageGraph.modules
 			.map((module) => module.name)
 			.filter((name) => name === localExecuteGatewayFetchShimModuleName)
 		if (mockFetchGateway) {
