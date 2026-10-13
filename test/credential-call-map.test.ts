@@ -42,6 +42,14 @@ const parseTable: Array<{
 		flags: ['k=  padded  '],
 		expected: { k: 'padded' },
 	},
+	{
+		flags: ['github= org:work'],
+		expected: { github: { name: 'work', scope: 'org' } },
+	},
+	{
+		flags: ['github= personal:home '],
+		expected: { github: { name: 'home', scope: 'personal' } },
+	},
 ]
 
 test('parseCredentialFlags parsing table', () => {

@@ -109,18 +109,20 @@ export function parseCredentialFlags(
 }
 
 function parseCredentialPick(value: string): CredentialPickInput {
-	const colon = value.indexOf(':')
+	// Trim before scope detection so ` org:work` is org-scoped `work`, not a
+	// plain name `org:work` (Bugbot / ADR 0068 name-after-trim).
+	const trimmed = value.trim()
+	const colon = trimmed.indexOf(':')
 	if (colon > 0) {
-		const prefix = value.slice(0, colon)
+		const prefix = trimmed.slice(0, colon)
 		if (prefix === 'org' || prefix === 'personal') {
-			const name = value.slice(colon + 1).trim()
+			const name = trimmed.slice(colon + 1).trim()
 			assertCredentialText(name, 'credential name')
 			return { name, scope: prefix }
 		}
 	}
-	const name = value.trim()
-	assertCredentialText(name, 'credential name')
-	return name
+	assertCredentialText(trimmed, 'credential name')
+	return trimmed
 }
 
 function assertCredentialMapKey(key: string): void {
