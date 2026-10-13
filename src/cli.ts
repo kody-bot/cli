@@ -351,9 +351,8 @@ async function dispatch(
 						? parsed.values['api-url']
 						: undefined,
 			})
-			const credentials = loadCredentials(mcpUrl, undefined, undefined, {
-				org,
-			})
+			// Status always reports the active (or pending) login — not KODY_ORG.
+			const credentials = loadCredentials(mcpUrl)
 			const orgs = listStoredOrgs(mcpUrl)
 			const storedApi = loadStoredApiToken(apiUrl)
 			if (!credentials && orgs.length === 0 && !storedApi) {

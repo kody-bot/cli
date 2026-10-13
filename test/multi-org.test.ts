@@ -97,6 +97,19 @@ test('login save upserts one org and keeps the other', () => {
 	assert.equal(loadCredentials(mcpUrl, backend, undefined, { org: 'beta' })?.accessToken, 'b1')
 })
 
+test('pending-only store serves --org without attaching an unverified slug', () => {
+	const backend = tempBackend()
+	saveCredentials(sample({ accessToken: 'pending-tok' }), backend)
+	const withOrg = loadCredentials(mcpUrl, backend, undefined, { org: 'acme' })
+	assert.equal(withOrg?.accessToken, 'pending-tok')
+	assert.equal(withOrg?.org, undefined)
+	saveCredentials(sample({ org: 'beta', accessToken: 'named' }), backend)
+	assert.equal(
+		loadCredentials(mcpUrl, backend, undefined, { org: 'acme' }),
+		null,
+	)
+})
+
 test('setActiveOrg switches the default org', () => {
 	const backend = tempBackend()
 	saveCredentials(sample({ org: 'acme' }), backend)

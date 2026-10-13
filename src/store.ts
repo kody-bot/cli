@@ -458,9 +458,12 @@ export function pickCredentialsFromStore(
 	if (requested) {
 		const record = snapshot.orgs[requested]
 		if (record) return recordToCredentials(snapshot.mcpUrl, record, requested)
-		// Do not hand a pending legacy session a caller-requested slug: that
-		// would let a refresh persist an unverified org name. Resolve pending
-		// via metaGetCurrentUser / promotePendingOrg first.
+		// Pending-only legacy store: keep commands working when discovery has
+		// not named the session yet, but do NOT attach the requested slug —
+		// that would let a refresh persist an unverified org name.
+		if (snapshot.pending && Object.keys(snapshot.orgs).length === 0) {
+			return recordToCredentials(snapshot.mcpUrl, snapshot.pending)
+		}
 		return null
 	}
 	if (snapshot.activeOrg && snapshot.orgs[snapshot.activeOrg]) {
