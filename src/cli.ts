@@ -396,6 +396,7 @@ async function dispatch(
 					values: parsed.values,
 					mcpUrl,
 					write,
+					...(org ? { org } : {}),
 				})
 			}
 			if (action === 'remove-git') {
@@ -460,6 +461,7 @@ async function dispatch(
 							mcpUrl,
 							apiUrl,
 							tokenValues: tokenFlagValues(parsed.values),
+							...(org ? { org } : {}),
 						}),
 					})
 				: await authBootstrap({
@@ -879,6 +881,7 @@ async function runAuthSetupGit(input: {
 	values: ReturnType<typeof parseKnown>['values']
 	mcpUrl: string
 	write: (text: string) => void
+	org?: string
 }): Promise<number> {
 	const { authSetupGit, setupGitDefaultScopes } = await import('./setup-git.js')
 	const apiUrl = apiUrlFrom({
@@ -910,7 +913,10 @@ async function runAuthSetupGit(input: {
 	})
 	const tokenValues = tokenFlagValues(input.values)
 	const mintScopes = scopes ?? setupGitDefaultScopes
-	const hasLoginSession = loadCredentials(input.mcpUrl) != null
+	const hasLoginSession =
+		loadCredentials(input.mcpUrl, undefined, undefined, {
+			org: input.org,
+		}) != null
 	const result = await authSetupGit({
 		apiUrl,
 		mcpUrl: input.mcpUrl,
@@ -924,6 +930,7 @@ async function runAuthSetupGit(input: {
 			mcpUrl: input.mcpUrl,
 			apiUrl,
 			tokenValues,
+			...(input.org ? { org: input.org } : {}),
 		}),
 	})
 	input.write(
@@ -980,6 +987,7 @@ function bootstrapMinter(input: {
 	mcpUrl: string
 	apiUrl: string
 	tokenValues: { token?: string }
+	org?: string
 }): (params: Record<string, unknown>) => Promise<unknown> {
 	// Resolve credentials lazily so `auth setup-git` can validate login/token
 	// presence (and print its own guidance) before mint runs.
@@ -1002,6 +1010,7 @@ function bootstrapMinter(input: {
 					apiUrl: input.apiUrl,
 					operationId: cliCredentialBootstrapOperationId,
 					params,
+					...(input.org ? { org: input.org } : {}),
 				})
 			} catch (error) {
 				if (error instanceof Error && /cannot grant scopes it does not hold/i.test(error.message)) {
@@ -1012,11 +1021,16 @@ function bootstrapMinter(input: {
 				throw error
 			}
 		}
-		if (loadCredentials(input.mcpUrl)) {
+		if (
+			loadCredentials(input.mcpUrl, undefined, undefined, {
+				org: input.org,
+			})
+		) {
 			return (await import('./mcp.js')).callKodyApiOperation({
 				operationId: cliCredentialBootstrapOperationId,
 				params,
 				mcpUrl: input.mcpUrl,
+				...(input.org ? { org: input.org } : {}),
 			})
 		}
 		throw new Error(

@@ -458,11 +458,9 @@ export function pickCredentialsFromStore(
 	if (requested) {
 		const record = snapshot.orgs[requested]
 		if (record) return recordToCredentials(snapshot.mcpUrl, record, requested)
-		// Pending legacy session: allow use only when it is the only credential
-		// and the caller asked for a specific org — discovery will rename later.
-		if (snapshot.pending && Object.keys(snapshot.orgs).length === 0) {
-			return recordToCredentials(snapshot.mcpUrl, snapshot.pending, requested)
-		}
+		// Do not hand a pending legacy session a caller-requested slug: that
+		// would let a refresh persist an unverified org name. Resolve pending
+		// via metaGetCurrentUser / promotePendingOrg first.
 		return null
 	}
 	if (snapshot.activeOrg && snapshot.orgs[snapshot.activeOrg]) {
@@ -507,19 +505,20 @@ export function saveCredentials(
 
 	let next: MultiOrgCredentialStore
 	if (slug) {
-		const { pending: _drop, ...rest } = existing
 		next = {
-			...rest,
+			version: 2,
 			mcpUrl,
 			activeOrg: slug,
 			orgs: {
 				...existing.orgs,
 				[slug]: { ...record, org: slug },
 			},
-		}
-		// If we were promoting the pending legacy session, drop it.
-		if (existing.pending) {
-			// pending already omitted via rest when we destructured — keep explicit
+			// Keep an unresolved legacy session unless this save is promoting it
+			// (pending tokens matched / were the only login being named).
+			...(existing.pending &&
+			existing.pending.accessToken !== record.accessToken
+				? { pending: existing.pending }
+				: {}),
 		}
 	} else {
 		next = {
@@ -670,6 +669,12 @@ export function deleteCredentials(
 
 	const slug = options.org.trim().toLowerCase()
 	if (!snapshot) {
+		if (store.kind === 'keyring' && !backend) {
+			const file = fileBackendFor(mcpUrl, resolution)
+			const fileSnap = readStore(file, mcpUrl)
+			if (!fileSnap) return { deleted: false, backend: store, remaining: 0 }
+			return deleteCredentials(mcpUrl, file, resolution, options)
+		}
 		return { deleted: false, backend: store, remaining: 0 }
 	}
 	return deleteOrgFromStore(snapshot, slug, store, backend, resolution)
