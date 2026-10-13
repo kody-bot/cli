@@ -105,10 +105,14 @@ plus the capability scopes the module calls — and pass `--token` or
 `KODY_API_TOKEN`. If none of those are available, the CLI error says that
 (bootstrap → login → tokenCreate for CI). `insufficient_scope` names the
 missing scope and prints the exact command to mint a token that adds it:
-`npx @kodycodes/cli auth bootstrap --lifetime short --scopes <list>` after
-`kody login`, or `cliCredentialBootstrap({ lifetime: "short", scopes: [...] })`
-from MCP. Default bootstrap scopes stay least-privilege (no `package:write`),
+`npx @kodycodes/cli auth bootstrap --lifetime short|long --scopes <list>` after
+`kody login`, or `cliCredentialBootstrap({ lifetime: "short"|"long", scopes: [...] })`
+from MCP (hints preserve the current token's lifetime class when known).
+Default bootstrap scopes stay least-privilege (no `package:write`),
 and `--scopes` replaces them, so list every scope you need.
+Publish a package after `packageGetGitRemote` clone/push with
+`kody package publish <@owner/leaf|package_id>` (thin
+`packagePublishExternalPush` wrapper; same auth as `kody api`).
 `feature_disabled` means the account `local-execute` flag is off. Never read MCP OAuth tokens from the host.
 
 ```bash

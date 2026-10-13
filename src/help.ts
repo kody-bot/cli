@@ -61,6 +61,7 @@ Usage:
   kody whoami [--org <slug>] [--mcp-url <url>] [--token <token>] [--api-url <url>] [--json]
   kody search [query] [--org <slug>] [--entity <ref>] [--domain <id>] [--limit <n>] [--target prod|mock] [--token <token>] [--api-url <url>] [--json]
   kody api <operationId> [--org <slug>] [--params <json>] [--token <token>] [--api-url <url>] [--json]
+  kody package publish [<@owner/leaf|package_id>] [--org <slug>] [--params <json>] [--token <token>] [--api-url <url>]
   kody execute [--org <slug>] [--invoke <ref> | --code <esm> | --file <path>] [--params <json>] [--conversation-id <id>] [--json]
                [--credential <key=name>]… [--target prod|mock] [--token <token>] [--api-url <url>] [--local] [--allow-private-network]
   kody dev [serve] [--org <slug>] [--target prod|mock] [--reset-storage] [--port <n>] [--app-base-path <path>] [--allow-private-network]
@@ -165,9 +166,10 @@ ${orgBlock}
   git-credential
              Git credential helper invoked by git after \`auth setup-git\`
              (\`get\` returns username=x / password=kody_at_… for the Kody
-             host; silently remints via \`kody login\` when the stored token
-             is expired or near expiry; \`store\`/\`erase\` are no-ops). Not
-             meant for interactive use.
+             host with no network while the stored token is still valid;
+             silently remints via \`kody login\` only when expired or near
+             expiry; \`store\`/\`erase\` are no-ops). Not meant for interactive
+             use.
 
   api        Call one Open API operation by operationId + flat --params
              JSON (same shape as the MCP \`api\` tool). Uses scoped API
@@ -177,6 +179,12 @@ ${orgBlock}
              ${defaultApiUrl}/openapi.json. tokenCreate / tokenRotate
              responses include a one-time token value — prefer env storage
              over pasting into chat.
+
+  package publish
+             Thin wrapper for Open API \`packagePublishExternalPush\` (same
+             auth as \`kody api\`). Optional positional is \`package_id\` when
+             UUID-shaped, otherwise \`kody_id\` (\`@owner/leaf\`). Extra fields
+             via \`--params\` JSON (e.g. \`allow_force\`). Prints JSON.
 
   --token / ${apiTokenEnvVar}
              Scoped API token (preferred via env). With no \`kody login\`

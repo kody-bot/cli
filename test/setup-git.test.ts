@@ -166,7 +166,7 @@ test('gitCredentialHelperCommand prefers version-capable global or exact npx pin
 	)
 	assert.equal(isEphemeralNpxEntryPath('/usr/local/bin/kody'), false)
 	assert.equal(cliExactVersionForNpx('1.16.5'), '1.16.5')
-	assert.equal(cliExactVersionForNpx('0.0.0-semantically-released'), '1.16.0')
+	assert.equal(cliExactVersionForNpx('0.0.0-semantically-released'), '1.18.0')
 	assert.equal(cliVersionSupportsGitCredential('1.16.0'), true)
 	assert.equal(cliVersionSupportsGitCredential('1.1.0'), false)
 
@@ -236,6 +236,7 @@ test('gitCredentialHelperNeedsRepair detects major-only, ephemeral, and outdated
 			helper: '!/usr/local/bin/kody git-credential',
 			packageVersion: '1.16.5',
 			readKodyVersion: () => '1.1.0',
+			probeBinaryVersion: true,
 		}),
 		true,
 	)
@@ -244,6 +245,18 @@ test('gitCredentialHelperNeedsRepair detects major-only, ephemeral, and outdated
 			helper: '!/usr/local/bin/kody git-credential',
 			packageVersion: '1.16.5',
 			readKodyVersion: () => '1.16.5',
+			probeBinaryVersion: true,
+		}),
+		false,
+	)
+	// Hot path must not spawn --version for path helpers (was an 8–20s stall).
+	assert.equal(
+		gitCredentialHelperNeedsRepair({
+			helper: '!/usr/local/bin/kody git-credential',
+			packageVersion: '1.16.5',
+			readKodyVersion: () => {
+				throw new Error('must not probe on hot path')
+			},
 		}),
 		false,
 	)

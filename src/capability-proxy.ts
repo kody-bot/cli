@@ -3,6 +3,7 @@ import type { Socket } from 'node:net'
 import {
 	apiTokenMintInstructions,
 	cliBootstrapInstructions,
+	currentStoredTokenLifetimeAlias,
 	featureDisabledMessage,
 	insufficientScopeMessage,
 	readInsufficientScopeDetails,
@@ -481,7 +482,10 @@ function describeFailure(
 	}
 	if (code === 'insufficient_scope') {
 		return new CapabilityProxyError(
-			`${insufficientScopeMessage(readInsufficientScopeDetails(body))}${detail}`,
+			`${insufficientScopeMessage({
+				...readInsufficientScopeDetails(body),
+				currentLifetime: currentStoredTokenLifetimeAlias(),
+			})}${detail}`,
 			{ status, code },
 		)
 	}

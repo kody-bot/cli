@@ -78,10 +78,11 @@ export type EnsureGitApiTokenResult = {
 }
 
 /**
- * Return a usable stored API token for git HTTPS. When the token is missing,
- * expired, or within the refresh skew, silently remint via the `kody login`
- * session (same scopes/lifetime as `auth setup-git`). Without a login session,
- * returns the existing token if any (may still work) or null.
+ * Return a usable stored API token for git HTTPS with **no network** while the
+ * stored token is still valid (outside the refresh skew). Remint only when
+ * missing, expired, or near expiry — via the `kody login` session (same
+ * scopes/lifetime as `auth setup-git`). Without a login session, returns the
+ * existing token if any (may still work) or null.
  */
 export async function ensureGitApiToken(input: {
 	apiUrl?: string

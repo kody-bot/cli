@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import {
 	cliBootstrapMintCall,
 	cliBootstrapScopesCommand,
+	inferCliTokenLifetimeAlias,
 	insufficientScopeMessage,
 	readInsufficientScopeDetails,
 } from '../src/api-token.js'
@@ -472,6 +473,22 @@ test('auth bootstrap --scopes without any credential explains kody login and the
 	)
 })
 
+test('inferCliTokenLifetimeAlias preserves long tokens from absolute expiry', () => {
+	const now = Date.parse('2026-10-13T19:00:00.000Z')
+	assert.equal(inferCliTokenLifetimeAlias(null, now), 'short')
+	assert.equal(
+		inferCliTokenLifetimeAlias({ expiresAt: '2026-10-14T12:00:00.000Z' }, now),
+		'short',
+	)
+	assert.equal(
+		inferCliTokenLifetimeAlias(
+			{ expiresAt: '2026-11-01T00:00:00.000Z', maxExpiresAt: '2027-01-01T00:00:00.000Z' },
+			now,
+		),
+		'long',
+	)
+})
+
 test('readInsufficientScopeDetails reads platform required_permission, mint_scopes, and denial', () => {
 	assert.deepEqual(
 		readInsufficientScopeDetails({
@@ -517,6 +534,25 @@ test('insufficientScopeMessage names the missing scope and the exact mint comman
 		),
 		message,
 	)
+
+	const longHint = insufficientScopeMessage({
+		requiredScope: 'package:write',
+		mintScopes: ['org:execute', 'package:write'],
+		currentLifetime: 'long',
+	})
+	assert.ok(
+		longHint.includes(
+			'npx @kodycodes/cli auth bootstrap --lifetime long --scopes org:execute,package:write',
+		),
+		longHint,
+	)
+	assert.ok(
+		longHint.includes(
+			'cliCredentialBootstrap({ lifetime: "long", scopes: ["org:execute", "package:write"] })',
+		),
+		longHint,
+	)
+	assert.doesNotMatch(longHint, /--lifetime short/)
 
 	const fromCurrent = insufficientScopeMessage({
 		requiredScope: 'search:read',

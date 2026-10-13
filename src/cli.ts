@@ -64,6 +64,7 @@ export type CommandName =
 	| 'whoami'
 	| 'search'
 	| 'api'
+	| 'package'
 	| 'execute'
 	| 'dev'
 	| 'install'
@@ -77,6 +78,7 @@ const orgScopedCommands = new Set<CommandName>([
 	'whoami',
 	'search',
 	'api',
+	'package',
 	'execute',
 	'dev',
 	'auth',
@@ -159,6 +161,7 @@ export function resolveCommand(argv: Array<string>): {
 		case 'whoami':
 		case 'search':
 		case 'api':
+		case 'package':
 		case 'execute':
 		case 'dev':
 		case 'install':
@@ -184,14 +187,24 @@ export async function runCli(
 	const write = io.stdout ?? ((text: string) => process.stdout.write(text))
 	const writeErr = io.stderr ?? ((text: string) => process.stderr.write(text))
 	// Best-effort: upgrade stale git helper pins (major-only / ephemeral /
-	// outdated exact) before any command, including git-credential. Must not
-	// write to stdout — git reads the helper protocol from stdout only.
+	// outdated exact) before most commands. Must not write to stdout — git
+	// reads the helper protocol from stdout only.
 	// Skip under node:test so unit tests never rewrite the developer's
-	// global git config; production / E2E / npx always refresh.
-	if (
-		process.env.NODE_TEST !== '1' &&
-		process.env.KODY_SKIP_GIT_HELPER_REFRESH !== '1'
-	) {
+	// global git config; skip git-credential (helper must stay fast / offline
+	// while the stored token is valid); skip version/help (no git touch).
+	const head = argv[0]
+	const skipHelperRefresh =
+		process.env.NODE_TEST === '1' ||
+		process.env.KODY_SKIP_GIT_HELPER_REFRESH === '1' ||
+		head === 'git-credential' ||
+		head === 'version' ||
+		head === '--version' ||
+		head === '-v' ||
+		head === 'help' ||
+		head === '--help' ||
+		head === '-h' ||
+		head === undefined
+	if (!skipHelperRefresh) {
 		try {
 			refreshGitCredentialHelperPinIfNeeded({
 				mcpUrl: process.env.KODY_MCP_URL || undefined,
@@ -249,7 +262,7 @@ async function dispatch(
 		typeof parsed.values.org === 'string' ? parsed.values.org : undefined
 	if (orgFlag !== undefined && !orgScopedCommands.has(parsed.command)) {
 		throw new Error(
-			`\`--org\` is not used with \`kody ${parsed.command}\`. Use it with login, logout, whoami, search, api, execute, or auth.`,
+			`\`--org\` is not used with \`kody ${parsed.command}\`. Use it with login, logout, whoami, search, api, package, execute, or auth.`,
 		)
 	}
 	// Login/logout honor `--org` only — not KODY_ORG (that env is for one-shot
@@ -1033,6 +1046,38 @@ async function dispatch(
 			write(`${JSON.stringify(result, null, 2)}\n`)
 			return 0
 		}
+		case 'package': {
+			const action = parsed.positionals[0]
+			if (action !== 'publish') {
+				throw new Error(
+					'Usage: kody package publish [<@owner/leaf|package_id>] [--params <json>] [--token <token>] [--api-url <url>] [--org <slug>]',
+				)
+			}
+			const apiUrl = apiUrlFrom({
+				apiUrl:
+					typeof parsed.values['api-url'] === 'string'
+						? parsed.values['api-url']
+						: undefined,
+			})
+			const tokenValues = tokenFlagValues(parsed.values)
+			const params = packagePublishParams({
+				positional: parsed.positionals[1],
+				paramsJson:
+					typeof parsed.values.params === 'string' ? parsed.values.params : undefined,
+			})
+			const { callOpenApiOperation } = await import('./open-api-client.js')
+			const result = await callOpenApiOperation({
+				operationId: 'packagePublishExternalPush',
+				params,
+				token: requireApiToken(tokenValues, process.env, 'package publish', {
+					apiUrl,
+				}),
+				apiUrl,
+				...(org ? { org } : {}),
+			})
+			write(`${JSON.stringify(result, null, 2)}\n`)
+			return 0
+		}
 		case 'install': {
 			const { runInstall } = await import('./install.js')
 			const result = await runInstall(
@@ -1336,6 +1381,29 @@ export function parseApiParamsJson(paramsJson?: string): Record<string, unknown>
 		throw new Error('--params must be a JSON object (e.g. \'{"query":"email"}\').')
 	}
 	return parsed as Record<string, unknown>
+}
+
+const packageIdUuidPattern =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Build `packagePublishExternalPush` params for `kody package publish`.
+ * Optional positional is `package_id` when UUID-shaped, otherwise `kody_id`.
+ * Explicit `--params` keys win over the positional.
+ */
+export function packagePublishParams(input: {
+	positional?: string
+	paramsJson?: string
+}): Record<string, unknown> {
+	const params = parseApiParamsJson(input.paramsJson)
+	const ref = input.positional?.trim()
+	if (!ref) return params
+	if (packageIdUuidPattern.test(ref)) {
+		if (params.package_id === undefined) params.package_id = ref
+	} else if (params.kody_id === undefined) {
+		params.kody_id = ref
+	}
+	return params
 }
 
 /**

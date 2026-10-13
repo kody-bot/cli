@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { insufficientScopeMessage, readInsufficientScopeDetails } from './api-token.js'
+import {
+	currentStoredTokenLifetimeAlias,
+	insufficientScopeMessage,
+	readInsufficientScopeDetails,
+} from './api-token.js'
 import { apiTokenEnvVar, cliName, defaultApiUrl } from './defaults.js'
 import { assertTokenSafeApiUrl, capabilityProxyUrl } from './capability-proxy.js'
 import { describeNetworkError } from './network-error.js'
@@ -540,7 +544,10 @@ function describeOpenApiFailure(status: number, body: unknown, url: URL): OpenAp
 	}
 	if (status === 403 && code === 'insufficient_scope') {
 		return new OpenApiError(
-			`${insufficientScopeMessage(readInsufficientScopeDetails(body))}${detail}`,
+			`${insufficientScopeMessage({
+				...readInsufficientScopeDetails(body),
+				currentLifetime: currentStoredTokenLifetimeAlias(),
+			})}${detail}`,
 			{ status, code },
 		)
 	}

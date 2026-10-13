@@ -6,6 +6,7 @@ import {
 import {
 	apiTokenMintInstructions,
 	cliBootstrapInstructions,
+	currentStoredTokenLifetimeAlias,
 	featureDisabledMessage,
 	insufficientScopeMessage,
 	isScopedApiToken,
@@ -221,7 +222,10 @@ function describePackageGraphFailure(
 	}
 	if (code === 'insufficient_scope') {
 		return new LocalPackageGraphError(
-			`${insufficientScopeMessage(readInsufficientScopeDetails(body))}${detail}`,
+			`${insufficientScopeMessage({
+				...readInsufficientScopeDetails(body),
+				currentLifetime: currentStoredTokenLifetimeAlias(),
+			})}${detail}`,
 			{ status, code },
 		)
 	}

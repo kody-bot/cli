@@ -238,9 +238,11 @@ export const gitCredentialMinCliVersion = '1.16.0'
 
 /**
  * Fallback exact pin for local `0.0.0-semantically-released` builds. Published
- * tarballs always carry a real x.y.z from semantic-release.
+ * tarballs always carry a real x.y.z from semantic-release. Keep this at a
+ * recent published line that includes `git-credential` (not merely the
+ * minimum) so local/dev pins are not stuck on an ancient helper.
  */
-export const gitCredentialHelperPinFallbackVersion = gitCredentialMinCliVersion
+export const gitCredentialHelperPinFallbackVersion = '1.18.0'
 
 const requireFromSetupGit = createRequire(import.meta.url)
 
@@ -342,6 +344,9 @@ export type KodyVersionReader = (binPath: string) => string | null
 /**
  * Read `kody --version` (or `node entry --version`) stdout. Returns null on
  * failure so callers can skip preferring an unverifiable binary.
+ *
+ * Always sets `KODY_SKIP_GIT_HELPER_REFRESH=1` so a nested CLI does not re-enter
+ * pin refresh (which itself may spawn `--version` — an 8s recursive stall).
  */
 export function readVersionFromKodyBinary(
 	binPath: string,
@@ -349,7 +354,10 @@ export function readVersionFromKodyBinary(
 ): string | null {
 	const result = spawnSync(binPath, [...args], {
 		encoding: 'utf8',
-		env: process.env,
+		env: {
+			...process.env,
+			KODY_SKIP_GIT_HELPER_REFRESH: '1',
+		},
 		timeout: 8_000,
 	})
 	if (result.error || (result.status ?? 1) !== 0) return null
@@ -416,13 +424,19 @@ export function exactNpxHelperVersion(helper: string): string | null {
 
 /**
  * True when an installed helper should be rewritten: ephemeral npx path,
- * major-only pin, exact pin older than the running CLI, or a binary that
- * does not support `git-credential`.
+ * major-only pin, exact pin older than the running CLI, or (when probing) a
+ * binary that does not support `git-credential`.
+ *
+ * Hot-path refresh (`probeBinaryVersion: false`, the default) only uses
+ * string heuristics — never spawns `kody --version`. Binary probes stay for
+ * `auth setup-git` so we do not pay 8s+ on every CLI / git-credential call.
  */
 export function gitCredentialHelperNeedsRepair(input: {
 	helper: string | null | undefined
 	packageVersion?: string
 	readKodyVersion?: KodyVersionReader
+	/** Spawn binaries to verify `git-credential` support. Default false. */
+	probeBinaryVersion?: boolean
 }): boolean {
 	const helper = input.helper?.trim()
 	if (!helper) return false
@@ -436,6 +450,13 @@ export function gitCredentialHelperNeedsRepair(input: {
 			input.packageVersion ?? readCliPackageVersion(),
 		)
 		return cliVersionGt(current, pinned)
+	}
+
+	if (input.probeBinaryVersion !== true) {
+		// Path-based helpers (`!kody git-credential` / `!node … git-credential`)
+		// are left alone on the hot path — spawning --version here was the
+		// 8–20s stall (and could recurse into pin refresh).
+		return false
 	}
 
 	// `!/path/to/kody git-credential` or `!node /path/to/bin.js git-credential`
@@ -501,6 +522,8 @@ export function refreshGitCredentialHelperPinIfNeeded(input?: {
 	execPath?: string
 	entryPath?: string
 	env?: NodeJS.ProcessEnv
+	/** Forwarded to {@link gitCredentialHelperNeedsRepair}. Default false. */
+	probeBinaryVersion?: boolean
 }): boolean {
 	const mcpUrl = input?.mcpUrl || defaultMcpUrl
 	const host = gitCredentialHostFromMcpUrl(mcpUrl)
@@ -516,6 +539,7 @@ export function refreshGitCredentialHelperPinIfNeeded(input?: {
 			helper: got.stdout,
 			packageVersion,
 			readKodyVersion: input?.readKodyVersion,
+			probeBinaryVersion: input?.probeBinaryVersion === true,
 		})
 	) {
 		return false

@@ -9,6 +9,7 @@ import {
 	apiUrlFrom,
 	buildExecuteToolArgs,
 	executeSourcesConflict,
+	packagePublishParams,
 	parseApiParamsJson,
 	resolveApiToken,
 	resolveCommand,
@@ -16,6 +17,8 @@ import {
 	runCli,
 	shouldUseApiToken,
 } from '../src/cli.js'
+import { buildUsage } from '../src/help.js'
+import { readPackageVersion } from '../src/package-info.js'
 import { isPairedApiUrl } from '../src/api-token.js'
 import type { StoredApiToken } from '../src/api-token-store.js'
 import { modernMcpProtocolVersion } from '../src/defaults.js'
@@ -52,6 +55,8 @@ test('resolveCommand maps subcommands and flags', () => {
 	assert.equal(resolveCommand(['search', 'what can you do']).command, 'search')
 	assert.equal(resolveCommand(['api', 'usageGet']).command, 'api')
 	assert.equal(resolveCommand(['api', 'usageGet']).positionals[0], 'usageGet')
+	assert.equal(resolveCommand(['package', 'publish', '@acme/pkg']).command, 'package')
+	assert.equal(resolveCommand(['package', 'publish']).positionals[0], 'publish')
 	assert.equal(resolveCommand(['install', '--yes']).command, 'install')
 	assert.equal(resolveCommand(['auth', 'bootstrap', '--code', 'kody_bc_x']).command, 'auth')
 	assert.equal(resolveCommand(['auth', 'bootstrap']).positionals[0], 'bootstrap')
@@ -73,6 +78,40 @@ test('resolveCommand maps subcommands and flags', () => {
 		(error: unknown) =>
 			error instanceof Error &&
 			!error.message.includes('Install Kody as a remote MCP server'),
+	)
+})
+
+test('help header version matches --version (same package.json source)', async () => {
+	const version = readPackageVersion()
+	assert.match(buildUsage({ orgs: [] }), new RegExp(`^Kody CLI ${version.replace(/\./g, '\\.')}\\b`))
+	let stdout = ''
+	const code = await runCli(['--version'], {
+		stdout: (text) => {
+			stdout += text
+		},
+		stderr: () => {},
+	})
+	assert.equal(code, 0)
+	assert.equal(stdout.trim(), version)
+})
+
+test('packagePublishParams maps positional UUID vs kody_id; --params wins', () => {
+	assert.deepEqual(packagePublishParams({}), {})
+	assert.deepEqual(packagePublishParams({ positional: '@acme/pkg' }), {
+		kody_id: '@acme/pkg',
+	})
+	assert.deepEqual(
+		packagePublishParams({
+			positional: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+		}),
+		{ package_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' },
+	)
+	assert.deepEqual(
+		packagePublishParams({
+			positional: '@acme/pkg',
+			paramsJson: '{"kody_id":"@other/x","allow_force":true}',
+		}),
+		{ kody_id: '@other/x', allow_force: true },
 	)
 })
 
