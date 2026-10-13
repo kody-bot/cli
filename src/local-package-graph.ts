@@ -224,7 +224,7 @@ function describePackageGraphFailure(
 		return new LocalPackageGraphError(
 			`${insufficientScopeMessage({
 				...readInsufficientScopeDetails(body),
-				currentLifetime: currentStoredTokenLifetimeAlias(),
+				currentLifetime: currentStoredTokenLifetimeAlias(url.origin),
 			})}${detail}`,
 			{ status, code },
 		)

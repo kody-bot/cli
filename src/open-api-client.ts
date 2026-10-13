@@ -546,7 +546,7 @@ function describeOpenApiFailure(status: number, body: unknown, url: URL): OpenAp
 		return new OpenApiError(
 			`${insufficientScopeMessage({
 				...readInsufficientScopeDetails(body),
-				currentLifetime: currentStoredTokenLifetimeAlias(),
+				currentLifetime: currentStoredTokenLifetimeAlias(url.origin),
 			})}${detail}`,
 			{ status, code },
 		)
