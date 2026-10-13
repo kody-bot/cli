@@ -899,6 +899,15 @@ async function dispatch(
 						? parsed.values['api-url']
 						: undefined,
 			})
+			const io = { stdout: write, stderr: writeErr }
+			const bodyPath =
+				typeof parsed.values.body === 'string' ? parsed.values.body : undefined
+			// `check` only bundles + validates the package tree; it never talks to
+			// mock/prod, so skip auth (and the mock server) to avoid leaking a listen
+			// handle that would keep the process alive after printing results.
+			if (subcommand === 'check') {
+				return await runDevCheck({ target, json, io })
+			}
 			const token =
 				target === 'prod'
 					? await resolveLocalExecuteBearer({
@@ -915,15 +924,12 @@ async function dispatch(
 				apiUrl: prodApiUrl,
 				resetStorage: parsed.values['reset-storage'] === true,
 			})
-			const io = { stdout: write, stderr: writeErr }
 			const port =
 				typeof parsed.values.port === 'string' ? Number(parsed.values.port) : undefined
 			const appBasePath =
 				typeof parsed.values['app-base-path'] === 'string'
 					? parsed.values['app-base-path']
 					: undefined
-			const bodyPath =
-				typeof parsed.values.body === 'string' ? parsed.values.body : undefined
 			switch (subcommand) {
 				case 'serve':
 					return await runDevServe({
@@ -992,8 +998,6 @@ async function dispatch(
 						io,
 					})
 				}
-				case 'check':
-					return await runDevCheck({ target, json, io })
 				default: {
 					const exhaustive: never = subcommand
 					throw new Error(`Unhandled kody dev subcommand: ${String(exhaustive)}`)

@@ -62,6 +62,24 @@ test('kody dev check passes on the fixture', async () => {
 	assert.match(stdout, /passed/)
 })
 
+test('kody dev check via CLI exits without leaving the mock server open', async () => {
+	const previous = process.cwd()
+	let stdout = ''
+	try {
+		process.chdir(fixtureRoot)
+		const code = await runCli(['dev', 'check', '--target', 'mock', '--json'], {
+			stdout: (text) => {
+				stdout += text
+			},
+			stderr: () => {},
+		})
+		assert.equal(code, 0)
+		assert.match(stdout, /"ok": true/)
+	} finally {
+		process.chdir(previous)
+	}
+})
+
 test('kody dev job / webhook / emit / fetch against mock', async () => {
 	const cache = await mkdtemp(join(tmpdir(), 'kody-dev-e2e-'))
 	const previous = process.env.KODY_CACHE_DIR
