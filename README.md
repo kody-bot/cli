@@ -65,6 +65,8 @@ Or run via `npx @kodycodes/cli` without a global install.
 | `kody status` | Shows CLI login / stored API token state without printing secrets. |
 | `kody auth bootstrap --code` | Redeems a one-shot `kody_bc_…` from MCP `cliCredentialBootstrap` and stores the resulting `kody_at_…` for `execute --local` (never prints the token). |
 | `kody auth bootstrap --scopes` | Opt-in extra scopes: mints the code itself by passing `scopes` to `cliCredentialBootstrap` (with `--token`, else the `kody login` session, else a stored token), then redeems and stores it. See [Opt-in scopes](#opt-in-scopes). |
+| `kody auth setup-git` | Installs a Git credential helper for `https://kody.codes/@owner/name.git` (persistent `kody_at_…`, user-owned token with `package:read`/`package:write`). See [Git HTTPS](#git-https-setup-git). |
+| `kody git-credential` | Credential helper invoked by Git after `setup-git` (`get` / `store` / `erase`). |
 | `kody whoami` | Confirms the CLI MCP connection and lists tools. With a scoped API token (and no login), shows token identity via the Open API. |
 | `kody search [query]` | Calls Kody `search` from the CLI (prefer the host MCP tool). Token-only auth uses Open API `GET /v1/search`. |
 | `kody api <operationId>` | Thin Open API wrapper matching the MCP `api` tool: `operationId` + flat `--params` JSON. Auth: `--token` / `KODY_API_TOKEN` / stored `auth bootstrap` token. The parsed `/openapi.json` route map is cached under the Kody cache dir keyed by the document's `ETag` and revalidated with `If-None-Match` on each run. |
@@ -148,6 +150,30 @@ npx @kodycodes/cli auth bootstrap --code 'kody_bc_…' --lifetime short
   call.
 - `insufficient_scope` errors print both commands with the full scope list
   (your current scopes plus the missing one), so you can copy one and retry.
+
+## Git HTTPS (`setup-git`)
+
+After the server ships persistent `kody_at_…` git auth (see
+[auth-setup-git](https://kody.codes/docs/auth-setup-git)), install a credential
+helper once:
+
+```bash
+kody login   # or: auth bootstrap --code … --lifetime long
+kody auth setup-git
+git clone https://kody.codes/@owner/name.git
+```
+
+`setup-git` checks `org_binding` on `GET /v1/tokens/current`, stores a
+user-owned token that includes `package:read` and `package:write` (default
+`--lifetime long`; reuses a suitable stored token), and configures:
+
+```bash
+git config --global credential.https://kody.codes.helper '!… git-credential'
+git config --global credential.https://kody.codes.useHttpPath true
+```
+
+Push moves live HEAD only (packages do not auto-publish). Existing `kody login`
+/ `auth bootstrap` flows are unchanged.
 
 ## Local execute
 

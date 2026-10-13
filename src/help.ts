@@ -12,6 +12,8 @@ Usage:
   kody status [--mcp-url <url>] [--api-url <url>]
   kody auth bootstrap (--code <kody_bc_…> | --scopes <list>) (--lifetime short|long | --idle-ttl-seconds <n> --max-lifetime-seconds <n>)
                       [--token <token>] [--mcp-url <url>] [--api-url <url>]
+  kody auth setup-git [--lifetime long|short] [--scopes <list>] [--token <token>] [--mcp-url <url>] [--api-url <url>]
+  kody git-credential <get|store|erase>
   kody whoami [--mcp-url <url>] [--token <token>] [--api-url <url>] [--json]
   kody search [query] [--entity <ref>] [--domain <id>] [--limit <n>] [--token <token>] [--api-url <url>] [--json]
   kody api <operationId> [--params <json>] [--token <token>] [--api-url <url>] [--json]
@@ -59,6 +61,21 @@ Usage:
              minted, so \`--code\` with \`--scopes\` is an error. Defaults
              stay least-privilege; \`insufficient_scope\` errors print the
              exact \`--scopes\` command to run.
+
+  auth setup-git
+             Install a Git credential helper for HTTPS clones/fetches/pushes
+             at \`https://kody.codes/@owner/name.git\` (see guide:auth_setup_git).
+             Requires a server that advertises \`org_binding\` on token
+             metadata. Stores a user-owned \`kody_at_…\` with at least
+             \`package:read\` and \`package:write\` (default \`--lifetime long\`;
+             reuses a suitable stored token). Configures
+             \`credential.https://<host>.helper\` + \`useHttpPath\`. Does not
+             change \`kody login\` / existing auth flows.
+
+  git-credential
+             Git credential helper invoked by git after \`auth setup-git\`
+             (\`get\` returns username=x / password=kody_at_… for the Kody
+             host; \`store\`/\`erase\` are no-ops). Not meant for interactive use.
 
   api        Call one Open API operation by operationId + flat --params
              JSON (same shape as the MCP \`api\` tool). Uses scoped API

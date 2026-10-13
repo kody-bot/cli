@@ -57,6 +57,7 @@ export type CommandName =
 	| 'logout'
 	| 'status'
 	| 'auth'
+	| 'git-credential'
 	| 'whoami'
 	| 'search'
 	| 'api'
@@ -132,6 +133,7 @@ export function resolveCommand(argv: Array<string>): {
 		case 'logout':
 		case 'status':
 		case 'auth':
+		case 'git-credential':
 		case 'whoami':
 		case 'search':
 		case 'api':
@@ -284,9 +286,16 @@ async function dispatch(
 		}
 		case 'auth': {
 			const action = parsed.positionals[0]
+			if (action === 'setup-git') {
+				return runAuthSetupGit({
+					values: parsed.values,
+					mcpUrl,
+					write,
+				})
+			}
 			if (action !== 'bootstrap') {
 				throw new Error(
-					'Usage: kody auth bootstrap (--code <kody_bc_…> | --scopes <list>) (--lifetime short|long | --idle-ttl-seconds <n> --max-lifetime-seconds <n>) [--api-url <url>]',
+					'Usage: kody auth bootstrap (…) | kody auth setup-git [--lifetime long|short] [--scopes <list>] [--api-url <url>] [--mcp-url <url>]',
 				)
 			}
 			const code =
@@ -365,6 +374,29 @@ async function dispatch(
 					'',
 				].join('\n'),
 			)
+			return 0
+		}
+		case 'git-credential': {
+			const {
+				handleGitCredential,
+				parseGitCredentialAction,
+				parseGitCredentialInput,
+				readGitCredentialStdin,
+			} = await import('./git-credential.js')
+			const action = parseGitCredentialAction(parsed.positionals)
+			const raw = await readGitCredentialStdin(process.stdin)
+			const output = await handleGitCredential({
+				action,
+				request: parseGitCredentialInput(raw),
+				apiUrl: apiUrlFrom({
+					apiUrl:
+						typeof parsed.values['api-url'] === 'string'
+							? parsed.values['api-url']
+							: undefined,
+				}),
+				mcpUrl,
+			})
+			if (output) process.stdout.write(output)
 			return 0
 		}
 		case 'whoami': {
@@ -711,6 +743,75 @@ function attachExecuteCommonArgs(
 		args.credentials = input.credentials
 	}
 	return args
+}
+
+async function runAuthSetupGit(input: {
+	values: ReturnType<typeof parseKnown>['values']
+	mcpUrl: string
+	write: (text: string) => void
+}): Promise<number> {
+	const { authSetupGit, setupGitDefaultScopes } = await import('./setup-git.js')
+	const apiUrl = apiUrlFrom({
+		apiUrl:
+			typeof input.values['api-url'] === 'string'
+				? input.values['api-url']
+				: undefined,
+	})
+	const scopes = parseCliScopesFlag(
+		typeof input.values.scopes === 'string' ? input.values.scopes : undefined,
+	)
+	const lifetime = resolveCliTokenLifetime({
+		lifetime:
+			typeof input.values.lifetime === 'string'
+				? input.values.lifetime
+				: 'long',
+		idleTtlSeconds: parseCliLifetimeSecondsFlag(
+			typeof input.values['idle-ttl-seconds'] === 'string'
+				? input.values['idle-ttl-seconds']
+				: undefined,
+			'--idle-ttl-seconds',
+		),
+		maxLifetimeSeconds: parseCliLifetimeSecondsFlag(
+			typeof input.values['max-lifetime-seconds'] === 'string'
+				? input.values['max-lifetime-seconds']
+				: undefined,
+			'--max-lifetime-seconds',
+		),
+	})
+	const tokenValues = tokenFlagValues(input.values)
+	const mintScopes = scopes ?? setupGitDefaultScopes
+	const result = await authSetupGit({
+		apiUrl,
+		mcpUrl: input.mcpUrl,
+		token: tokenValues.token,
+		...(scopes ? { scopesOverride: scopes } : {}),
+		lifetime,
+		mint: bootstrapMinter({
+			scopes: mintScopes,
+			lifetime,
+			mcpUrl: input.mcpUrl,
+			apiUrl,
+			tokenValues,
+		}),
+	})
+	input.write(
+		[
+			`Git HTTPS credential helper installed for https://${result.host}/`,
+			`helper: ${result.helperCommand}`,
+			`token: ${result.minted ? 'minted' : 'reused'} ${result.tokenId} (org_binding=user)`,
+			`scopes: ${result.scopes.join(', ') || '(none)'}`,
+			`expires: ${result.expiresAt ?? 'unknown'}`,
+			result.backendKind === 'file' && result.backendPath
+				? `OS keychain was unavailable; token saved at ${result.backendPath} (mode 0600).`
+				: result.minted
+					? 'Token stored in the OS keychain (or existing store).'
+					: 'Using the existing stored API token.',
+			'',
+			'Try: git clone https://kody.codes/@owner/name.git',
+			'',
+		].join('\n'),
+	)
+	return 0
 }
 
 /**
