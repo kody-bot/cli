@@ -15,8 +15,8 @@ test('defaultTargetFor: mock for dev, prod for execute/search', () => {
 })
 
 test('resolveTarget precedence: flag > env > default', () => {
-	assert.equal(resolveTarget({ command: 'dev' }), 'mock')
-	assert.equal(resolveTarget({ command: 'execute' }), 'prod')
+	assert.equal(resolveTarget({ command: 'dev', env: {} }), 'mock')
+	assert.equal(resolveTarget({ command: 'execute', env: {} }), 'prod')
 	assert.equal(
 		resolveTarget({ command: 'dev', env: { [targetEnvVar]: 'prod' } }),
 		'prod',
@@ -29,6 +29,19 @@ test('resolveTarget precedence: flag > env > default', () => {
 		}),
 		'mock',
 	)
+})
+
+test('resolveTarget reads process.env.KODY_TARGET when env is omitted', () => {
+	const previous = process.env[targetEnvVar]
+	try {
+		process.env[targetEnvVar] = 'mock'
+		assert.equal(resolveTarget({ command: 'execute' }), 'mock')
+		process.env[targetEnvVar] = 'prod'
+		assert.equal(resolveTarget({ command: 'dev' }), 'prod')
+	} finally {
+		if (previous === undefined) delete process.env[targetEnvVar]
+		else process.env[targetEnvVar] = previous
+	}
 })
 
 test('parseTargetFlag rejects unknown values', () => {

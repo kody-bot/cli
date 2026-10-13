@@ -31,13 +31,16 @@ export function defaultTargetFor(command: TargetAwareCommand): KodyTarget {
 
 /**
  * Resolve the active target. Precedence: `--target` flag → `KODY_TARGET` → command default.
+ * When `env` is omitted, reads `process.env` so `KODY_TARGET` works without every
+ * caller threading the environment (CLI dispatch omits `env`).
  */
 export function resolveTarget(input: {
 	command: TargetAwareCommand
 	flag?: string
 	env?: NodeJS.ProcessEnv
 }): KodyTarget {
-	const raw = input.flag ?? input.env?.[targetEnvVar]
+	const env = input.env ?? process.env
+	const raw = input.flag ?? env[targetEnvVar]
 	if (raw === undefined || raw === '') {
 		return defaultTargetFor(input.command)
 	}

@@ -49,6 +49,8 @@ export type PackageAppDevOptions = {
 	port?: number
 	/** Public mount path the Node proxy strips (default ''). */
 	appBasePath?: string
+	/** User-owned token org selection (`?org=`), same as execute --local. */
+	org?: string
 	allowPrivateNetwork?: boolean
 	workerdPath?: string
 	fetchFn?: typeof fetch
@@ -99,6 +101,7 @@ export async function startPackageAppDev(
 		apiUrl: options.apiUrl,
 		token: options.token,
 		fetchFn: options.fetchFn,
+		...(options.org ? { org: options.org } : {}),
 	}
 
 	let bridge: Bridge | undefined

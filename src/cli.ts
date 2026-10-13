@@ -228,14 +228,24 @@ async function dispatch(
 		mcpUrl: typeof parsed.values['mcp-url'] === 'string' ? parsed.values['mcp-url'] : undefined,
 	})
 	const json = parsed.values.json === true
-	if (
-		parsed.values['allow-private-network'] === true &&
-		parsed.command !== 'dev' &&
-		(parsed.command !== 'execute' || parsed.values.local !== true)
-	) {
-		throw new Error(
-			'--allow-private-network can only be used with execute --local or kody dev.',
-		)
+	if (parsed.values['allow-private-network'] === true) {
+		const executeAllowsPrivateNetwork =
+			parsed.command === 'execute' &&
+			(parsed.values.local === true ||
+				(
+					await import('./target.js')
+				).resolveTarget({
+					command: 'execute',
+					flag:
+						typeof parsed.values.target === 'string'
+							? parsed.values.target
+							: undefined,
+				}) === 'mock')
+		if (parsed.command !== 'dev' && !executeAllowsPrivateNetwork) {
+			throw new Error(
+				'--allow-private-network can only be used with execute --local, execute --target mock, or kody dev.',
+			)
+		}
 	}
 	if (
 		parsed.values['reset-storage'] === true &&
@@ -808,6 +818,7 @@ async function dispatch(
 							kodyId: localPackageInvoke.kodyId,
 							hostedUrl: 'http://127.0.0.1:0',
 						}),
+						...(org ? { org } : {}),
 						allowPrivateNetwork:
 							parsed.values['allow-private-network'] === true,
 						onStatus: (message) => writeErr(`${message}\n`),
@@ -922,6 +933,7 @@ async function dispatch(
 				target,
 				token,
 				apiUrl: prodApiUrl,
+				...(org ? { org } : {}),
 				resetStorage: parsed.values['reset-storage'] === true,
 			})
 			const port =
@@ -930,78 +942,91 @@ async function dispatch(
 				typeof parsed.values['app-base-path'] === 'string'
 					? parsed.values['app-base-path']
 					: undefined
-			switch (subcommand) {
-				case 'serve':
-					return await runDevServe({
-						target,
-						auth,
-						port,
-						appBasePath,
-						allowPrivateNetwork:
-							parsed.values['allow-private-network'] === true,
-						io,
-					})
-				case 'fetch': {
-					const path = rest[0]
-					if (!path) {
-						throw new Error('Usage: kody dev fetch <path> [--method GET] [--body file.json]')
+			try {
+				switch (subcommand) {
+					case 'serve':
+						return await runDevServe({
+							target,
+							auth,
+							port,
+							appBasePath,
+							allowPrivateNetwork:
+								parsed.values['allow-private-network'] === true,
+							io,
+						})
+					case 'fetch': {
+						const path = rest[0]
+						if (!path) {
+							throw new Error(
+								'Usage: kody dev fetch <path> [--method GET] [--body file.json]',
+							)
+						}
+						let body: string | undefined
+						if (bodyPath) body = await readFile(bodyPath, 'utf8')
+						return await runDevFetch({
+							target,
+							auth,
+							path,
+							method:
+								typeof parsed.values.method === 'string'
+									? parsed.values.method
+									: undefined,
+							body,
+							port,
+							appBasePath,
+							json,
+							io,
+						})
 					}
-					let body: string | undefined
-					if (bodyPath) body = await readFile(bodyPath, 'utf8')
-					return await runDevFetch({
-						target,
-						auth,
-						path,
-						method:
-							typeof parsed.values.method === 'string'
-								? parsed.values.method
-								: undefined,
-						body,
-						port,
-						appBasePath,
-						json,
-						io,
-					})
-				}
-				case 'job': {
-					const jobName = rest[0]
-					if (!jobName) throw new Error('Usage: kody dev job <name>')
-					return await runDevJob({ target, auth, jobName, json, io })
-				}
-				case 'webhook': {
-					const webhookName = rest[0]
-					if (!webhookName || !bodyPath) {
+					case 'job': {
+						const jobName = rest[0]
+						if (!jobName) throw new Error('Usage: kody dev job <name>')
+						return await runDevJob({ target, auth, jobName, json, io })
+					}
+					case 'webhook': {
+						const webhookName = rest[0]
+						if (!webhookName || !bodyPath) {
+							throw new Error(
+								'Usage: kody dev webhook <name> --body file.json',
+							)
+						}
+						return await runDevWebhook({
+							target,
+							auth,
+							webhookName,
+							bodyPath,
+							json,
+							io,
+						})
+					}
+					case 'emit': {
+						const event = rest[0]
+						if (!event || !bodyPath) {
+							throw new Error(
+								'Usage: kody dev emit <event> --body event.json',
+							)
+						}
+						return await runDevEmit({
+							target,
+							auth,
+							event,
+							bodyPath,
+							json,
+							io,
+						})
+					}
+					default: {
+						const exhaustive: never = subcommand
 						throw new Error(
-							'Usage: kody dev webhook <name> --body file.json',
+							`Unhandled kody dev subcommand: ${String(exhaustive)}`,
 						)
 					}
-					return await runDevWebhook({
-						target,
-						auth,
-						webhookName,
-						bodyPath,
-						json,
-						io,
-					})
 				}
-				case 'emit': {
-					const event = rest[0]
-					if (!event || !bodyPath) {
-						throw new Error('Usage: kody dev emit <event> --body event.json')
-					}
-					return await runDevEmit({
-						target,
-						auth,
-						event,
-						bodyPath,
-						json,
-						io,
-					})
-				}
-				default: {
-					const exhaustive: never = subcommand
-					throw new Error(`Unhandled kody dev subcommand: ${String(exhaustive)}`)
-				}
+			} catch (error) {
+				// Usage / surface errors after the mock started must still close it,
+				// or the listen handle keeps the process alive (same hang as check).
+				await auth.closeMock?.()
+				throw error
 			}
 		}
 		case 'api': {

@@ -49,6 +49,8 @@ export type LocalPackageRunInput = {
 	target: KodyTarget
 	packageContext: PackageLocalContext
 	fetchFn?: typeof fetch
+	/** User-owned token org selection (`?org=`), same as execute --local. */
+	org?: string
 	workerdPath?: string
 	allowPrivateNetwork?: boolean
 	onStatus?: (message: string) => void
@@ -66,7 +68,12 @@ export async function runLocalPackageModule(
 	assertTokenSafeApiUrl(input.apiUrl)
 	input.onStatus?.(`Bundling ${input.modulePath}…`)
 	const code = await bundleLocalUserModule(input.modulePath)
-	const client = { apiUrl: input.apiUrl, token: input.token, fetchFn: input.fetchFn }
+	const client = {
+		apiUrl: input.apiUrl,
+		token: input.token,
+		fetchFn: input.fetchFn,
+		...(input.org ? { org: input.org } : {}),
+	}
 
 	const workerdPath =
 		input.workerdPath ??

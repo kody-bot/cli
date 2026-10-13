@@ -128,8 +128,33 @@ test('allow-private-network is limited to execute --local', async () => {
 	assert.equal(code, 1)
 	assert.match(
 		stderr,
-		/--allow-private-network can only be used with execute --local or kody dev/,
+		/--allow-private-network can only be used with execute --local, execute --target mock, or kody dev/,
 	)
+})
+
+test('allow-private-network is allowed with execute --target mock', async () => {
+	const previous = process.env.KODY_WORKERD_PATH
+	process.env.KODY_WORKERD_PATH = '/nonexistent/workerd-for-private-network-guard'
+	let stderr = ''
+	try {
+		await runCli(
+			[
+				'execute',
+				'--target',
+				'mock',
+				'--allow-private-network',
+				'--code',
+				'export default () => ({ ok: true })',
+			],
+			{ stdout: () => {}, stderr: (text) => (stderr += text) },
+		)
+	} finally {
+		if (previous === undefined) delete process.env.KODY_WORKERD_PATH
+		else process.env.KODY_WORKERD_PATH = previous
+	}
+	// Must not fail the private-network guard (workerd path fails later).
+	assert.doesNotMatch(stderr, /--allow-private-network can only be used/)
+	assert.match(stderr, /workerd|ENOENT|nonexistent|spawn/i)
 })
 
 test('resolveApiToken prefers --token, falls back to KODY_API_TOKEN, and requires one', () => {

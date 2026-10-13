@@ -28,6 +28,8 @@ export type DevIo = {
 export type DevAuth = {
 	token: string
 	apiUrl: string
+	/** User-owned token org selection (`?org=`) for --target prod hops. */
+	org?: string
 	/** Present when target is mock and this command started (or reused) it. */
 	mockServer?: MockServer
 	closeMock?: () => Promise<void>
@@ -37,23 +39,36 @@ export async function resolveDevAuth(input: {
 	target: KodyTarget
 	token: string
 	apiUrl: string
+	org?: string
 	resetStorage?: boolean
 	sessionId?: string
 	packageId?: string
 }): Promise<DevAuth> {
 	if (input.target !== 'mock') {
-		return { token: input.token, apiUrl: input.apiUrl }
+		return {
+			token: input.token,
+			apiUrl: input.apiUrl,
+			...(input.org ? { org: input.org } : {}),
+		}
 	}
 	const ensured = await ensureMockTarget({
 		sessionId: input.sessionId,
 		resetStorage: input.resetStorage,
 		packageId: input.packageId,
 	})
+	let mockClosed = false
 	return {
 		token: ensured.token,
 		apiUrl: ensured.apiUrl,
+		...(input.org ? { org: input.org } : {}),
 		mockServer: ensured.server,
-		closeMock: ensured.started ? () => ensured.server.close() : undefined,
+		closeMock: ensured.started
+			? async () => {
+					if (mockClosed) return
+					mockClosed = true
+					await ensured.server.close()
+				}
+			: undefined,
 	}
 }
 
@@ -76,6 +91,7 @@ export async function runDevServe(input: {
 		target: input.target,
 		port: input.port,
 		appBasePath: input.appBasePath,
+		...(input.auth.org ? { org: input.auth.org } : {}),
 		allowPrivateNetwork: input.allowPrivateNetwork,
 		onStatus: (message) => input.io.stderr(`${message}\n`),
 		onError: (message) => input.io.stderr(`${message}\n`),
@@ -128,6 +144,7 @@ export async function runDevFetch(input: {
 		target: input.target,
 		port: input.port,
 		appBasePath: input.appBasePath,
+		...(input.auth.org ? { org: input.auth.org } : {}),
 		watch: false,
 		onStatus: (message) => input.io.stderr(`${message}\n`),
 	})
@@ -441,6 +458,7 @@ async function runPackageModuleOnce(input: {
 			apiUrl: input.auth.apiUrl,
 			target: input.target,
 			packageContext,
+			...(input.auth.org ? { org: input.auth.org } : {}),
 			onStatus: (message) => input.io.stderr(`${message}\n`),
 		})
 		input.io.stdout(formatToolResult(result, input.json === true))
