@@ -49,6 +49,8 @@ export const capabilityProxyCallPath = 'v1/capability-proxy/call'
  */
 export const capabilityProxyGatewayDeadlineMs = 5 * 60_000
 export const capabilityProxyHttpTimeoutMs = 7 * 60_000
+/** Bound DNS / TCP / TLS before the idle timer (undici Agent default was 10s). */
+export const capabilityProxyConnectTimeoutMs = 10_000
 
 /**
  * Node routes global fetch through `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`
@@ -78,6 +80,8 @@ export function nodeAgentHonorsEnvProxy(version: string = process.versions.node)
 export type CapabilityProxyFetchOptions = {
 	/** Idle limit while waiting for headers or between body chunks. */
 	timeoutMs?: number
+	/** Bound for DNS / TCP / TLS before the socket is ready. */
+	connectTimeoutMs?: number
 	useEnvProxy?: boolean
 }
 
@@ -91,6 +95,7 @@ export function createCapabilityProxyFetch(
 	options: CapabilityProxyFetchOptions = {},
 ): typeof fetch {
 	const timeoutMs = options.timeoutMs ?? capabilityProxyHttpTimeoutMs
+	const connectTimeoutMs = options.connectTimeoutMs ?? capabilityProxyConnectTimeoutMs
 	const useEnvProxy = options.useEnvProxy ?? nodeUsesEnvProxy()
 	if (useEnvProxy && !nodeAgentHonorsEnvProxy()) {
 		throw new Error(
@@ -119,21 +124,44 @@ export function createCapabilityProxyFetch(
 					headers: Object.fromEntries(new Headers(init.headers)),
 				},
 				(response) => {
+					clearTimeout(connectTimer)
 					const chunks: Array<Buffer> = []
 					response.on('data', (chunk: Buffer) => chunks.push(chunk))
 					response.on('error', reject)
 					response.on('end', () => resolve(toResponse(response, Buffer.concat(chunks))))
 				},
 			)
+			// request.setTimeout only arms after the socket is connected; bound DNS/TCP/TLS separately.
+			const connectTimer = setTimeout(() => {
+				request.destroy(
+					new Error(
+						`Kody API did not connect within ${connectTimeoutMs}ms (${url.pathname}).`,
+					),
+				)
+			}, connectTimeoutMs)
+			request.on('socket', (socket) => {
+				if (!socket.connecting) {
+					clearTimeout(connectTimer)
+					return
+				}
+				const ready = url.protocol === 'https:' ? 'secureConnect' : 'connect'
+				socket.once(ready, () => clearTimeout(connectTimer))
+			})
 			request.setTimeout(timeoutMs, () =>
 				request.destroy(
 					new Error(`Kody API sent nothing for ${timeoutMs}ms (${url.pathname}).`),
 				),
 			)
-			request.on('error', reject)
+			request.on('error', (error) => {
+				clearTimeout(connectTimer)
+				reject(error)
+			})
 			const { signal } = init
 			if (signal) {
-				const abort = () => request.destroy(abortError(signal.reason))
+				const abort = () => {
+					clearTimeout(connectTimer)
+					request.destroy(abortError(signal.reason))
+				}
 				if (signal.aborted) {
 					abort()
 				} else {

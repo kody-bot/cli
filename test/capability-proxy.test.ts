@@ -5,6 +5,7 @@ import { test } from 'node:test'
 import {
 	assertTokenSafeApiUrl,
 	callCapabilityProxy,
+	capabilityProxyConnectTimeoutMs,
 	capabilityProxyGatewayDeadlineMs,
 	capabilityProxyHttpTimeoutMs,
 	capabilityProxyUrl,
@@ -345,6 +346,26 @@ test('the CapabilityProxy sender governs how long a call waits for headers', asy
 		await assert.rejects(() => call(1_000), /Could not reach the Kody API[\s\S]*sent nothing for 1000ms/)
 		assert.deepEqual(await call(10_000), { ok: true })
 	})
+})
+
+test('CapabilityProxy connect timeout fails closed before the idle timer', async () => {
+	assert.equal(capabilityProxyConnectTimeoutMs, 10_000)
+	// TEST-NET-1 is unroutable; without a connect bound the OS would hang far longer.
+	await assert.rejects(
+		() =>
+			callCapabilityProxy({
+				apiUrl: 'http://192.0.2.1:9',
+				token,
+				fetchFn: createCapabilityProxyFetch({
+					timeoutMs: 60_000,
+					connectTimeoutMs: 200,
+					useEnvProxy: false,
+				}),
+				path: ['kody', 'emailSend'],
+				args: [{}],
+			}),
+		/Could not reach the Kody API[\s\S]*did not connect within 200ms/,
+	)
 })
 
 test('the CapabilityProxy sender reuses one connection across session and calls', async () => {
