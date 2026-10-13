@@ -1,12 +1,30 @@
 import { apiTokenEnvVar, defaultApiUrl, defaultMcpUrl, onboardingUrl } from './defaults.js'
 import { hostIds } from './host-catalog.js'
-import {
-	formatStoredOrgsHelpBlock,
-	orgEnvVar,
-	readStoredOrgsForHelp,
-} from './org.js'
+import { orgEnvVar } from './org-slug.js'
 import { readPackageVersion } from './package-info.js'
-import type { ListedOrg, SecretBackend, StoreResolution } from './store.js'
+import {
+	listStoredOrgs,
+	type ListedOrg,
+	type SecretBackend,
+	type StoreResolution,
+} from './store.js'
+
+function formatOrgsHelpBlock(orgs: Array<ListedOrg>, indent = '  '): string {
+	if (orgs.length === 0) {
+		return `${indent}Not logged in. Run \`kody login\`.\n`
+	}
+	const lines = [`${indent}Logged-in orgs:`]
+	for (const org of orgs) {
+		const mark = org.active ? '*' : ' '
+		const pending = org.pending
+			? '  (slug pending — run any authenticated command)'
+			: ''
+		lines.push(
+			`${indent}  ${mark} ${org.slug}${org.active ? '  (active)' : ''}${pending}`,
+		)
+	}
+	return `${lines.join('\n')}\n`
+}
 
 export function buildUsage(input: {
 	mcpUrl?: string
@@ -15,10 +33,15 @@ export function buildUsage(input: {
 	orgs?: Array<ListedOrg>
 } = {}): string {
 	const mcpUrl = input.mcpUrl ?? defaultMcpUrl
-	const orgs =
-		input.orgs ??
-		readStoredOrgsForHelp(mcpUrl, input.backend, input.resolution)
-	const orgBlock = formatStoredOrgsHelpBlock(orgs)
+	let orgs = input.orgs
+	if (!orgs) {
+		try {
+			orgs = listStoredOrgs(mcpUrl, input.backend, input.resolution)
+		} catch {
+			orgs = []
+		}
+	}
+	const orgBlock = formatOrgsHelpBlock(orgs)
 
 	return `Kody CLI ${readPackageVersion()}
 
@@ -203,5 +226,11 @@ Environment:
 `
 }
 
-/** Default usage string (reads the local credential store once). */
-export const usage = buildUsage()
+/**
+ * Build usage on demand. Do not call at module load: reading the credential
+ * store (and pulling keyring) on every `kody --version` blows the startup
+ * budget. Callers that need the offline org list pass `mcpUrl` / `backend`.
+ */
+export function usage(input?: Parameters<typeof buildUsage>[0]): string {
+	return buildUsage(input)
+}

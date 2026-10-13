@@ -5,11 +5,8 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { runCli } from '../src/cli.js'
 import { buildUsage } from '../src/help.js'
-import {
-	formatStoredOrgsHelpBlock,
-	orgEnvVar,
-	resolveOrgSlug,
-} from '../src/org.js'
+import { formatStoredOrgsHelpBlock } from '../src/org.js'
+import { orgEnvVar, resolveOrgSlug } from '../src/org-resolve.js'
 import {
 	createFileBackend,
 	deleteCredentials,

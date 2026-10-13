@@ -25,20 +25,10 @@ import {
 	type CredentialCallMapInput,
 } from './credential-call-map.js'
 import { defaultApiUrl, defaultMcpUrl, modernMcpProtocolVersion } from './defaults.js'
-import { buildUsage, usage } from './help.js'
-import {
-	chooseOrgInteractively,
-	formatOrgListHuman,
-	formatOrgListJson,
-	resolveOrgSlug,
-	useOrg,
-} from './org.js'
+import { buildUsage } from './help.js'
+import { resolveOrgSlug } from './org-resolve.js'
 import { refreshGitCredentialHelperPinIfNeeded } from './setup-git.js'
-import {
-	deleteCredentials,
-	listStoredOrgs,
-	loadCredentials,
-} from './store.js'
+import { deleteCredentials, listStoredOrgs, loadCredentials } from './store.js'
 import { formatToolResult } from './tool-result.js'
 import { resolveLocalExecuteBearer } from './local-execute-auth.js'
 import { assertLocalExecuteNodeEngine } from './node-engine.js'
@@ -322,6 +312,13 @@ async function dispatch(
 			return 0
 		}
 		case 'org': {
+			const {
+				chooseOrgInteractively,
+				formatOrgListHuman,
+				formatOrgListJson,
+				useOrg,
+			} = await import('./org.js')
+			const { listStoredOrgs } = await import('./store.js')
 			const action = parsed.positionals[0]
 			if (action === 'list') {
 				const orgs = listStoredOrgs(mcpUrl)

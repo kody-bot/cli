@@ -13,8 +13,11 @@ import {
 	cliRedirectUrl,
 	defaultScopes,
 } from './defaults.js'
+import { orgSlugFromFlag } from './org-slug.js'
 import type { StoredCredentials } from './store.js'
 import { openUrl } from './open-url.js'
+
+export { orgSlugFromFlag } from './org-slug.js'
 
 export function buildCliClientMetadata(): OAuthClientMetadata {
 	return {
@@ -27,17 +30,6 @@ export function buildCliClientMetadata(): OAuthClientMetadata {
 		application_type: 'native',
 		scope: defaultScopes.join(' '),
 	}
-}
-
-/** Public org slug: trim and lowercase, matching the server's `?org=` rules. */
-export function orgSlugFromFlag(value: string): string {
-	const slug = value.trim().toLowerCase()
-	if (!slug) {
-		throw new Error(
-			'`--org` requires an organization slug. Example: `kody login --org acme`.',
-		)
-	}
-	return slug
 }
 
 /** SEP-2352 issuer stamp restored from durable CLI storage. */
