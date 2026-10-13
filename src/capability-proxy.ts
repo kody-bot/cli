@@ -1,4 +1,5 @@
 import type { Agent as HttpAgent, IncomingMessage, request as httpRequest } from 'node:http'
+import type { TLSSocket } from 'node:tls'
 import {
 	apiTokenMintInstructions,
 	cliBootstrapInstructions,
@@ -140,12 +141,23 @@ export function createCapabilityProxyFetch(
 				)
 			}, connectTimeoutMs)
 			request.on('socket', (socket) => {
-				if (!socket.connecting) {
-					clearTimeout(connectTimer)
+				const clearConnectTimer = () => clearTimeout(connectTimer)
+				if (url.protocol === 'https:') {
+					const tlsSocket = socket as TLSSocket
+					// `encrypted` is always true on TLSSocket; secureConnecting is the
+					// handshake flag. Keep-alive reuse skips secureConnect.
+					if (tlsSocket.secureConnecting === false) {
+						clearConnectTimer()
+						return
+					}
+					tlsSocket.once('secureConnect', clearConnectTimer)
 					return
 				}
-				const ready = url.protocol === 'https:' ? 'secureConnect' : 'connect'
-				socket.once(ready, () => clearTimeout(connectTimer))
+				if (!socket.connecting) {
+					clearConnectTimer()
+					return
+				}
+				socket.once('connect', clearConnectTimer)
 			})
 			request.setTimeout(timeoutMs, () =>
 				request.destroy(

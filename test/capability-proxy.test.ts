@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createServer, request as httpRequest } from 'node:http'
-import { connect, type AddressInfo } from 'node:net'
+import { connect, createServer as createTcpServer, type AddressInfo } from 'node:net'
 import { test } from 'node:test'
 import {
 	assertTokenSafeApiUrl,
@@ -366,6 +366,37 @@ test('CapabilityProxy connect timeout fails closed before the idle timer', async
 			}),
 		/Could not reach the Kody API[\s\S]*did not connect within 200ms/,
 	)
+})
+
+test('CapabilityProxy HTTPS connect timeout covers TLS, not only TCP', async () => {
+	// Accept TCP then never complete the handshake so secureConnect never fires.
+	const accepted: Array<ReturnType<typeof connect>> = []
+	const server = createTcpServer((socket) => {
+		accepted.push(socket)
+		socket.on('error', () => {})
+	})
+	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+	const { port } = server.address() as AddressInfo
+	try {
+		await assert.rejects(
+			() =>
+				callCapabilityProxy({
+					apiUrl: `https://127.0.0.1:${port}`,
+					token,
+					fetchFn: createCapabilityProxyFetch({
+						timeoutMs: 60_000,
+						connectTimeoutMs: 300,
+						useEnvProxy: false,
+					}),
+					path: ['kody', 'emailSend'],
+					args: [{}],
+				}),
+			/Could not reach the Kody API[\s\S]*did not connect within 300ms/,
+		)
+	} finally {
+		for (const socket of accepted) socket.destroy()
+		await new Promise<void>((resolve) => server.close(() => resolve()))
+	}
 })
 
 test('the CapabilityProxy sender reuses one connection across session and calls', async () => {
