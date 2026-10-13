@@ -55,6 +55,7 @@ kody login --org acme
 kody search "what can you do"
 kody search --domain email
 kody execute --local --code "import { kody } from 'kody:runtime'\nexport default async function main() { return await kody.search({ query: 'what can you do' }) }"
+kody execute --local --credential github=work --code "import { credential } from 'kody:runtime'\nexport default async function main() { const gh = await credential('github'); return { name: gh.name, hosts: gh.hosts } }"
 kody status
 kody whoami
 kody logout

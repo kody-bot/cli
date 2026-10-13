@@ -85,24 +85,49 @@ before(async () => {
 			return
 		}
 		if (request.url === '/v1/capability-proxy/call') {
-			const { path, args } = body as { path: Array<string>; args: Array<unknown> }
+			const { path, args, credentials } = body as {
+				path: Array<string>
+				args: Array<unknown>
+				credentials?: Record<string, unknown>
+			}
 			if (path.join('.') === 'kody.explode') {
 				send(200, { error: { code: 'capability_failed', message: 'explode is broken' } })
 				return
 			}
-			if (path.join('.') === 'kody.credentialClientOpen') {
-				// Origin returns metadata + opaque handle only — never a secret value.
+			if (path.join('.') === 'kody.credentialClientCheck') {
 				send(200, {
 					result: {
 						ok: true,
 						value: {
-							handle: 'kch1.test-handle',
-							key: (args[0] as { key?: string } | undefined)?.key ?? null,
-							name: 'resend',
-							scope: 'personal',
-							kind: 'secret',
-							hosts: ['api.resend.com'],
+							warnings: [],
+							checked: credentials ?? null,
+							strict: (args[0] as { strict?: boolean } | undefined)?.strict === true,
 						},
+					},
+				})
+				return
+			}
+			if (
+				path.join('.') === 'kody.credentialClientOpen' ||
+				path.join('.') === 'kody.credentialClientOpenAll'
+			) {
+				// Origin returns metadata + opaque handle only — never a secret value.
+				const opened = {
+					handle: 'kch1.test-handle',
+					key: (args[0] as { key?: string } | undefined)?.key ?? null,
+					name:
+						typeof credentials?.resend === 'string'
+							? credentials.resend
+							: 'resend',
+					scope: 'personal',
+					kind: 'secret',
+					hosts: ['api.resend.com'],
+				}
+				send(200, {
+					result: {
+						ok: true,
+						value:
+							path.join('.') === 'kody.credentialClientOpenAll' ? [opened] : opened,
 					},
 				})
 				return
@@ -198,7 +223,14 @@ function isRunning(pid: number): boolean {
 
 function reset() {
 	proxyRequests.length = 0
-	sessionStatus = { status: 200, body: { scopes: ['capability-proxy'], expiresAt: null } }
+	sessionStatus = {
+		status: 200,
+		body: {
+			scopes: ['capability-proxy'],
+			expiresAt: null,
+			features: ['credential-call-map'],
+		},
+	}
 }
 
 test('hasSavedPackageImports detects static and dynamic kody:@ imports', () => {
@@ -418,6 +450,8 @@ test('createLocalRuntimeModuleSource exports credential and credentials for ad h
 	assert.match(source, /export const credentials = __kodyCredentialRuntime\.credentials/)
 	assert.match(source, /x-kody-credential-client/)
 	assert.match(source, /credentialClientOpen/)
+	assert.match(source, /credentialClientOpenAll/)
+	assert.match(source, /opened\.hint/)
 	// Secret values stay on origin: the host only hops tool names + opaque handles.
 	assert.doesNotMatch(source, /secretValue|plaintext|apiKeyValue/)
 	assert.match(
@@ -499,9 +533,93 @@ export default async function main() {
 			path: ['kody', 'credentialClientOpen'],
 			args: [{ key: 'resend' }],
 		})
+		const openAllCall = proxyRequests.find(
+			(request) =>
+				request.url === '/v1/capability-proxy/call' &&
+				Array.isArray((request.body as { path?: unknown })?.path) &&
+				((request.body as { path: Array<string> }).path.join('.') ===
+					'kody.credentialClientOpenAll'),
+		)
+		assert.ok(openAllCall)
+		assert.deepEqual(openAllCall?.body, {
+			path: ['kody', 'credentialClientOpenAll'],
+			args: [{ key: 'resend' }],
+		})
 		const serialized = JSON.stringify(proxyRequests)
 		assert.equal(serialized.includes('sk_live'), false)
 		assert.equal(serialized.includes('secret-value'), false)
+	},
+)
+
+test(
+	'runLocalExecute preflights --credential and attaches the map outside args',
+	{ timeout: 180_000 },
+	async () => {
+		reset()
+		const code = `
+import { credential } from 'kody:runtime'
+export default async function main() {
+	const opened = await credential('resend')
+	return { name: opened.name }
+}
+`
+		const result = await runLocalExecute({
+			code,
+			token: goodToken,
+			apiUrl,
+			credentials: { resend: 'prod' },
+		})
+		assert.equal(result.isError, false)
+		const structured = result.structuredContent as { result: { name: string } }
+		assert.equal(structured.result.name, 'prod')
+		const checkCall = proxyRequests.find(
+			(request) =>
+				request.url === '/v1/capability-proxy/call' &&
+				Array.isArray((request.body as { path?: unknown })?.path) &&
+				((request.body as { path: Array<string> }).path.join('.') ===
+					'kody.credentialClientCheck'),
+		)
+		assert.ok(checkCall)
+		assert.deepEqual(checkCall?.body, {
+			path: ['kody', 'credentialClientCheck'],
+			args: [{}],
+			credentials: { resend: 'prod' },
+		})
+		const openCall = proxyRequests.find(
+			(request) =>
+				request.url === '/v1/capability-proxy/call' &&
+				Array.isArray((request.body as { path?: unknown })?.path) &&
+				((request.body as { path: Array<string> }).path.join('.') ===
+					'kody.credentialClientOpen'),
+		)
+		assert.ok(openCall)
+		assert.deepEqual(openCall?.body, {
+			path: ['kody', 'credentialClientOpen'],
+			args: [{ key: 'resend' }],
+			credentials: { resend: 'prod' },
+		})
+	},
+)
+
+test(
+	'runLocalExecute refuses --credential when the session lacks credential-call-map',
+	{ timeout: 180_000 },
+	async () => {
+		reset()
+		sessionStatus = {
+			status: 200,
+			body: { scopes: ['capability-proxy'], expiresAt: null, features: [] },
+		}
+		await assert.rejects(
+			() =>
+				runLocalExecute({
+					code: 'export default () => ({ ok: true })',
+					token: goodToken,
+					apiUrl,
+					credentials: { github: 'work' },
+				}),
+			/credential-call-map/,
+		)
 	},
 )
 

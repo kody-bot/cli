@@ -9,6 +9,7 @@ import {
 	capabilityProxyGatewayDeadlineMs,
 	capabilityProxyHttpTimeoutMs,
 	capabilityProxyUrl,
+	checkCredentialCallMap,
 	createCapabilityProxyAgent,
 	nodeUsesEnvProxy,
 	openCapabilityProxySession,
@@ -46,6 +47,7 @@ test('openCapabilityProxySession sends the bearer token and reads scopes + TTL',
 	const { fetchFn, requests } = respondWith(200, {
 		scopes: ['capability-proxy'],
 		expiresAt: '2026-10-01T00:10:00Z',
+		features: ['credential-call-map'],
 	})
 	const session = await openCapabilityProxySession({
 		apiUrl: 'https://api.kody.codes',
@@ -55,6 +57,7 @@ test('openCapabilityProxySession sends the bearer token and reads scopes + TTL',
 	assert.deepEqual(session, {
 		scopes: ['capability-proxy'],
 		expiresAt: '2026-10-01T00:10:00Z',
+		features: ['credential-call-map'],
 	})
 	assert.equal(requests[0]?.url, 'https://api.kody.codes/v1/capability-proxy/session')
 	assert.equal(requests[0]?.method, 'GET')
@@ -163,6 +166,59 @@ test('callCapabilityProxy posts the runtime path, args, and conversation id', as
 		args: [{ room: 'office' }],
 		conversationId: 'conv-1',
 	})
+})
+
+test('callCapabilityProxy sends credentials as a top-level field outside args', async () => {
+	const { fetchFn, requests } = respondWith(200, { result: { ok: true } })
+	await callCapabilityProxy({
+		apiUrl: 'https://api.kody.codes',
+		token,
+		fetchFn,
+		path: ['kody', 'credentialClientOpen'],
+		args: [{ key: 'github' }],
+		credentials: { github: 'work' },
+	})
+	assert.deepEqual(JSON.parse(requests[0]?.body ?? ''), {
+		path: ['kody', 'credentialClientOpen'],
+		args: [{ key: 'github' }],
+		credentials: { github: 'work' },
+	})
+})
+
+test('checkCredentialCallMap preflights picks and surfaces structured failures', async () => {
+	const ok = respondWith(200, { result: { ok: true, value: { warnings: ['unknown key'] } } })
+	assert.deepEqual(
+		await checkCredentialCallMap({
+			apiUrl: 'https://api.kody.codes',
+			token,
+			fetchFn: ok.fetchFn,
+			credentials: { github: 'work' },
+		}),
+		{ warnings: ['unknown key'] },
+	)
+	assert.deepEqual(JSON.parse(ok.requests[0]?.body ?? ''), {
+		path: ['kody', 'credentialClientCheck'],
+		args: [{}],
+		credentials: { github: 'work' },
+	})
+
+	const fail = respondWith(200, {
+		result: { ok: false, error: { code: 'credential_not_found', message: 'No match.' } },
+	})
+	await assert.rejects(
+		() =>
+			checkCredentialCallMap({
+				apiUrl: 'https://api.kody.codes',
+				token,
+				fetchFn: fail.fetchFn,
+				credentials: { github: 'missing' },
+			}),
+		(error: Error & { code?: string | null }) => {
+			assert.equal(error.message, 'No match.')
+			assert.equal(error.code, 'credential_not_found')
+			return true
+		},
+	)
 })
 
 test('callCapabilityProxy surfaces capability errors from string or object bodies', async () => {

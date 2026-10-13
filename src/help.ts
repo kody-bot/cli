@@ -16,7 +16,7 @@ Usage:
   kody search [query] [--entity <ref>] [--domain <id>] [--limit <n>] [--token <token>] [--api-url <url>] [--json]
   kody api <operationId> [--params <json>] [--token <token>] [--api-url <url>] [--json]
   kody execute [--invoke <ref> | --code <esm> | --file <path>] [--params <json>] [--conversation-id <id>] [--json]
-               [--token <token>] [--api-url <url>] [--local] [--allow-private-network]
+               [--credential <key=name>]… [--token <token>] [--api-url <url>] [--local] [--allow-private-network]
   kody install [--mcp-url <url>] [--clients <ids>] [--yes] [--project] [--json]
   kody skill install [--project]
 
@@ -96,6 +96,18 @@ Usage:
              whole-module cloud kody.execute defer). Fails clearly when that
              package-graph API is unavailable. Cloud token execute (no
              --local) uses CapabilityProxy → kody.execute for every module.
+
+  --credential <key=name>
+             ADR 0068 call map: pick which credential each \`credential(key)\`
+             / \`credentials(key)\` call gets. Repeatable.
+             \`--credential github=work\`, \`--credential x=org:work\`
+             (or \`personal:name\`), \`--credential github=\` for none on
+             purpose. With \`--local\`, sent as CapabilityProxy top-level
+             \`credentials\` (code never sets the map) after a
+             \`credentialClientCheck\` preflight. With a \`kody login\` MCP
+             session (no token), passed as MCP execute \`credentials\`.
+             Token-auth cloud execute (CapabilityProxy → kody.execute)
+             rejects the flag — use \`--local\` or MCP.
 
   --allow-private-network
              Allow execute --local code to fetch private and local network

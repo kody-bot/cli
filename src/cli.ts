@@ -20,6 +20,10 @@ import {
 	resolveCliTokenLifetime,
 	type ResolvedCliTokenLifetime,
 } from './auth-bootstrap.js'
+import {
+	parseCredentialFlags,
+	type CredentialCallMapInput,
+} from './credential-call-map.js'
 import { defaultApiUrl, defaultMcpUrl, modernMcpProtocolVersion } from './defaults.js'
 import { usage } from './help.js'
 import { deleteCredentials, loadCredentials } from './store.js'
@@ -93,6 +97,7 @@ function parseKnown(args: Array<string>) {
 			'conversation-id': { type: 'string' },
 			local: { type: 'boolean' },
 			'allow-private-network': { type: 'boolean' },
+			credential: { type: 'string', multiple: true },
 			token: { type: 'string' },
 			'api-url': { type: 'string' },
 			lifetime: { type: 'string' },
@@ -506,6 +511,15 @@ async function dispatch(
 							: fileArg === '-'
 								? await readStdin()
 								: positionalModule || undefined
+			const credentials = parseCredentialFlags(
+				Array.isArray(parsed.values.credential)
+					? parsed.values.credential.filter(
+							(value): value is string => typeof value === 'string',
+						)
+					: typeof parsed.values.credential === 'string'
+						? [parsed.values.credential]
+						: undefined,
+			)
 			const args = buildExecuteToolArgs({
 				invoke,
 				code: typeof code === 'string' ? code : undefined,
@@ -515,6 +529,7 @@ async function dispatch(
 					typeof parsed.values['conversation-id'] === 'string'
 						? parsed.values['conversation-id']
 						: undefined,
+				credentials,
 			})
 			const apiUrl = apiUrlFrom({
 				apiUrl:
@@ -536,6 +551,7 @@ async function dispatch(
 						...(modulePath !== undefined ? { modulePath } : {}),
 						params: args.params,
 						conversationId: args.conversationId as string | undefined,
+						...(credentials !== undefined ? { credentials } : {}),
 						token: await resolveLocalExecuteBearer({
 							tokenValues,
 							mcpUrl,
@@ -553,6 +569,7 @@ async function dispatch(
 							invoke,
 							params: args.params,
 							conversationId: args.conversationId as string | undefined,
+							...(credentials !== undefined ? { credentials } : {}),
 							token: requireApiToken(
 								tokenValues,
 								process.env,
@@ -657,6 +674,7 @@ export function buildExecuteToolArgs(input: {
 	code?: string
 	paramsJson?: string
 	conversationId?: string
+	credentials?: CredentialCallMapInput
 }): Record<string, unknown> {
 	const invoke = input.invoke
 	const code = input.code
@@ -677,13 +695,20 @@ export function buildExecuteToolArgs(input: {
 
 function attachExecuteCommonArgs(
 	args: Record<string, unknown>,
-	input: { paramsJson?: string; conversationId?: string },
+	input: {
+		paramsJson?: string
+		conversationId?: string
+		credentials?: CredentialCallMapInput
+	},
 ): Record<string, unknown> {
 	if (input.paramsJson !== undefined) {
 		args.params = JSON.parse(input.paramsJson)
 	}
 	if (input.conversationId !== undefined) {
 		args.conversationId = input.conversationId
+	}
+	if (input.credentials !== undefined) {
+		args.credentials = input.credentials
 	}
 	return args
 }

@@ -16,8 +16,15 @@ import { setTimeout as delay } from 'node:timers/promises'
 import {
 	assertTokenSafeApiUrl,
 	callCapabilityProxy,
+	checkCredentialCallMap,
 	openCapabilityProxySession,
+	type CapabilityProxySession,
 } from './capability-proxy.js'
+import {
+	missingCredentialCallMapFeatureMessage,
+	sessionSupportsCredentialCallMap,
+	type CredentialCallMapInput,
+} from './credential-call-map.js'
 import { assertLocalExecuteNodeEngine } from './node-engine.js'
 import { apiTokenEnvVar } from './defaults.js'
 import {
@@ -55,6 +62,11 @@ export type LocalExecuteInput = {
 	modulePath?: string
 	params?: unknown
 	conversationId?: string
+	/**
+	 * ADR 0068 call map from `--credential`. Sent as the CapabilityProxy call's
+	 * top-level `credentials` field on every hop (and on the preflight check).
+	 */
+	credentials?: CredentialCallMapInput
 	token: string
 	apiUrl: string
 	/** Used for CapabilityProxy requests (session + proxied calls). */
@@ -86,7 +98,20 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 			? await bundleLocalUserModule(input.modulePath)
 			: input.code
 	const client = { apiUrl: input.apiUrl, token: input.token, fetchFn: input.fetchFn }
-	await openCapabilityProxySession(client)
+	const session = await openCapabilityProxySession(client)
+	assertCredentialCallMapSupported(session, input)
+
+	if (input.credentials) {
+		input.onStatus?.('Checking --credential picks against CapabilityProxy…')
+		const { warnings } = await checkCredentialCallMap({
+			...client,
+			credentials: input.credentials,
+			conversationId: input.conversationId,
+		})
+		for (const warning of warnings) {
+			input.onStatus?.(warning)
+		}
+	}
 
 	// Always fetch package-graph: origin returns the gateway-fetch shim even
 	// when there are no `kody:@` imports so ambient `{{secret:…}}` fetch hops
@@ -134,6 +159,9 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 					...client,
 					...call,
 					conversationId: input.conversationId,
+					...(input.credentials !== undefined
+						? { credentials: input.credentials }
+						: {}),
 					signal,
 				}),
 		})
@@ -414,6 +442,15 @@ function parseBridgeCall(body: string): { path: Array<string>; args: Array<unkno
 		path: parsed.path as Array<string>,
 		args: Array.isArray(parsed.args) ? parsed.args : [],
 	}
+}
+
+function assertCredentialCallMapSupported(
+	session: CapabilityProxySession,
+	input: LocalExecuteInput,
+): void {
+	if (!input.credentials) return
+	if (sessionSupportsCredentialCallMap(session.features)) return
+	throw new Error(missingCredentialCallMapFeatureMessage(input.apiUrl))
 }
 
 async function readBody(stream: IncomingMessage): Promise<string> {

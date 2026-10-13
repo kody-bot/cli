@@ -68,7 +68,7 @@ Or run via `npx @kodycodes/cli` without a global install.
 | `kody whoami` | Confirms the CLI MCP connection and lists tools. With a scoped API token (and no login), shows token identity via the Open API. |
 | `kody search [query]` | Calls Kody `search` from the CLI (prefer the host MCP tool). Token-only auth uses Open API `GET /v1/search`. |
 | `kody api <operationId>` | Thin Open API wrapper matching the MCP `api` tool: `operationId` + flat `--params` JSON. Auth: `--token` / `KODY_API_TOKEN` / stored `auth bootstrap` token. |
-| `kody execute` | Calls Kody `execute` from the CLI (`--invoke`, `--code`, `--file`, or stdin via `--file -`). With a scoped API token and no login (or with `--token`), cloud execute goes through CapabilityProxy → `kody.execute` — no `kody login`. Add `--local` to run the module (and static `kody:@…` package modules) on this machine instead. `--allow-private-network` opts local execution into private and local network access. |
+| `kody execute` | Calls Kody `execute` from the CLI (`--invoke`, `--code`, `--file`, or stdin via `--file -`). With a scoped API token and no login (or with `--token`), cloud execute goes through CapabilityProxy → `kody.execute` — no `kody login`. Add `--local` to run the module (and static `kody:@…` package modules) on this machine instead. `--credential key=name` (repeatable; `org:name` / `personal:name` / empty `=` for none) picks ADR 0068 credentials for `--local` or a `kody login` MCP session. `--allow-private-network` opts local execution into private and local network access. |
 
 `--json` prints structured MCP results.
 
@@ -173,6 +173,10 @@ npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.
 # Or a scoped API token (still wins over login / bootstrap store when set):
 export KODY_API_TOKEN=…   # minted through the Kody `api` tool
 npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.com"}'
+
+# ADR 0068: pick credentials for credential(key) / credentials(key)
+npx @kodycodes/cli execute --local --credential github=work --credential resend=personal:prod \
+  --code 'import { credential } from "kody:runtime"; export default async () => (await credential("github")).name'
 ```
 
 - **Auth:** `--token` / `KODY_API_TOKEN` when set; else stored `auth bootstrap`

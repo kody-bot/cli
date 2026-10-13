@@ -3,6 +3,7 @@ import {
 	callCapabilityProxy,
 	openCapabilityProxySession,
 } from './capability-proxy.js'
+import type { CredentialCallMapInput } from './credential-call-map.js'
 import type { ToolCallResult } from './tool-result.js'
 import { resolveExecuteInvokeCode } from './invoke-passthrough.js'
 
@@ -11,10 +12,18 @@ export type RemoteExecuteInput = {
 	invoke?: string
 	params?: unknown
 	conversationId?: string
+	/**
+	 * Not supported on CapabilityProxy → `kody.execute` (the package-callable
+	 * capability omits the map on purpose). Prefer `--local` or MCP execute.
+	 */
+	credentials?: CredentialCallMapInput
 	token: string
 	apiUrl: string
 	fetchFn?: typeof fetch
 }
+
+export const credentialFlagRequiresLocalOrMcpMessage =
+	'--credential picks a credential for this run, but token-auth cloud execute goes through CapabilityProxy → kody.execute, which does not take a call map (package code must not pick by name). Use `execute --local --credential …`, or omit --token / KODY_API_TOKEN and use a `kody login` MCP session so execute receives credentials.'
 
 /**
  * Cloud (non-`--local`) execute authenticated only with a scoped API token:
@@ -28,6 +37,9 @@ export async function runRemoteExecuteWithToken(
 	input: RemoteExecuteInput,
 ): Promise<ToolCallResult> {
 	assertTokenSafeApiUrl(input.apiUrl)
+	if (input.credentials) {
+		throw new Error(credentialFlagRequiresLocalOrMcpMessage)
+	}
 	const code = resolveRemoteExecuteCode(input)
 	const client = { apiUrl: input.apiUrl, token: input.token, fetchFn: input.fetchFn }
 	await openCapabilityProxySession(client)
