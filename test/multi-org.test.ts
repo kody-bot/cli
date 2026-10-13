@@ -143,6 +143,38 @@ test('promotePendingOrg finishes silent migration', () => {
 	assert.equal(store?.orgs.kentcdodds?.accessToken, 'access-1')
 })
 
+test('promotePendingOrg does not overwrite a fresh named login or steal activeOrg', () => {
+	const backend = tempBackend()
+	saveCredentials(sample({ accessToken: 'legacy', refreshToken: 'legacy-r' }), backend)
+	assert.ok(loadCredentialStore(mcpUrl, backend)?.pending)
+	saveCredentials(
+		sample({ org: 'beta', accessToken: 'fresh-beta', refreshToken: 'fresh-r' }),
+		backend,
+	)
+	const mid = loadCredentialStore(mcpUrl, backend)
+	assert.equal(mid?.activeOrg, 'beta')
+	assert.equal(mid?.orgs.beta?.accessToken, 'fresh-beta')
+	assert.equal(mid?.pending?.accessToken, 'legacy')
+
+	promotePendingOrg(mcpUrl, 'acme', backend)
+	const afterOther = loadCredentialStore(mcpUrl, backend)
+	assert.equal(afterOther?.pending, undefined)
+	assert.equal(afterOther?.activeOrg, 'beta')
+	assert.equal(afterOther?.orgs.beta?.accessToken, 'fresh-beta')
+	assert.equal(afterOther?.orgs.acme?.accessToken, 'legacy')
+
+	saveCredentials(sample({ accessToken: 'legacy-2', refreshToken: 'legacy-2-r' }), backend)
+	saveCredentials(
+		sample({ org: 'acme', accessToken: 'fresh-acme', refreshToken: 'fresh-acme-r' }),
+		backend,
+	)
+	promotePendingOrg(mcpUrl, 'acme', backend)
+	const afterSame = loadCredentialStore(mcpUrl, backend)
+	assert.equal(afterSame?.pending, undefined)
+	assert.equal(afterSame?.activeOrg, 'acme')
+	assert.equal(afterSame?.orgs.acme?.accessToken, 'fresh-acme')
+})
+
 test('help lists logged-in orgs from the local store offline', () => {
 	const backend = tempBackend()
 	saveCredentials(sample({ org: 'acme' }), backend)

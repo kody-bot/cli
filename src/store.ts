@@ -532,7 +532,11 @@ export function saveCredentials(
 	return saveCredentialStore(next, backend, resolution)
 }
 
-/** Promote pending legacy tokens into `orgs[slug]` and set active. */
+/**
+ * Promote pending legacy tokens into `orgs[slug]`.
+ * Never overwrites an existing named login (a fresh `kody login` wins), and
+ * never steals `activeOrg` away from an already-active named org.
+ */
 export function promotePendingOrg(
 	mcpUrl: string,
 	org: string,
@@ -545,14 +549,22 @@ export function promotePendingOrg(
 	if (!slug) {
 		throw new Error('Organization slug is required to finish credential migration.')
 	}
+	const existingNamed = snapshot.orgs[slug]
+	const orgs = existingNamed
+		? snapshot.orgs
+		: {
+				...snapshot.orgs,
+				[slug]: { ...snapshot.pending, org: slug },
+			}
+	const activeIsNamed =
+		typeof snapshot.activeOrg === 'string' &&
+		snapshot.activeOrg.length > 0 &&
+		snapshot.orgs[snapshot.activeOrg] != null
 	const next: MultiOrgCredentialStore = {
 		version: 2,
 		mcpUrl: snapshot.mcpUrl,
-		activeOrg: slug,
-		orgs: {
-			...snapshot.orgs,
-			[slug]: { ...snapshot.pending, org: slug },
-		},
+		activeOrg: activeIsNamed ? snapshot.activeOrg : slug,
+		orgs,
 	}
 	saveCredentialStore(next, backend, resolution)
 	return next
