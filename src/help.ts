@@ -71,14 +71,18 @@ Usage:
              \`--lifetime long\`; reuses a suitable stored token). That token
              authorizes every repo you can access across all orgs — login
              \`--org\` only scopes the MCP mint session, not git. Requires a
-             server that advertises \`org_binding\`. Configures
-             \`credential.https://<host>.helper\` + \`useHttpPath\`. Does not
-             change \`kody login\` / existing auth flows.
+             server that advertises \`org_binding\`. Configures a stable
+             \`credential.https://<host>.helper\` (global \`kody\` or
+             \`npx -y @kodycodes/cli@<major>\`, never an ephemeral npx cache
+             path) + \`useHttpPath\`. Re-run to rewrite an old npx-cache
+             helper. Does not change \`kody login\` / existing auth flows.
 
   git-credential
              Git credential helper invoked by git after \`auth setup-git\`
              (\`get\` returns username=x / password=kody_at_… for the Kody
-             host; \`store\`/\`erase\` are no-ops). Not meant for interactive use.
+             host; silently remints via \`kody login\` when the stored token
+             is expired or near expiry; \`store\`/\`erase\` are no-ops). Not
+             meant for interactive use.
 
   api        Call one Open API operation by operationId + flat --params
              JSON (same shape as the MCP \`api\` tool). Uses scoped API

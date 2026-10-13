@@ -1,8 +1,22 @@
 import { createInterface } from 'node:readline'
+import {
+	authBootstrapWithScopes,
+	cliCredentialBootstrapOperationId,
+	resolveCliTokenLifetime,
+} from './auth-bootstrap.js'
+import {
+	loadStoredApiToken,
+	type StoredApiToken,
+} from './api-token-store.js'
 import { defaultApiUrl, defaultMcpUrl } from './defaults.js'
-import { loadStoredApiToken } from './api-token-store.js'
-import { gitCredentialHostFromMcpUrl } from './setup-git.js'
-import type { SecretBackend, StoreResolution } from './store.js'
+import { callKodyApiOperation } from './mcp.js'
+import {
+	apiTokenNeedsRefresh,
+	ensureSetupGitScopes,
+	gitCredentialHostFromMcpUrl,
+	setupGitDefaultScopes,
+} from './setup-git.js'
+import { loadCredentials, type SecretBackend, type StoreResolution } from './store.js'
 
 export type GitCredentialAction = 'get' | 'store' | 'erase'
 
@@ -58,10 +72,77 @@ export function isKodyGitHttpsHost(input: {
 	return input.host.toLowerCase() === input.expectedHost.toLowerCase()
 }
 
+export type EnsureGitApiTokenResult = {
+	stored: StoredApiToken
+	refreshed: boolean
+}
+
+/**
+ * Return a usable stored API token for git HTTPS. When the token is missing,
+ * expired, or within the refresh skew, silently remint via the `kody login`
+ * session (same scopes/lifetime as `auth setup-git`). Without a login session,
+ * returns the existing token if any (may still work) or null.
+ */
+export async function ensureGitApiToken(input: {
+	apiUrl?: string
+	mcpUrl?: string
+	nowMs?: number
+	backend?: SecretBackend
+	resolution?: StoreResolution
+	/** Test seam: mint cliCredentialBootstrap (defaults to MCP login session). */
+	mint?: (params: Record<string, unknown>) => Promise<unknown>
+	loadLogin?: typeof loadCredentials
+	loadApiToken?: typeof loadStoredApiToken
+}): Promise<EnsureGitApiTokenResult | null> {
+	const apiUrl = input.apiUrl || defaultApiUrl
+	const mcpUrl = input.mcpUrl || defaultMcpUrl
+	const loadApi = input.loadApiToken ?? loadStoredApiToken
+	const loadLogin = input.loadLogin ?? loadCredentials
+	const stored = loadApi(apiUrl, input.backend, input.resolution)
+	const nowMs = input.nowMs ?? Date.now()
+	if (stored && !apiTokenNeedsRefresh(stored, nowMs)) {
+		return { stored, refreshed: false }
+	}
+
+	if (!loadLogin(mcpUrl)) {
+		return stored ? { stored, refreshed: false } : null
+	}
+
+	const mint =
+		input.mint ??
+		(async (params: Record<string, unknown>) =>
+			callKodyApiOperation({
+				operationId: cliCredentialBootstrapOperationId,
+				params,
+				mcpUrl,
+			}))
+
+	try {
+		const scopes = ensureSetupGitScopes(
+			stored?.scopes?.length ? stored.scopes : setupGitDefaultScopes,
+		)
+		const result = await authBootstrapWithScopes({
+			scopes,
+			lifetime: resolveCliTokenLifetime({ lifetime: 'long' }),
+			mint,
+			apiUrl,
+			backend: input.backend,
+			resolution: input.resolution,
+		})
+		return { stored: result.stored, refreshed: true }
+	} catch {
+		// Stay silent on the git credential protocol (stdout). Fall back to
+		// whatever token we still have so a transient mint failure does not
+		// immediately break an otherwise-valid session.
+		return stored ? { stored, refreshed: false } : null
+	}
+}
+
 /**
  * Handle one git credential helper action.
- * - `get`: return stored `kody_at_…` for the configured Kody HTTPS host
- * - `store` / `erase`: no-op (token life is managed by `kody auth` / logout)
+ * - `get`: return a `kody_at_…` for the configured Kody HTTPS host (reminting
+ *   via `kody login` when the stored token is expired / near expiry)
+ * - `store` / `erase`: no-op (token life is managed by remint / logout)
  */
 export async function handleGitCredential(input: {
 	action: GitCredentialAction
@@ -70,6 +151,10 @@ export async function handleGitCredential(input: {
 	mcpUrl?: string
 	backend?: SecretBackend
 	resolution?: StoreResolution
+	nowMs?: number
+	mint?: (params: Record<string, unknown>) => Promise<unknown>
+	loadLogin?: typeof loadCredentials
+	loadApiToken?: typeof loadStoredApiToken
 }): Promise<string> {
 	if (input.action === 'store' || input.action === 'erase') {
 		return ''
@@ -89,15 +174,23 @@ export async function handleGitCredential(input: {
 		return ''
 	}
 
-	const apiUrl = input.apiUrl || defaultApiUrl
-	const stored = loadStoredApiToken(apiUrl, input.backend, input.resolution)
-	if (!stored?.token) {
+	const ensured = await ensureGitApiToken({
+		apiUrl: input.apiUrl,
+		mcpUrl: input.mcpUrl,
+		backend: input.backend,
+		resolution: input.resolution,
+		nowMs: input.nowMs,
+		mint: input.mint,
+		loadLogin: input.loadLogin,
+		loadApiToken: input.loadApiToken,
+	})
+	if (!ensured?.stored.token) {
 		return ''
 	}
 
 	return formatGitCredentialOutput({
 		username: 'x',
-		password: stored.token,
+		password: ensured.stored.token,
 	})
 }
 

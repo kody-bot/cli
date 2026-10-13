@@ -1,5 +1,11 @@
 import { spawnSync } from 'node:child_process'
-import { apiTokenEnvVar, defaultApiUrl, defaultMcpUrl } from './defaults.js'
+import { createRequire } from 'node:module'
+import {
+	apiTokenEnvVar,
+	cliName,
+	defaultApiUrl,
+	defaultMcpUrl,
+} from './defaults.js'
 import {
 	authBootstrapWithScopes,
 	cliTokenLifetimeAliases,
@@ -12,6 +18,7 @@ import {
 } from './api-token-store.js'
 import { OpenApiError, openApiGet } from './open-api-client.js'
 import type { SecretBackend, StoreResolution } from './store.js'
+import { which as whichOnPath } from './which.js'
 
 /** Scopes setup-git always requires for clone/fetch (+ push). */
 export const setupGitRequiredScopes = ['package:read', 'package:write'] as const
@@ -219,20 +226,84 @@ export function installGitCredentialConfig(input: {
 	return { host: input.host, helperCommand: input.helperCommand, scope }
 }
 
+/** Refresh git HTTPS tokens this long before `expiresAt` (or when past it). */
+export const gitApiTokenRefreshSkewMs = 60 * 60 * 1000
+
+const requireFromSetupGit = createRequire(import.meta.url)
+
+export function readCliPackageVersion(): string {
+	try {
+		const pkg = requireFromSetupGit('../package.json') as { version?: string }
+		return typeof pkg.version === 'string' ? pkg.version : '1'
+	} catch {
+		return '1'
+	}
+}
+
 /**
- * Helper argv for git config. Prefer the running Node entry so `npx` / local
- * builds work without requiring a global `kody` on PATH.
+ * True when the CLI entry lives under npm's ephemeral `npx` cache
+ * (`~/.npm/_npx/…`). Those paths break after `npm cache clean`.
+ */
+export function isEphemeralNpxEntryPath(entryPath: string): boolean {
+	const normalized = entryPath.replace(/\\/g, '/')
+	return (
+		normalized.includes('/.npm/_npx/') ||
+		normalized.includes('/npm/_npx/') ||
+		/\/_npx\//.test(normalized)
+	)
+}
+
+/**
+ * Major version for `npx -y @kodycodes/cli@<major>`. Local
+ * `0.0.0-semantically-released` builds pin to `1` (current published line).
+ */
+export function cliMajorVersionForNpx(packageVersion: string): string {
+	const major = Number.parseInt(packageVersion.split('.')[0] ?? '', 10)
+	if (Number.isFinite(major) && major >= 1) return String(major)
+	return '1'
+}
+
+/** Whether a stored API token should be reminted for git HTTPS. */
+export function apiTokenNeedsRefresh(
+	stored: Pick<StoredApiToken, 'expiresAt'> | null | undefined,
+	nowMs: number = Date.now(),
+	skewMs: number = gitApiTokenRefreshSkewMs,
+): boolean {
+	if (!stored) return true
+	if (stored.expiresAt == null || stored.expiresAt === '') return false
+	const expiresMs = Date.parse(stored.expiresAt)
+	if (!Number.isFinite(expiresMs)) return true
+	return expiresMs - nowMs <= skewMs
+}
+
+/**
+ * Helper argv for git config. Prefer a stable global `kody`, else a non-npx
+ * entry path, else `npx -y @kodycodes/cli@<major>` so cache cleans cannot
+ * orphan the helper. Re-running `auth setup-git` rewrites any prior ephemeral
+ * `~/.npm/_npx/…` helper entry.
  */
 export function gitCredentialHelperCommand(input?: {
 	execPath?: string
 	entryPath?: string
+	env?: NodeJS.ProcessEnv
+	which?: typeof whichOnPath
+	packageVersion?: string
 }): string {
-	const execPath = input?.execPath ?? process.execPath
+	const env = input?.env ?? process.env
+	const whichFn = input?.which ?? whichOnPath
 	const entryPath = input?.entryPath ?? process.argv[1]
-	if (entryPath && entryPath.length > 0) {
+	const globalKody = whichFn('kody', env)
+	if (globalKody && !isEphemeralNpxEntryPath(globalKody)) {
+		return `!${shellQuote(globalKody)} git-credential`
+	}
+	if (entryPath && entryPath.length > 0 && !isEphemeralNpxEntryPath(entryPath)) {
+		const execPath = input?.execPath ?? process.execPath
 		return `!${shellQuote(execPath)} ${shellQuote(entryPath)} git-credential`
 	}
-	return '!kody git-credential'
+	const major = cliMajorVersionForNpx(
+		input?.packageVersion ?? readCliPackageVersion(),
+	)
+	return `!npx -y ${cliName}@${major} git-credential`
 }
 
 function shellQuote(value: string): string {

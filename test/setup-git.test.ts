@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+	apiTokenNeedsRefresh,
 	assertUserOwnedTokensLive,
 	authSetupGit,
+	cliMajorVersionForNpx,
 	decideSetupGitToken,
 	ensureSetupGitScopes,
 	gitCredentialHelperCommand,
 	gitCredentialHostFromMcpUrl,
+	isEphemeralNpxEntryPath,
 	installGitCredentialConfig,
 	scopesIncludeRequired,
 	setupGitDefaultScopes,
@@ -15,6 +18,7 @@ import {
 import { loadStoredApiToken } from '../src/api-token-store.js'
 import { resolveCliTokenLifetime } from '../src/auth-bootstrap.js'
 import {
+	ensureGitApiToken,
 	formatGitCredentialOutput,
 	isKodyGitHttpsHost,
 	parseGitCredentialAction,
@@ -144,12 +148,54 @@ test('installGitCredentialConfig writes helper + useHttpPath', () => {
 	])
 })
 
-test('gitCredentialHelperCommand quotes the running entry', () => {
-	const cmd = gitCredentialHelperCommand({
+test('gitCredentialHelperCommand prefers stable paths over ephemeral npx', () => {
+	assert.equal(
+		isEphemeralNpxEntryPath(
+			'/Users/kent/.npm/_npx/4309649e9362ebcf/node_modules/.bin/kody',
+		),
+		true,
+	)
+	assert.equal(isEphemeralNpxEntryPath('/usr/local/bin/kody'), false)
+	assert.equal(cliMajorVersionForNpx('1.16.2'), '1')
+	assert.equal(cliMajorVersionForNpx('0.0.0-semantically-released'), '1')
+
+	const stableEntry = gitCredentialHelperCommand({
 		execPath: '/usr/bin/node',
 		entryPath: '/tmp/kody-bot-cli/dist/bin.js',
+		which: () => undefined,
 	})
-	assert.equal(cmd, '!/usr/bin/node /tmp/kody-bot-cli/dist/bin.js git-credential')
+	assert.equal(stableEntry, '!/usr/bin/node /tmp/kody-bot-cli/dist/bin.js git-credential')
+
+	const globalKody = gitCredentialHelperCommand({
+		entryPath: '/Users/kent/.npm/_npx/abc/node_modules/.bin/kody',
+		which: () => '/usr/local/bin/kody',
+	})
+	assert.equal(globalKody, '!/usr/local/bin/kody git-credential')
+
+	const npxPinned = gitCredentialHelperCommand({
+		entryPath: '/Users/kent/.npm/_npx/abc/node_modules/.bin/kody',
+		which: () => undefined,
+		packageVersion: '1.16.2',
+	})
+	assert.equal(npxPinned, '!npx -y @kodycodes/cli@1 git-credential')
+})
+
+test('apiTokenNeedsRefresh treats expired and near-expiry tokens', () => {
+	const now = Date.parse('2026-10-13T19:00:00.000Z')
+	assert.equal(apiTokenNeedsRefresh(null, now), true)
+	assert.equal(
+		apiTokenNeedsRefresh({ expiresAt: '2026-10-13T18:00:00.000Z' }, now),
+		true,
+	)
+	assert.equal(
+		apiTokenNeedsRefresh({ expiresAt: '2026-10-13T19:30:00.000Z' }, now),
+		true,
+	)
+	assert.equal(
+		apiTokenNeedsRefresh({ expiresAt: '2026-10-14T19:00:00.000Z' }, now),
+		false,
+	)
+	assert.equal(apiTokenNeedsRefresh({ expiresAt: null }, now), false)
 })
 
 test('parseGitCredentialInput and get output', async () => {
@@ -204,8 +250,97 @@ test('parseGitCredentialInput and get output', async () => {
 		apiUrl: stored.apiUrl,
 		mcpUrl: 'https://kody.codes/mcp',
 		backend: createFileBackend(tokenPath),
+		loadLogin: () => null,
 	})
 	assert.equal(filled, formatGitCredentialOutput({ username: 'x', password: stored.token }))
+})
+
+test('git-credential silently remints an expired token via login', async () => {
+	const home = mkdtempSync(join(tmpdir(), 'kody-git-refresh-'))
+	const tokenPath = join(home, 'token.json')
+	const expired = {
+		...sampleStored(['package:read', 'package:write', 'org:execute']),
+		expiresAt: '2020-01-01T00:00:00.000Z',
+		tokenId: 'tok_expired',
+	}
+	writeFileSync(tokenPath, JSON.stringify(expired))
+	const backend = createFileBackend(tokenPath)
+	const freshToken = `kody_at_${'f'.repeat(20)}_${'G'.repeat(43)}`
+	let mintCalls = 0
+	const login = {
+		version: 1 as const,
+		mcpUrl: 'https://kody.codes/mcp',
+		resource: 'https://kody.codes/mcp',
+		authorizationServerUrl: 'https://kody.codes',
+		clientId: 'c',
+		accessToken: 'oauth',
+		tokenType: 'bearer',
+	}
+
+	const previousFetch = globalThis.fetch
+	globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+		const url = String(input instanceof Request ? input.url : input)
+		if (url.endsWith('/v1/tokens/bootstrap/redeem')) {
+			return new Response(
+				JSON.stringify({
+					token: freshToken,
+					id: 'tok_fresh',
+					name: 'kody-cli-bootstrap',
+					scopes: expired.scopes,
+					expires_at: '2026-11-01T00:00:00.000Z',
+					max_expires_at: '2027-01-01T00:00:00.000Z',
+					created_via: 'cli-bootstrap',
+				}),
+				{ status: 200, headers: { 'content-type': 'application/json' } },
+			)
+		}
+		return new Response(JSON.stringify({ error: { message: url } }), {
+			status: 404,
+			headers: { 'content-type': 'application/json' },
+		})
+	}) as typeof fetch
+
+	try {
+		const out = await handleGitCredential({
+			action: 'get',
+			request: { protocol: 'https', host: 'kody.codes', path: '@a/b.git' },
+			apiUrl: expired.apiUrl,
+			mcpUrl: 'https://kody.codes/mcp',
+			backend,
+			nowMs: Date.parse('2026-10-13T19:00:00.000Z'),
+			loadLogin: () => login,
+			mint: async () => {
+				mintCalls += 1
+				return {
+					bootstrap_code: `kody_bc_${'c'.repeat(16)}_${'D'.repeat(32)}`,
+					scopes: expired.scopes,
+					idle_ttl_seconds: 1_209_600,
+					max_lifetime_seconds: 7_776_000,
+				}
+			},
+		})
+		assert.equal(out, formatGitCredentialOutput({ username: 'x', password: freshToken }))
+		assert.equal(mintCalls, 1)
+		assert.equal(loadStoredApiToken(expired.apiUrl, backend)?.tokenId, 'tok_fresh')
+		assert.equal(loadStoredApiToken(expired.apiUrl, backend)?.token, freshToken)
+
+		// Fresh token should not remint again.
+		const again = await ensureGitApiToken({
+			apiUrl: expired.apiUrl,
+			mcpUrl: 'https://kody.codes/mcp',
+			backend,
+			nowMs: Date.parse('2026-10-13T19:00:00.000Z'),
+			loadLogin: () => login,
+			mint: async () => {
+				mintCalls += 1
+				throw new Error('should not mint')
+			},
+		})
+		assert.equal(again?.refreshed, false)
+		assert.equal(mintCalls, 1)
+	} finally {
+		globalThis.fetch = previousFetch
+	}
 })
 
 test('authSetupGit with login session and no API token mints then installs helper', async () => {

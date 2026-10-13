@@ -170,15 +170,20 @@ authorizes every `@owner/name.git` you can access across all orgs — login
 `--org` only scopes the MCP mint session, not git. When an API token is
 already stored it probes `org_binding` on `GET /v1/tokens/current`; after a
 fresh login with no API token yet, it mints via the login session and checks
-`org_binding` on the minted token. Configures:
+`org_binding` on the minted token. Configures a **stable** credential helper
+(global `kody` when available, otherwise `npx -y @kodycodes/cli@1 …` — never
+an ephemeral `~/.npm/_npx/…` path). Re-running `setup-git` rewrites any old
+npx-cache helper entry.
 
 ```bash
 git config --global credential.https://kody.codes.helper '!… git-credential'
 git config --global credential.https://kody.codes.useHttpPath true
 ```
 
-Push moves live HEAD only (packages do not auto-publish). Existing `kody login`
-/ `auth bootstrap` flows are unchanged.
+The helper silently remints via your stored `kody login` when the API token is
+expired or within an hour of expiry, so you should not need to re-run
+`setup-git` for token lifetime. Push moves live HEAD only (packages do not
+auto-publish). Existing `kody login` / `auth bootstrap` flows are unchanged.
 
 ## Local execute
 
