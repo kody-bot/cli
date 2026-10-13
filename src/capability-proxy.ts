@@ -8,7 +8,10 @@ import {
 	isScopedApiToken,
 	rejectedOauthBearerMessage,
 } from './api-token.js'
-import type { CredentialCallMapInput } from './credential-call-map.js'
+import {
+	formatCredentialClientError,
+	type CredentialCallMapInput,
+} from './credential-call-map.js'
 import { apiTokenEnvVar, cliName } from './defaults.js'
 import { describeNetworkError } from './network-error.js'
 import { readPackageVersion } from './package-info.js'
@@ -217,13 +220,9 @@ export async function checkCredentialCallMap(
 		throw new CapabilityProxyError('credentialClientCheck returned an unexpected result.')
 	}
 	if (result.ok === false) {
-		const error = isRecord(result.error) ? result.error : null
-		const code = error && typeof error.code === 'string' ? error.code : 'credential_error'
-		const message =
-			error && typeof error.message === 'string'
-				? error.message
-				: 'The credential call map could not be used.'
-		throw new CapabilityProxyError(message, { code })
+		const error = isRecord(result.error) ? result.error : {}
+		const code = typeof error.code === 'string' ? error.code : 'credential_error'
+		throw new CapabilityProxyError(formatCredentialClientError(error), { code })
 	}
 	const value = isRecord(result.value) ? result.value : null
 	const warnings = Array.isArray(value?.warnings)

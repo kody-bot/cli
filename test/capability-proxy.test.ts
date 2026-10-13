@@ -214,10 +214,31 @@ test('checkCredentialCallMap preflights picks and surfaces structured failures',
 				credentials: { github: 'missing' },
 			}),
 		(error: Error & { code?: string | null }) => {
-			assert.equal(error.message, 'No match.')
+			assert.match(error.message, /^credential_not_found: No match\./)
 			assert.equal(error.code, 'credential_not_found')
 			return true
 		},
+	)
+
+	const withRetry = respondWith(200, {
+		result: {
+			ok: false,
+			error: {
+				code: 'credential_ambiguous',
+				message: 'Several match.',
+				retryWith: [{ credentials: { github: { name: 'work', scope: 'org' } } }],
+			},
+		},
+	})
+	await assert.rejects(
+		() =>
+			checkCredentialCallMap({
+				apiUrl: 'https://api.kody.codes',
+				token,
+				fetchFn: withRetry.fetchFn,
+				credentials: { github: 'a' },
+			}),
+		/credential_ambiguous: Several match\.[\s\S]*retry: --credential github=org:work/,
 	)
 })
 

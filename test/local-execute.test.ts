@@ -618,7 +618,7 @@ test(
 					apiUrl,
 					credentials: { github: 'work' },
 				}),
-			/credential-call-map/,
+			/This Kody host does not support --credential yet\./,
 		)
 	},
 )

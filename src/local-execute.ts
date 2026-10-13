@@ -450,7 +450,7 @@ function assertCredentialCallMapSupported(
 ): void {
 	if (!input.credentials) return
 	if (sessionSupportsCredentialCallMap(session.features)) return
-	throw new Error(missingCredentialCallMapFeatureMessage(input.apiUrl))
+	throw new Error(missingCredentialCallMapFeatureMessage())
 }
 
 async function readBody(stream: IncomingMessage): Promise<string> {
