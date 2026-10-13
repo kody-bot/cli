@@ -31,6 +31,7 @@ function urlOriginOrValue(value: string): string {
 export async function resolveLocalExecuteBearer(
 	input: ResolveScopedApiTokenInput & {
 		mcpUrl?: string
+		org?: string
 		backend?: SecretBackend
 		fetchFn?: typeof fetch
 		now?: number
@@ -57,6 +58,7 @@ export async function resolveLocalExecuteBearer(
 	try {
 		const credentials = await ensure({
 			mcpUrl: input.mcpUrl,
+			org: input.org,
 			backend: input.backend,
 			fetchFn: input.fetchFn,
 			now: input.now,

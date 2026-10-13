@@ -20,6 +20,8 @@ export type RemoteExecuteInput = {
 	token: string
 	apiUrl: string
 	fetchFn?: typeof fetch
+	/** User-owned token org selection (`?org=`). */
+	org?: string
 }
 
 export const credentialFlagRequiresLocalOrMcpMessage =
@@ -41,7 +43,12 @@ export async function runRemoteExecuteWithToken(
 		throw new Error(credentialFlagRequiresLocalOrMcpMessage)
 	}
 	const code = resolveRemoteExecuteCode(input)
-	const client = { apiUrl: input.apiUrl, token: input.token, fetchFn: input.fetchFn }
+	const client = {
+		apiUrl: input.apiUrl,
+		token: input.token,
+		fetchFn: input.fetchFn,
+		...(input.org ? { org: input.org } : {}),
+	}
 	await openCapabilityProxySession(client)
 
 	const args: Record<string, unknown> = { code }

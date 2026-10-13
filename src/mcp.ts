@@ -19,6 +19,8 @@ export type CallToolInput = {
 	name: 'search' | 'execute' | 'api'
 	args: Record<string, unknown>
 	mcpUrl?: string
+	/** Use this org's stored login (flag / KODY_ORG / active). */
+	org?: string
 	backend?: SecretBackend
 	fetchFn?: typeof fetch
 }
@@ -52,6 +54,7 @@ export async function callKodyTool(
 ): Promise<ToolCallResult> {
 	const credentials = await ensureFreshCredentials({
 		mcpUrl: input.mcpUrl,
+		org: input.org,
 		backend: input.backend,
 		fetchFn: input.fetchFn,
 	})
@@ -100,6 +103,7 @@ export async function callKodyApiOperation(input: {
 	operationId: string
 	params: Record<string, unknown>
 	mcpUrl?: string
+	org?: string
 	backend?: SecretBackend
 	fetchFn?: typeof fetch
 }): Promise<unknown> {
@@ -107,6 +111,7 @@ export async function callKodyApiOperation(input: {
 		name: 'api',
 		args: { operationId: input.operationId, params: input.params },
 		mcpUrl: input.mcpUrl,
+		org: input.org,
 		backend: input.backend,
 		fetchFn: input.fetchFn,
 	})
@@ -130,11 +135,13 @@ export async function callKodyApiOperation(input: {
 
 export async function listKodyTools(input: {
 	mcpUrl?: string
+	org?: string
 	backend?: SecretBackend
 	fetchFn?: typeof fetch
 }): Promise<Array<{ name: string; description?: string }>> {
 	const credentials = await ensureFreshCredentials({
 		mcpUrl: input.mcpUrl,
+		org: input.org,
 		backend: input.backend,
 		fetchFn: input.fetchFn,
 	})

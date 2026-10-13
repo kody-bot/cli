@@ -71,6 +71,8 @@ export type LocalExecuteInput = {
 	apiUrl: string
 	/** Used for the package-graph request and proxied CapabilityProxy calls. */
 	fetchFn?: typeof fetch
+	/** User-owned token org selection (`?org=`). */
+	org?: string
 	/** Skip the pinned download and run this workerd binary. */
 	workerdPath?: string
 	allowPrivateNetwork?: boolean
@@ -97,7 +99,12 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 		input.modulePath !== undefined
 			? await bundleLocalUserModule(input.modulePath)
 			: input.code
-	const client = { apiUrl: input.apiUrl, token: input.token, fetchFn: input.fetchFn }
+	const client = {
+		apiUrl: input.apiUrl,
+		token: input.token,
+		fetchFn: input.fetchFn,
+		...(input.org ? { org: input.org } : {}),
+	}
 	// Skip the session preflight on the hot path (package-graph authenticates).
 	// `--credential` still opens a session for feature detection + call-map check.
 	if (input.credentials) {

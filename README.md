@@ -48,11 +48,23 @@ MCP connection.
 
 ```bash
 npm install -g @kodycodes/cli
-kody login
-kody login --org acme
+kody login                 # browser picks the org; adds that org login
+kody login --org acme      # bind / replace the acme login; other orgs stay
+kody org list              # show logged-in orgs (* = active)
+kody org use beta          # switch active org (agents); bare `org use` opens a TTY chooser
+kody execute --org acme …  # one-shot org override (also: KODY_ORG=acme)
 ```
 
 Or run via `npx @kodycodes/cli` without a global install.
+
+Each `kody login` adds an org (chosen in the browser, or via `--org`). Re-logging
+into an org that is already stored replaces only that org's credential. Org-scoped
+commands (`execute`, `search`, `whoami`, `api`, …) take `--org <slug>` or
+`KODY_ORG` (flag wins, then env, then the active org). `kody logout` removes the
+active org; `kody logout --org <slug>` removes one org. Git auth stays user-wide
+(`kody auth setup-git` once covers every repo across orgs). Existing single-org
+keychain credentials migrate silently into the multi-org store as the active org
+(no re-login).
 
 ## Commands
 
@@ -60,8 +72,10 @@ Or run via `npx @kodycodes/cli` without a global install.
 | --- | --- |
 | `kody install` | Detect running local MCP clients, write their config, and start host OAuth. **Recommended long-term path.** |
 | `kody skill install` | Copies the getting-started skill into Claude Code / Cursor / Agents. |
-| `kody login` | Browser OAuth (CIMD + PKCE) for the CLI itself. Stores access and refresh tokens. `kody login --org acme` binds that grant to organization `acme`. |
-| `kody logout` | Deletes stored CLI OAuth credentials and any stored bootstrap/API token. |
+| `kody login` | Browser OAuth (CIMD + PKCE) for the CLI itself. Adds/replaces one org login (browser picker, or `kody login --org acme`) and keeps other org logins. |
+| `kody org list` | Lists logged-in orgs and marks the active one. `--json` for agents. |
+| `kody org use [<slug>]` | Switches the active org. With a slug (agents) switches directly; with no slug on a TTY opens a chooser; without a TTY pass a slug. |
+| `kody logout` | Removes the active org login (or `--org <slug>` for one org) and clears a stored bootstrap/API token when appropriate. |
 | `kody status` | Shows CLI login / stored API token state without printing secrets. |
 | `kody auth bootstrap --code` | Redeems a one-shot `kody_bc_…` from MCP `cliCredentialBootstrap` and stores the resulting `kody_at_…` for `execute --local` (never prints the token). |
 | `kody auth bootstrap --scopes` | Opt-in extra scopes: mints the code itself by passing `scopes` to `cliCredentialBootstrap` (with `--token`, else the `kody login` session, else a stored token), then redeems and stores it. See [Opt-in scopes](#opt-in-scopes). |

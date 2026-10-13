@@ -13,6 +13,11 @@ export type OpenApiClientInput = {
 	apiUrl?: string
 	token: string
 	fetchFn?: typeof fetch
+	/**
+	 * User-owned API token org selection (ADR 0070). Appended as `?org=<slug>`
+	 * on Open API requests. Ignored when unset (personal org default).
+	 */
+	org?: string
 }
 
 export class OpenApiError extends Error {
@@ -164,6 +169,9 @@ export async function openApiRequest(
 	const apiUrl = input.apiUrl || defaultApiUrl
 	assertTokenSafeApiUrl(apiUrl)
 	const url = capabilityProxyUrl(apiUrl, input.path.replace(/^\//, ''))
+	if (input.org) {
+		url.searchParams.set('org', input.org)
+	}
 	if (input.query) {
 		appendQueryParams(url.searchParams, input.query)
 	}
@@ -230,6 +238,7 @@ export async function callOpenApiOperation(
 		token: input.token,
 		apiUrl,
 		fetchFn: input.fetchFn,
+		...(input.org ? { org: input.org } : {}),
 		method: built.method,
 		path: built.path,
 		query: built.query,

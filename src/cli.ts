@@ -25,9 +25,20 @@ import {
 	type CredentialCallMapInput,
 } from './credential-call-map.js'
 import { defaultApiUrl, defaultMcpUrl, modernMcpProtocolVersion } from './defaults.js'
-import { usage } from './help.js'
+import { buildUsage, usage } from './help.js'
+import {
+	chooseOrgInteractively,
+	formatOrgListHuman,
+	formatOrgListJson,
+	resolveOrgSlug,
+	useOrg,
+} from './org.js'
 import { refreshGitCredentialHelperPinIfNeeded } from './setup-git.js'
-import { deleteCredentials, loadCredentials } from './store.js'
+import {
+	deleteCredentials,
+	listStoredOrgs,
+	loadCredentials,
+} from './store.js'
 import { formatToolResult } from './tool-result.js'
 import { resolveLocalExecuteBearer } from './local-execute-auth.js'
 import { assertLocalExecuteNodeEngine } from './node-engine.js'
@@ -56,6 +67,7 @@ export {
 export type CommandName =
 	| 'login'
 	| 'logout'
+	| 'org'
 	| 'status'
 	| 'auth'
 	| 'git-credential'
@@ -67,6 +79,16 @@ export type CommandName =
 	| 'skill'
 	| 'help'
 	| 'version'
+
+const orgScopedCommands = new Set<CommandName>([
+	'login',
+	'logout',
+	'whoami',
+	'search',
+	'api',
+	'execute',
+	'auth',
+])
 
 function mcpUrlFrom(values: { mcpUrl?: string }): string {
 	return values.mcpUrl || process.env.KODY_MCP_URL || defaultMcpUrl
@@ -132,6 +154,7 @@ export function resolveCommand(argv: Array<string>): {
 	switch (raw) {
 		case 'login':
 		case 'logout':
+		case 'org':
 		case 'status':
 		case 'auth':
 		case 'git-credential':
@@ -180,8 +203,14 @@ export async function runCli(
 	}
 	try {
 		const parsed = resolveCommand(argv)
+		const helpMcpUrl = mcpUrlFrom({
+			mcpUrl:
+				typeof parsed.values['mcp-url'] === 'string'
+					? parsed.values['mcp-url']
+					: undefined,
+		})
 		if (parsed.values.help && parsed.command !== 'help') {
-			write(usage)
+			write(buildUsage({ mcpUrl: helpMcpUrl }))
 			return 0
 		}
 		return await dispatch(parsed, write, writeErr)
@@ -206,26 +235,24 @@ async function dispatch(
 	) {
 		throw new Error('--allow-private-network can only be used with execute --local.')
 	}
-	if (parsed.values.org !== undefined && parsed.command !== 'login') {
-		throw new Error('`--org` can only be used with `kody login`.')
+	const orgFlag =
+		typeof parsed.values.org === 'string' ? parsed.values.org : undefined
+	if (orgFlag !== undefined && !orgScopedCommands.has(parsed.command)) {
+		throw new Error(
+			`\`--org\` is not used with \`kody ${parsed.command}\`. Use it with login, logout, whoami, search, api, execute, or auth.`,
+		)
 	}
+	const org = resolveOrgSlug({ flag: orgFlag })
 
 	switch (parsed.command) {
 		case 'help':
-			write(usage)
+			write(buildUsage({ mcpUrl }))
 			return 0
 		case 'version':
 			write(`${readPackageVersion()}\n`)
 			return 0
 		case 'login': {
-			const [{ login }, { orgSlugFromFlag }] = await Promise.all([
-				import('./auth.js'),
-				import('./oauth-provider.js'),
-			])
-			const org =
-				typeof parsed.values.org === 'string'
-					? orgSlugFromFlag(parsed.values.org)
-					: undefined
+			const { login } = await import('./auth.js')
 			write('Opening the Kody login page in your browser…\n')
 			const result = await login({
 				mcpUrl,
@@ -235,7 +262,11 @@ async function dispatch(
 					write(`If the browser does not open, visit:\n${url.href}\n`)
 				},
 			})
-			const orgLabel = result.org ? ` as org ${result.org}` : ''
+			const orgLabel = result.org
+				? ` as org ${result.org}`
+				: result.credentials.org
+					? ` as org ${result.credentials.org}`
+					: ''
 			const accountLabel = result.account?.email
 				? ` (${result.account.email})`
 				: result.account?.displayName
@@ -258,17 +289,59 @@ async function dispatch(
 						? parsed.values['api-url']
 						: undefined,
 			})
-			const oauth = deleteCredentials(mcpUrl)
-			const apiToken = deleteStoredApiToken(apiUrl)
+			const oauth = deleteCredentials(
+				mcpUrl,
+				undefined,
+				undefined,
+				org ? { org } : undefined,
+			)
+			// Clear the bootstrap/API token only when removing the last org login
+			// or when not targeting a specific remaining multi-org set.
+			const clearApiToken = !org || oauth.remaining === 0
+			const apiToken = clearApiToken
+				? deleteStoredApiToken(apiUrl)
+				: { deleted: false }
 			if (!oauth.deleted && !apiToken.deleted) {
-				write('No stored credentials.\n')
+				write(
+					org
+						? `No stored login for org "${org}".\n`
+						: 'No stored credentials.\n',
+				)
 				return 0
 			}
 			const parts: Array<string> = []
-			if (oauth.deleted) parts.push('Logged out of kody login.')
+			if (oauth.deleted) {
+				parts.push(
+					org
+						? `Logged out of org ${org}.`
+						: 'Logged out of the active org (kody login).',
+				)
+			}
 			if (apiToken.deleted) parts.push('Cleared stored bootstrap/API token.')
 			write(`${parts.join(' ')}\n`)
 			return 0
+		}
+		case 'org': {
+			const action = parsed.positionals[0]
+			if (action === 'list') {
+				const orgs = listStoredOrgs(mcpUrl)
+				write(json ? formatOrgListJson(orgs) : formatOrgListHuman(orgs))
+				return orgs.length === 0 ? 1 : 0
+			}
+			if (action === 'use') {
+				const slugArg = parsed.positionals[1]
+				if (slugArg) {
+					const next = useOrg(slugArg, mcpUrl)
+					write(`Active org is now ${next.activeOrg}.\n`)
+					return 0
+				}
+				const orgs = listStoredOrgs(mcpUrl)
+				const chosen = await chooseOrgInteractively({ orgs })
+				const next = useOrg(chosen, mcpUrl)
+				write(`Active org is now ${next.activeOrg}.\n`)
+				return 0
+			}
+			throw new Error('Usage: kody org list [--json] | kody org use [<slug>]')
 		}
 		case 'status': {
 			const apiUrl = apiUrlFrom({
@@ -277,23 +350,28 @@ async function dispatch(
 						? parsed.values['api-url']
 						: undefined,
 			})
-			const credentials = loadCredentials(mcpUrl)
+			const credentials = loadCredentials(mcpUrl, undefined, undefined, {
+				org,
+			})
+			const orgs = listStoredOrgs(mcpUrl)
 			const storedApi = loadStoredApiToken(apiUrl)
-			if (!credentials && !storedApi) {
+			if (!credentials && orgs.length === 0 && !storedApi) {
 				write('Not logged in.\n')
 				return 1
 			}
 			const lines: Array<string> = []
-			if (credentials) {
-				const expires = credentials.expiresAt
+			if (credentials || orgs.length > 0) {
+				const expires = credentials?.expiresAt
 					? new Date(credentials.expiresAt).toISOString()
 					: 'unknown'
 				lines.push(
-					`mcp: ${credentials.mcpUrl}`,
+					`mcp: ${credentials?.mcpUrl ?? mcpUrl}`,
 					`logged in: yes`,
+					`active org: ${credentials?.org ?? orgs.find((row) => row.active)?.slug ?? '(pending)'}`,
+					`orgs: ${orgs.map((row) => (row.active ? `${row.slug}*` : row.slug)).join(', ') || '(pending)'}`,
 					`access token expires: ${expires}`,
-					`refresh token: ${credentials.refreshToken ? 'yes' : 'no'}`,
-					`scope: ${credentials.scope ?? 'unknown'}`,
+					`refresh token: ${credentials?.refreshToken ? 'yes' : 'no'}`,
+					`scope: ${credentials?.scope ?? 'unknown'}`,
 				)
 			} else {
 				lines.push(`mcp: ${mcpUrl}`, `logged in: no`)
@@ -456,6 +534,7 @@ async function dispatch(
 				const identity = await whoamiWithApiToken({
 					token: requireApiToken(tokenValues, process.env, 'whoami', { apiUrl }),
 					apiUrl,
+					...(org ? { org } : {}),
 				})
 				if (json) {
 					write(`${JSON.stringify(identity, null, 2)}\n`)
@@ -481,13 +560,14 @@ async function dispatch(
 				import('./auth.js'),
 				import('./mcp.js'),
 			])
-			const credentials = await ensureFreshCredentials({ mcpUrl })
-			const tools = await listKodyTools({ mcpUrl })
+			const credentials = await ensureFreshCredentials({ mcpUrl, org })
+			const tools = await listKodyTools({ mcpUrl, org })
 			if (json) {
 				write(
 					`${JSON.stringify(
 						{
 							mcpUrl: credentials.mcpUrl,
+							org: credentials.org ?? null,
 							protocol: modernMcpProtocolVersion,
 							scope: credentials.scope ?? null,
 							tools: tools.map((tool) => tool.name),
@@ -498,8 +578,9 @@ async function dispatch(
 				)
 				return 0
 			}
+			const orgLine = credentials.org ? `\norg: ${credentials.org}` : ''
 			write(
-				`Connected to ${credentials.mcpUrl} (${modernMcpProtocolVersion})\nTools: ${tools.map((tool) => tool.name).join(', ') || '(none)'}\n`,
+				`Connected to ${credentials.mcpUrl} (${modernMcpProtocolVersion})${orgLine}\nTools: ${tools.map((tool) => tool.name).join(', ') || '(none)'}\n`,
 			)
 			return 0
 		}
@@ -524,6 +605,7 @@ async function dispatch(
 				const result = await searchWithApiToken({
 					token: requireApiToken(tokenValues, process.env, 'search', { apiUrl }),
 					apiUrl,
+					...(org ? { org } : {}),
 					query: query || undefined,
 					entity:
 						typeof parsed.values.entity === 'string' ? parsed.values.entity : undefined,
@@ -543,7 +625,12 @@ async function dispatch(
 			if (typeof parsed.values.domain === 'string') args.domain = parsed.values.domain
 			if (typeof parsed.values.limit === 'string') args.limit = Number(parsed.values.limit)
 			const { callKodyTool } = await import('./mcp.js')
-			const result = await callKodyTool({ name: 'search', args, mcpUrl })
+			const result = await callKodyTool({
+				name: 'search',
+				args,
+				mcpUrl,
+				...(org ? { org } : {}),
+			})
 			write(formatToolResult(result, json))
 			return result.isError ? 1 : 0
 		}
@@ -626,8 +713,10 @@ async function dispatch(
 							mcpUrl,
 							apiUrl,
 							purpose: 'execute --local',
+							...(org ? { org } : {}),
 						}),
 						apiUrl,
+						...(org ? { org } : {}),
 						allowPrivateNetwork:
 							parsed.values['allow-private-network'] === true,
 						onStatus: (message) => writeErr(`${message}\n`),
@@ -646,8 +735,14 @@ async function dispatch(
 								{ apiUrl },
 							),
 							apiUrl,
+							...(org ? { org } : {}),
 						})
-					: await (await import('./mcp.js')).callKodyTool({ name: 'execute', args, mcpUrl })
+					: await (await import('./mcp.js')).callKodyTool({
+							name: 'execute',
+							args,
+							mcpUrl,
+							...(org ? { org } : {}),
+						})
 			write(formatToolResult(result, json))
 			return result.isError ? 1 : 0
 		}
@@ -674,6 +769,7 @@ async function dispatch(
 				params,
 				token: requireApiToken(tokenValues, process.env, 'api', { apiUrl }),
 				apiUrl,
+				...(org ? { org } : {}),
 			})
 			// Always JSON: mirrors MCP `api` structured results for agents/scripts.
 			write(`${JSON.stringify(result, null, 2)}\n`)

@@ -270,6 +270,11 @@ export type CapabilityProxyClientInput = {
 	/** Defaults to the shared `createCapabilityProxyFetch()` sender. */
 	fetchFn?: typeof fetch
 	signal?: AbortSignal
+	/**
+	 * User-owned API token org selection (ADR 0070). Appended as `?org=<slug>`
+	 * on CapabilityProxy / package-graph requests.
+	 */
+	org?: string
 }
 
 export class CapabilityProxyError extends Error {
@@ -309,10 +314,19 @@ export function capabilityProxyUrl(apiUrl: string, path: string): URL {
 	return new URL(path, base)
 }
 
+/** Attach `?org=` for user-owned tokens without clobbering other query params. */
+export function withOrgQuery(url: URL, org?: string): URL {
+	if (org) url.searchParams.set('org', org)
+	return url
+}
+
 export async function openCapabilityProxySession(
 	input: CapabilityProxyClientInput,
 ): Promise<CapabilityProxySession> {
-	const url = capabilityProxyUrl(input.apiUrl, capabilityProxySessionPath)
+	const url = withOrgQuery(
+		capabilityProxyUrl(input.apiUrl, capabilityProxySessionPath),
+		input.org,
+	)
 	const response = await send(input, url, { method: 'GET' })
 	const body = await readJson(response)
 	if (!response.ok) {
@@ -333,7 +347,10 @@ export async function openCapabilityProxySession(
 export async function callCapabilityProxy(
 	input: CapabilityProxyClientInput & CapabilityProxyCall,
 ): Promise<unknown> {
-	const url = capabilityProxyUrl(input.apiUrl, capabilityProxyCallPath)
+	const url = withOrgQuery(
+		capabilityProxyUrl(input.apiUrl, capabilityProxyCallPath),
+		input.org,
+	)
 	const payload: CapabilityProxyCall = { path: input.path, args: input.args }
 	if (input.conversationId !== undefined) payload.conversationId = input.conversationId
 	if (input.credentials !== undefined) payload.credentials = input.credentials

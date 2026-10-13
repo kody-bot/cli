@@ -135,7 +135,14 @@ test('saveCredentials falls back to the file when keyring set throws', () => {
 		fileStorePath: () => path,
 	})
 	assert.equal(saved.backend.kind, 'file')
-	assert.equal(JSON.parse(readFileSync(path, 'utf8')).accessToken, 'access-1')
+	const written = JSON.parse(readFileSync(path, 'utf8')) as {
+		pending?: { accessToken?: string }
+		orgs?: Record<string, { accessToken?: string }>
+	}
+	const token =
+		written.pending?.accessToken ??
+		Object.values(written.orgs ?? {})[0]?.accessToken
+	assert.equal(token, 'access-1')
 })
 
 test('loadCredentials falls back to the file when keyring credentials are invalid', () => {

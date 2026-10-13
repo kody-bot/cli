@@ -479,15 +479,15 @@ test('help documents the api command', async () => {
 	assert.match(stdout, /kody login --org acme/)
 })
 
-test('--org is login-only and requires a slug', async () => {
+test('--org selects an org for org-scoped commands and rejects a blank slug', async () => {
 	let stderr = ''
-	const other = await runCli(['search', '--org', 'acme'], {
+	const missing = await runCli(['search', '--org', 'acme'], {
 		stderr: (text) => {
 			stderr += text
 		},
 	})
-	assert.equal(other, 1)
-	assert.match(stderr, /`--org` can only be used with `kody login`/)
+	assert.equal(missing, 1)
+	assert.match(stderr, /No login stored for org "acme"|Not logged in/)
 
 	stderr = ''
 	const blank = await runCli(['login', '--org', '   '], {
@@ -497,6 +497,15 @@ test('--org is login-only and requires a slug', async () => {
 	})
 	assert.equal(blank, 1)
 	assert.match(stderr, /kody login --org acme/)
+
+	stderr = ''
+	const wrongCommand = await runCli(['install', '--org', 'acme'], {
+		stderr: (text) => {
+			stderr += text
+		},
+	})
+	assert.equal(wrongCommand, 1)
+	assert.match(stderr, /`--org` is not used with `kody install`/)
 })
 
 type ApiStub = {

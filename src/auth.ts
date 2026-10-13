@@ -21,6 +21,7 @@ import {
 	discoverLoginIdentity,
 	type LoginIdentity,
 } from './discover-login-identity.js'
+import { discoverOrgSlugFromAccessToken } from './discover-org.js'
 import {
 	loginCallbackErrorFromOAuthError,
 	renderLoginCallbackPage,
@@ -30,9 +31,12 @@ import {
 import { createCliOAuthProvider, orgSlugFromFlag } from './oauth-provider.js'
 import { redactError } from './redact.js'
 import {
+	loadCredentialStore,
 	loadCredentials,
+	promotePendingOrg,
 	saveCredentials,
 	type SecretBackend,
+	type StoreResolution,
 	type StoredCredentials,
 } from './store.js'
 
@@ -42,14 +46,15 @@ export type LoginOptions = {
 	org?: string
 	openBrowser?: boolean
 	backend?: SecretBackend
+	resolution?: StoreResolution
 	timeoutMs?: number
 	now?: () => number
 	fetchFn?: typeof fetch
 	onAuthorizationUrl?: (url: URL) => void
 	/**
-	 * Test seam / coordination with multi-org login (#42): resolve org +
-	 * account after the code exchange so the localhost callback page can show
-	 * them. Defaults to `metaGetCurrentUser` via {@link discoverLoginIdentity}.
+	 * Test seam: resolve org + account after the code exchange so the localhost
+	 * callback page can show them (and multi-org storage can name the login).
+	 * Defaults to `metaGetCurrentUser` via {@link discoverLoginIdentity}.
 	 */
 	discoverIdentity?: (input: {
 		mcpUrl: string
@@ -73,6 +78,7 @@ export function credentialsFromTokens(input: {
 	client: OAuthClientInformationMixed
 	tokens: OAuthTokens
 	previous?: StoredCredentials
+	org?: string
 	now?: number
 }): StoredCredentials {
 	const now = input.now ?? Date.now()
@@ -80,9 +86,11 @@ export function credentialsFromTokens(input: {
 		typeof input.tokens.expires_in === 'number'
 			? now + input.tokens.expires_in * 1000
 			: input.previous?.expiresAt
+	const org = input.org ?? input.previous?.org
 	return {
 		version: 1,
 		mcpUrl: input.mcpUrl,
+		...(org ? { org } : {}),
 		resource: input.resource,
 		authorizationServerUrl: input.authorizationServerUrl,
 		clientId: input.client.client_id,
@@ -102,7 +110,9 @@ async function persistAuthorizedSession(input: {
 	mcpUrl: string
 	provider: ReturnType<typeof createCliOAuthProvider>
 	backend?: SecretBackend
+	resolution?: StoreResolution
 	previous?: StoredCredentials
+	org?: string
 	now?: number
 }): Promise<{
 	credentials: StoredCredentials
@@ -128,15 +138,17 @@ async function persistAuthorizedSession(input: {
 		client,
 		tokens,
 		previous: input.previous,
+		org: input.org ?? input.previous?.org,
 		now: input.now,
 	})
-	const saved = saveCredentials(credentials, input.backend)
+	const saved = saveCredentials(credentials, input.backend, input.resolution)
 	return { credentials, saved }
 }
 
 export async function refreshStoredCredentials(input: {
 	credentials: StoredCredentials
 	backend?: SecretBackend
+	resolution?: StoreResolution
 	now?: number
 	fetchFn?: typeof fetch
 }): Promise<StoredCredentials> {
@@ -164,21 +176,76 @@ export async function refreshStoredCredentials(input: {
 		mcpUrl: credentials.mcpUrl,
 		provider,
 		backend: input.backend,
+		resolution: input.resolution,
 		previous: credentials,
+		org: credentials.org,
 		now: input.now,
 	})
 	return next
 }
 
-export async function ensureFreshCredentials(input: {
+/**
+ * Finish silent v1→multi-org migration when a pending session has no slug yet.
+ * Best-effort: failures leave pending in place so commands still work.
+ */
+export async function resolvePendingOrgSlug(input: {
 	mcpUrl?: string
 	backend?: SecretBackend
+	resolution?: StoreResolution
+	fetchFn?: typeof fetch
+	discoverOrg?: (input: {
+		mcpUrl: string
+		accessToken: string
+		fetchFn?: typeof fetch
+	}) => Promise<string>
+}): Promise<string | null> {
+	const mcpUrl = input.mcpUrl ?? defaultMcpUrl
+	const snapshot = loadCredentialStore(mcpUrl, input.backend, input.resolution)
+	if (!snapshot?.pending) return snapshot?.activeOrg ?? null
+	const discover = input.discoverOrg ?? discoverOrgSlugFromAccessToken
+	try {
+		const slug = await discover({
+			mcpUrl,
+			accessToken: snapshot.pending.accessToken,
+			fetchFn: input.fetchFn,
+		})
+		promotePendingOrg(mcpUrl, slug, input.backend, input.resolution)
+		return slug
+	} catch {
+		return null
+	}
+}
+
+export async function ensureFreshCredentials(input: {
+	mcpUrl?: string
+	org?: string
+	backend?: SecretBackend
+	resolution?: StoreResolution
 	now?: number
 	fetchFn?: typeof fetch
+	discoverOrg?: (input: {
+		mcpUrl: string
+		accessToken: string
+		fetchFn?: typeof fetch
+	}) => Promise<string>
 }): Promise<StoredCredentials> {
 	const mcpUrl = input.mcpUrl ?? defaultMcpUrl
-	const credentials = loadCredentials(mcpUrl, input.backend)
+	await resolvePendingOrgSlug({
+		mcpUrl,
+		backend: input.backend,
+		resolution: input.resolution,
+		fetchFn: input.fetchFn,
+		discoverOrg: input.discoverOrg,
+	})
+	const credentials = loadCredentials(mcpUrl, input.backend, input.resolution, {
+		org: input.org,
+	})
 	if (!credentials) {
+		if (input.org) {
+			throw new Error(
+				`No login stored for org "${input.org}". Run \`kody login --org ${input.org}\` (or \`kody org use ${input.org}\` after logging in).`,
+			)
+		}
 		throw new Error(missingCliAuthMessage())
 	}
 	if (!isAccessTokenExpired(credentials, input.now)) {
@@ -187,6 +254,7 @@ export async function ensureFreshCredentials(input: {
 	return await refreshStoredCredentials({
 		credentials,
 		backend: input.backend,
+		resolution: input.resolution,
 		now: input.now,
 		fetchFn: input.fetchFn,
 	})
@@ -377,12 +445,10 @@ export async function login(options: LoginOptions = {}): Promise<{
 		} else {
 			server.close()
 		}
-		const { credentials, saved } = await persistAuthorizedSession({
-			mcpUrl,
-			provider,
-			backend: options.backend,
-			now: options.now?.(),
-		})
+		const tokens = await provider.tokens()
+		if (!tokens?.access_token) {
+			throw new Error('OAuth completed without tokens. Run `kody login`.')
+		}
 
 		let org = orgHint
 		let account: LoginCallbackAccount | undefined
@@ -390,7 +456,7 @@ export async function login(options: LoginOptions = {}): Promise<{
 		try {
 			const identity = await discover({
 				mcpUrl,
-				accessToken: credentials.accessToken,
+				accessToken: tokens.access_token,
 				fetchFn: options.fetchFn,
 			})
 			if (orgHint && identity.org !== orgHint) {
@@ -403,9 +469,9 @@ export async function login(options: LoginOptions = {}): Promise<{
 			org = identity.org
 			account = identity.account
 		} catch (error) {
-			// Keep the saved session. Discovery feeds the callback page (and
-			// multi-org #42); a transient metaGetCurrentUser failure must not
-			// undo an otherwise successful OAuth exchange.
+			// Soft-fail discovery for the callback page / pending migration:
+			// keep orgHint when present so multi-org can still name the login.
+			// Org mismatch always fails (thrown above / rethrown here).
 			if (
 				error instanceof Error &&
 				error.message.startsWith('Login was bound to org ')
@@ -413,6 +479,15 @@ export async function login(options: LoginOptions = {}): Promise<{
 				throw error
 			}
 		}
+
+		const { credentials, saved } = await persistAuthorizedSession({
+			mcpUrl,
+			provider,
+			backend: options.backend,
+			resolution: options.resolution,
+			org,
+			now: options.now?.(),
+		})
 
 		completeCallback?.({
 			kind: 'success',

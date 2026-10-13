@@ -154,6 +154,7 @@ function saveLogin(mcpUrl: string) {
 		{
 			version: 1,
 			mcpUrl,
+			org: 'test-org',
 			resource: mcpUrl,
 			authorizationServerUrl: new URL(mcpUrl).origin,
 			clientId: 'client-1',

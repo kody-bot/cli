@@ -103,6 +103,7 @@ export async function fetchLocalPackageGraph(
 	}
 
 	const url = capabilityProxyUrl(input.apiUrl, localPackageGraphPath)
+	if (input.org) url.searchParams.set('org', input.org)
 	const fetchFn = input.fetchFn ?? fetch
 	let response: Response
 	try {
