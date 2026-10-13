@@ -159,6 +159,7 @@ export async function runDevFetch(input: {
 	body?: string
 	port?: number
 	appBasePath?: string
+	allowPrivateNetwork?: boolean
 	cwd?: string
 	json?: boolean
 	io: DevIo
@@ -176,6 +177,7 @@ export async function runDevFetch(input: {
 		...(input.auth.passthroughHosts?.length
 			? { passthroughHosts: input.auth.passthroughHosts }
 			: {}),
+		allowPrivateNetwork: input.allowPrivateNetwork,
 		watch: false,
 		onStatus: (message) => input.io.stderr(`${message}\n`),
 		onError: (message) => input.io.stderr(`${message}\n`),
@@ -207,6 +209,7 @@ export async function runDevJob(input: {
 	cwd?: string
 	json?: boolean
 	dryRun?: boolean
+	allowPrivateNetwork?: boolean
 	io: DevIo
 }): Promise<number> {
 	const manifest = await loadPackageManifest(input.cwd)
@@ -246,6 +249,7 @@ export async function runDevJob(input: {
 		target: input.target,
 		auth: input.auth,
 		json: input.json,
+		allowPrivateNetwork: input.allowPrivateNetwork,
 		io: input.io,
 		surface: `job:${input.jobName}`,
 	})
@@ -259,6 +263,7 @@ export async function runDevWebhook(input: {
 	cwd?: string
 	json?: boolean
 	dryRun?: boolean
+	allowPrivateNetwork?: boolean
 	io: DevIo
 }): Promise<number> {
 	const manifest = await loadPackageManifest(input.cwd)
@@ -317,6 +322,7 @@ export async function runDevWebhook(input: {
 		target: input.target,
 		auth: input.auth,
 		json: input.json,
+		allowPrivateNetwork: input.allowPrivateNetwork,
 		io: input.io,
 		surface: `webhook:${input.webhookName}`,
 	})
@@ -334,6 +340,7 @@ export async function runDevEmit(input: {
 	cwd?: string
 	json?: boolean
 	dryRun?: boolean
+	allowPrivateNetwork?: boolean
 	io: DevIo
 }): Promise<number> {
 	const manifest = await loadPackageManifest(input.cwd)
@@ -401,6 +408,7 @@ export async function runDevEmit(input: {
 		target: input.target,
 		auth: input.auth,
 		json: input.json,
+		allowPrivateNetwork: input.allowPrivateNetwork,
 		io: input.io,
 		surface: `subscription:${input.event}`,
 	})
@@ -519,6 +527,7 @@ async function runPackageModuleOnce(input: {
 	target: KodyTarget
 	auth: DevAuth
 	json?: boolean
+	allowPrivateNetwork?: boolean
 	io: DevIo
 	surface: string
 }): Promise<number> {
@@ -543,6 +552,7 @@ async function runPackageModuleOnce(input: {
 			...(input.auth.passthroughHosts?.length
 				? { passthroughHosts: input.auth.passthroughHosts }
 				: {}),
+			allowPrivateNetwork: input.allowPrivateNetwork,
 			onStatus: (message) => input.io.stderr(`${message}\n`),
 		})
 		input.io.stdout(formatToolResult(result, input.json === true))

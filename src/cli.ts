@@ -1003,6 +1003,63 @@ async function dispatch(
 					'`--dry-run` applies to `kody dev job|webhook|emit` only (shows the plan without invoking).',
 				)
 			}
+			// Plan-only dry-run: no login, no mock listen, no --reset-storage.
+			if (dryRun) {
+				const dryAuth = { token: 'dry-run', apiUrl: prodApiUrl }
+				switch (subcommand) {
+					case 'job': {
+						const jobName = rest[0]
+						if (!jobName) throw new Error('Usage: kody dev job <name>')
+						return await runDevJob({
+							target,
+							auth: dryAuth,
+							jobName,
+							json,
+							dryRun: true,
+							io,
+						})
+					}
+					case 'webhook': {
+						const webhookName = rest[0]
+						if (!webhookName || !bodyPath) {
+							throw new Error(
+								'Usage: kody dev webhook <name> --body file.json',
+							)
+						}
+						return await runDevWebhook({
+							target,
+							auth: dryAuth,
+							webhookName,
+							bodyPath,
+							json,
+							dryRun: true,
+							io,
+						})
+					}
+					case 'emit': {
+						const event = rest[0]
+						if (!event || !bodyPath) {
+							throw new Error(
+								'Usage: kody dev emit <event> --body event.json',
+							)
+						}
+						return await runDevEmit({
+							target,
+							auth: dryAuth,
+							event,
+							bodyPath,
+							json,
+							dryRun: true,
+							io,
+						})
+					}
+					default: {
+						throw new Error(
+							'`--dry-run` applies to `kody dev job|webhook|emit` only (shows the plan without invoking).',
+						)
+					}
+				}
+			}
 			const token =
 				target === 'prod'
 					? await resolveLocalExecuteBearer({
@@ -1035,6 +1092,7 @@ async function dispatch(
 					'`--passthrough` only applies to `--target mock` (outbound fetch mocking is mock-only).',
 				)
 			}
+			const allowPrivateNetwork = parsed.values['allow-private-network'] === true
 			const auth = await resolveDevAuth({
 				target,
 				token,
@@ -1058,8 +1116,7 @@ async function dispatch(
 							auth,
 							port,
 							appBasePath,
-							allowPrivateNetwork:
-								parsed.values['allow-private-network'] === true,
+							allowPrivateNetwork,
 							io,
 						})
 					case 'fetch': {
@@ -1082,6 +1139,7 @@ async function dispatch(
 							body,
 							port,
 							appBasePath,
+							allowPrivateNetwork,
 							json,
 							io,
 						})
@@ -1094,7 +1152,7 @@ async function dispatch(
 							auth,
 							jobName,
 							json,
-							dryRun,
+							allowPrivateNetwork,
 							io,
 						})
 					}
@@ -1111,7 +1169,7 @@ async function dispatch(
 							webhookName,
 							bodyPath,
 							json,
-							dryRun,
+							allowPrivateNetwork,
 							io,
 						})
 					}
@@ -1128,7 +1186,7 @@ async function dispatch(
 							event,
 							bodyPath,
 							json,
-							dryRun,
+							allowPrivateNetwork,
 							io,
 						})
 					}

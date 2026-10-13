@@ -271,8 +271,8 @@ export async function startPackageAppDev(
 						upstreamRes.on('end', () => {
 							const responseBody = Buffer.concat(chunks)
 							if (status >= 500) {
-								const preview = responseBody.toString('utf8').slice(0, 2000)
-								const workerdLogs = lastWorkerdStderr.trim()
+								const preview = redact(responseBody.toString('utf8').slice(0, 2000))
+								const workerdLogs = redact(lastWorkerdStderr.trim())
 								options.onError?.(
 									`App handler HTTP ${status}${workerdLogs ? `\nworkerd stderr:\n${workerdLogs}` : ''}${preview ? `\nbody:\n${preview}` : ''}`,
 								)
@@ -292,7 +292,7 @@ export async function startPackageAppDev(
 			})
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error)
-			const workerdLogs = lastWorkerdStderr.trim()
+			const workerdLogs = redact(lastWorkerdStderr.trim())
 			options.onError?.(
 				workerdLogs ? `${message}\nworkerd stderr:\n${workerdLogs}` : message,
 			)
