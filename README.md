@@ -163,9 +163,14 @@ kody auth setup-git
 git clone https://kody.codes/@owner/name.git
 ```
 
-`setup-git` checks `org_binding` on `GET /v1/tokens/current`, stores a
-user-owned token that includes `package:read` and `package:write` (default
-`--lifetime long`; reuses a suitable stored token), and configures:
+`setup-git` uses your `kody login` session (or a scoped API token) to mint a
+user-owned `kody_at_…` with `package:read` and `package:write` (default
+`--lifetime long`; reuses a suitable stored token). That one credential
+authorizes every `@owner/name.git` you can access across all orgs — login
+`--org` only scopes the MCP mint session, not git. When an API token is
+already stored it probes `org_binding` on `GET /v1/tokens/current`; after a
+fresh login with no API token yet, it mints via the login session and checks
+`org_binding` on the minted token. Configures:
 
 ```bash
 git config --global credential.https://kody.codes.helper '!… git-credential'

@@ -259,6 +259,14 @@ export async function authSetupGit(input: {
 	scopesOverride?: ReadonlyArray<string>
 	lifetime?: ResolvedCliTokenLifetime
 	global?: boolean
+	/**
+	 * True when a `kody login` OAuth session is stored for `mcpUrl`. Login is
+	 * enough to mint: the OAuth bearer cannot call `GET /v1/tokens/current`, so
+	 * we skip that probe and assert `org_binding` on the minted `kody_at_…`.
+	 * The minted token is user-owned (git auth is person-wide across orgs);
+	 * login `--org` only scopes the MCP session used to mint.
+	 */
+	hasLoginSession?: boolean
 	mint: (params: Record<string, unknown>) => Promise<unknown>
 	fetchFn?: typeof fetch
 	backend?: SecretBackend
@@ -272,33 +280,36 @@ export async function authSetupGit(input: {
 
 	const storedExisting = loadStoredApiToken(apiUrl, input.backend, input.resolution)
 	const probeToken = input.token || storedExisting?.token
-	if (!probeToken) {
+	const hasLoginSession = input.hasLoginSession === true
+	if (!probeToken && !hasLoginSession) {
 		throw new Error(
 			`setup-git needs a Kody credential to detect server support and mint a token. Run \`kody login\`, or set ${apiTokenEnvVar}, or pass --token.`,
 		)
 	}
 
-	let probeMetadata: TokenCurrentMetadata
-	try {
-		probeMetadata = await fetchTokenCurrentMetadata({
-			token: probeToken,
-			apiUrl,
-			fetchFn: input.fetchFn,
-		})
-	} catch (error) {
-		if (error instanceof OpenApiError && error.status === 401) {
-			throw new Error(
-				`Could not read token metadata from ${apiUrl} (unauthorized). Run \`kody login\` or pass a valid --token / ${apiTokenEnvVar}.`,
-			)
+	let probeMetadata: TokenCurrentMetadata | null = null
+	if (probeToken) {
+		try {
+			probeMetadata = await fetchTokenCurrentMetadata({
+				token: probeToken,
+				apiUrl,
+				fetchFn: input.fetchFn,
+			})
+		} catch (error) {
+			if (error instanceof OpenApiError && error.status === 401) {
+				throw new Error(
+					`Could not read token metadata from ${apiUrl} (unauthorized). Run \`kody login\` or pass a valid --token / ${apiTokenEnvVar}.`,
+				)
+			}
+			throw error
 		}
-		throw error
+		// Any live token's /tokens/current shape proves the origin supports org_binding.
+		assertUserOwnedTokensLive(probeMetadata)
 	}
-	// Any live token's /tokens/current shape proves the origin supports org_binding.
-	assertUserOwnedTokensLive(probeMetadata)
 
 	let storedMetadata: TokenCurrentMetadata | null = null
 	if (storedExisting) {
-		if (storedExisting.token === probeToken) {
+		if (probeMetadata && storedExisting.token === probeToken) {
 			storedMetadata = probeMetadata
 		} else {
 			try {

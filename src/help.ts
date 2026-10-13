@@ -65,10 +65,13 @@ Usage:
   auth setup-git
              Install a Git credential helper for HTTPS clones/fetches/pushes
              at \`https://kody.codes/@owner/name.git\` (see guide:auth_setup_git).
-             Requires a server that advertises \`org_binding\` on token
-             metadata. Stores a user-owned \`kody_at_…\` with at least
-             \`package:read\` and \`package:write\` (default \`--lifetime long\`;
-             reuses a suitable stored token). Configures
+             Uses a \`kody login\` session (or \`--token\` / ${apiTokenEnvVar} /
+             stored bootstrap token) to mint a user-owned \`kody_at_…\` with
+             at least \`package:read\` and \`package:write\` (default
+             \`--lifetime long\`; reuses a suitable stored token). That token
+             authorizes every repo you can access across all orgs — login
+             \`--org\` only scopes the MCP mint session, not git. Requires a
+             server that advertises \`org_binding\`. Configures
              \`credential.https://<host>.helper\` + \`useHttpPath\`. Does not
              change \`kody login\` / existing auth flows.
 

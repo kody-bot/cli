@@ -780,10 +780,12 @@ async function runAuthSetupGit(input: {
 	})
 	const tokenValues = tokenFlagValues(input.values)
 	const mintScopes = scopes ?? setupGitDefaultScopes
+	const hasLoginSession = loadCredentials(input.mcpUrl) != null
 	const result = await authSetupGit({
 		apiUrl,
 		mcpUrl: input.mcpUrl,
 		token: tokenValues.token,
+		hasLoginSession,
 		...(scopes ? { scopesOverride: scopes } : {}),
 		lifetime,
 		mint: bootstrapMinter({
@@ -807,6 +809,7 @@ async function runAuthSetupGit(input: {
 					? 'Token stored in the OS keychain (or existing store).'
 					: 'Using the existing stored API token.',
 			'',
+			'This user-owned token authorizes every @owner/name.git you can access (all orgs).',
 			'Try: git clone https://kody.codes/@owner/name.git',
 			'',
 		].join('\n'),

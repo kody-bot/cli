@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
 	assertUserOwnedTokensLive,
+	authSetupGit,
 	decideSetupGitToken,
 	ensureSetupGitScopes,
 	gitCredentialHelperCommand,
@@ -11,6 +12,8 @@ import {
 	setupGitDefaultScopes,
 	setupGitRequiredScopes,
 } from '../src/setup-git.js'
+import { loadStoredApiToken } from '../src/api-token-store.js'
+import { resolveCliTokenLifetime } from '../src/auth-bootstrap.js'
 import {
 	formatGitCredentialOutput,
 	isKodyGitHttpsHost,
@@ -203,4 +206,104 @@ test('parseGitCredentialInput and get output', async () => {
 		backend: createFileBackend(tokenPath),
 	})
 	assert.equal(filled, formatGitCredentialOutput({ username: 'x', password: stored.token }))
+})
+
+test('authSetupGit with login session and no API token mints then installs helper', async () => {
+	const home = mkdtempSync(join(tmpdir(), 'kody-setup-git-login-'))
+	const tokenBackend = createFileBackend(join(home, 'api-token.json'))
+	const mintedToken = `kody_at_${'m'.repeat(20)}_${'N'.repeat(43)}`
+	const mintCalls: Array<Record<string, unknown>> = []
+	const gitCalls: Array<Array<string>> = []
+	const currentCalls: Array<string> = []
+
+	const result = await authSetupGit({
+		apiUrl: 'https://api.setup-git-login.test',
+		mcpUrl: 'https://kody.codes/mcp',
+		hasLoginSession: true,
+		lifetime: resolveCliTokenLifetime({ lifetime: 'long' }),
+		backend: tokenBackend,
+		helperCommand: '!kody git-credential',
+		runGit: (args) => {
+			gitCalls.push([...args])
+			return { status: 0, stderr: '' }
+		},
+		mint: async (params) => {
+			mintCalls.push(params)
+			return {
+				bootstrap_code: `kody_bc_${'c'.repeat(16)}_${'D'.repeat(32)}`,
+				scopes: setupGitDefaultScopes,
+				idle_ttl_seconds: 1_209_600,
+				max_lifetime_seconds: 7_776_000,
+			}
+		},
+		fetchFn: (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+			const url = String(input instanceof Request ? input.url : input)
+			if (url.endsWith('/v1/tokens/bootstrap/redeem')) {
+				return new Response(
+					JSON.stringify({
+						token: mintedToken,
+						id: 'tok_login_mint',
+						name: 'kody-cli-bootstrap',
+						scopes: [...setupGitDefaultScopes],
+						expires_at: '2026-11-01T00:00:00.000Z',
+						max_expires_at: '2027-01-01T00:00:00.000Z',
+						created_via: 'cli-bootstrap',
+					}),
+					{ status: 200, headers: { 'content-type': 'application/json' } },
+				)
+			}
+			if (url.includes('/v1/tokens/current')) {
+				currentCalls.push(url)
+				return new Response(
+					JSON.stringify({
+						id: 'tok_login_mint',
+						org_binding: 'user',
+						scopes: [...setupGitDefaultScopes],
+						expires_at: '2026-11-01T00:00:00.000Z',
+					}),
+					{ status: 200, headers: { 'content-type': 'application/json' } },
+				)
+			}
+			return new Response(JSON.stringify({ error: { message: url } }), {
+				status: 404,
+				headers: { 'content-type': 'application/json' },
+			})
+		}) as typeof fetch,
+	})
+
+	assert.equal(result.minted, true)
+	assert.equal(result.tokenId, 'tok_login_mint')
+	assert.equal(result.orgBinding, 'user')
+	assert.equal(mintCalls.length, 1)
+	assert.deepEqual(mintCalls[0]?.lifetime, 'long')
+	assert.ok(
+		(mintCalls[0]?.scopes as Array<string>).includes('package:read') &&
+			(mintCalls[0]?.scopes as Array<string>).includes('package:write'),
+	)
+	// Login OAuth cannot probe /tokens/current; only the minted token is checked.
+	assert.equal(currentCalls.length, 1)
+	assert.ok(currentCalls[0]?.includes('/v1/tokens/current'))
+	assert.equal(gitCalls.length, 2)
+	assert.equal(
+		loadStoredApiToken('https://api.setup-git-login.test', tokenBackend)?.token,
+		mintedToken,
+	)
+})
+
+test('authSetupGit without login or API token fails with login guidance', async () => {
+	const home = mkdtempSync(join(tmpdir(), 'kody-setup-git-empty-'))
+	await assert.rejects(
+		() =>
+			authSetupGit({
+				apiUrl: 'https://api.setup-git-empty.test',
+				mcpUrl: 'https://kody.codes/mcp',
+				hasLoginSession: false,
+				backend: createFileBackend(join(home, 'missing.json')),
+				mint: async () => {
+					throw new Error('mint should not run')
+				},
+				runGit: () => ({ status: 0, stderr: '' }),
+			}),
+		/Run `kody login`/,
+	)
 })
