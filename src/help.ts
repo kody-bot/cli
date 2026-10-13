@@ -59,10 +59,16 @@ Usage:
   kody auth remove-git [--mcp-url <url>] [--api-url <url>]
   kody git-credential <get|store|erase>
   kody whoami [--org <slug>] [--mcp-url <url>] [--token <token>] [--api-url <url>] [--json]
-  kody search [query] [--org <slug>] [--entity <ref>] [--domain <id>] [--limit <n>] [--token <token>] [--api-url <url>] [--json]
+  kody search [query] [--org <slug>] [--entity <ref>] [--domain <id>] [--limit <n>] [--target prod|mock] [--token <token>] [--api-url <url>] [--json]
   kody api <operationId> [--org <slug>] [--params <json>] [--token <token>] [--api-url <url>] [--json]
   kody execute [--org <slug>] [--invoke <ref> | --code <esm> | --file <path>] [--params <json>] [--conversation-id <id>] [--json]
-               [--credential <key=name>]… [--token <token>] [--api-url <url>] [--local] [--allow-private-network]
+               [--credential <key=name>]… [--target prod|mock] [--token <token>] [--api-url <url>] [--local] [--allow-private-network]
+  kody dev [serve] [--org <slug>] [--target prod|mock] [--reset-storage] [--port <n>] [--app-base-path <path>] [--allow-private-network]
+  kody dev fetch <path> [--method <verb>] [--body <file>] [--target prod|mock] [--json]
+  kody dev job <name> [--target prod|mock] [--json]
+  kody dev webhook <name> --body <file.json> [--target prod|mock] [--json]
+  kody dev emit <event> --body <event.json> [--target prod|mock] [--json]
+  kody dev check [--target prod|mock] [--json]
   kody install [--mcp-url <url>] [--clients <ids>] [--yes] [--project] [--json]
   kody skill install [--project]
 
@@ -214,14 +220,42 @@ ${orgBlock}
              rejects the flag — use \`--local\` or MCP.
 
   --allow-private-network
-             Allow execute --local code to fetch private and local network
-             addresses. Default is public-only; this flag requires --local.
+             Allow execute --local / \`kody dev\` code to fetch private and
+             local network addresses. Default is public-only.
+
+  --target prod|mock
+             Where server-side calls go (storage, credentials, kody:*,
+             execute, invoke, search). Same meaning on \`dev\`, \`execute\`,
+             and \`search\`. Defaults: \`mock\` for \`kody dev\`; \`prod\` for
+             execute/search (unchanged). \`--target mock\` starts the
+             built-in CLI mock (no kody-celld); scratch storage; fake or
+             local credentials so unpublished packages never touch real
+             secrets. Unimplemented mock routes refuse with
+             \`not_implemented_in_mock\`.
+
+  --reset-storage
+             With \`--target mock\`, wipe the mock session's scratch storage
+             before the command.
+
+  kody dev   Local testing for unpublished packages. Serves \`kody.app.entry\`
+             on localhost via workerd with hot reload (mount-stripped path;
+             packageContext.hostedUrl / appBasePath point at localhost).
+             Bundles with the same esbuild path as publish (\`local-bundle\`).
+             Four surfaces: exports (\`execute --invoke ./export\` or
+             \`--file\` against the local package), webhooks
+             (\`kody dev webhook\`), schedules (\`kody dev job\` — runs once,
+             never schedules locally), subscriptions
+             (\`kody dev emit <event> --body event.json\`). \`kody dev check\`
+             bundles + light publish validations without running. Share
+             previews are out of scope.
 
 Environment:
   KODY_MCP_URL        Override the default MCP URL (${defaultMcpUrl})
   ${orgEnvVar}             Default org slug for org-scoped commands (overridden by --org)
   ${apiTokenEnvVar}      Scoped API token for token-auth search / whoami / api / execute
   KODY_API_URL        Override the Kody API URL (${defaultApiUrl})
+  KODY_TARGET         Default \`prod\`|\`mock\` (overridden by --target)
+  KODY_MOCK_SESSION_ID  Scratch storage key for --target mock (default: default)
   KODY_CACHE_DIR      Where execute --local caches workerd (default: user cache dir)
   KODY_WORKERD_PATH   Use this workerd binary instead of the pinned download
 `

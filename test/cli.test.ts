@@ -126,7 +126,10 @@ test('allow-private-network is limited to execute --local', async () => {
 		{ stdout: () => {}, stderr: (text) => (stderr += text) },
 	)
 	assert.equal(code, 1)
-	assert.match(stderr, /--allow-private-network can only be used with execute --local/)
+	assert.match(
+		stderr,
+		/--allow-private-network can only be used with execute --local or kody dev/,
+	)
 })
 
 test('resolveApiToken prefers --token, falls back to KODY_API_TOKEN, and requires one', () => {

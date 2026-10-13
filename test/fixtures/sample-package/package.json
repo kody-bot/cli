@@ -1,0 +1,35 @@
+{
+  "name": "@local/sample-dev-package",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./greet": "./src/greet.ts"
+  },
+  "kody": {
+    "id": "sample-dev-package",
+    "description": "Fixture package for kody dev local testing.",
+    "app": {
+      "entry": "./app/entry.ts"
+    },
+    "jobs": {
+      "heartbeat": {
+        "entry": "./src/heartbeat-job.ts",
+        "schedule": "0 * * * *",
+        "enabled": false
+      }
+    },
+    "webhooks": {
+      "ping": {
+        "export": "./greet",
+        "description": "Echo webhook payload"
+      }
+    },
+    "subscriptions": {
+      "demo.event": {
+        "handler": "./src/on-demo-event.ts",
+        "description": "Handle demo.event locally"
+      }
+    }
+  }
+}

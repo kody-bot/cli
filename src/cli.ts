@@ -65,6 +65,7 @@ export type CommandName =
 	| 'search'
 	| 'api'
 	| 'execute'
+	| 'dev'
 	| 'install'
 	| 'skill'
 	| 'help'
@@ -77,6 +78,7 @@ const orgScopedCommands = new Set<CommandName>([
 	'search',
 	'api',
 	'execute',
+	'dev',
 	'auth',
 ])
 
@@ -121,6 +123,12 @@ function parseKnown(args: Array<string>) {
 			project: { type: 'boolean' },
 			'no-browser': { type: 'boolean' },
 			org: { type: 'string' },
+			target: { type: 'string' },
+			'reset-storage': { type: 'boolean' },
+			port: { type: 'string' },
+			'app-base-path': { type: 'string' },
+			method: { type: 'string' },
+			body: { type: 'string' },
 			clients: { type: 'string' },
 			yes: { type: 'boolean', short: 'y' },
 		},
@@ -152,6 +160,7 @@ export function resolveCommand(argv: Array<string>): {
 		case 'search':
 		case 'api':
 		case 'execute':
+		case 'dev':
 		case 'install':
 		case 'skill':
 		case 'help':
@@ -221,9 +230,20 @@ async function dispatch(
 	const json = parsed.values.json === true
 	if (
 		parsed.values['allow-private-network'] === true &&
+		parsed.command !== 'dev' &&
 		(parsed.command !== 'execute' || parsed.values.local !== true)
 	) {
-		throw new Error('--allow-private-network can only be used with execute --local.')
+		throw new Error(
+			'--allow-private-network can only be used with execute --local or kody dev.',
+		)
+	}
+	if (
+		parsed.values['reset-storage'] === true &&
+		parsed.command !== 'dev' &&
+		parsed.command !== 'execute' &&
+		parsed.command !== 'search'
+	) {
+		throw new Error('`--reset-storage` is only used with --target mock on execute, search, or dev.')
 	}
 	const orgFlag =
 		typeof parsed.values.org === 'string' ? parsed.values.org : undefined
@@ -588,67 +608,119 @@ async function dispatch(
 			return 0
 		}
 		case 'search': {
+			const { resolveTarget } = await import('./target.js')
+			const target = resolveTarget({
+				command: 'search',
+				flag:
+					typeof parsed.values.target === 'string' ? parsed.values.target : undefined,
+			})
 			const query = parsed.positionals.join(' ').trim()
 			const tokenValues = tokenFlagValues(parsed.values)
-			const apiUrl = apiUrlFrom({
+			let apiUrl = apiUrlFrom({
 				apiUrl:
 					typeof parsed.values['api-url'] === 'string'
 						? parsed.values['api-url']
 						: undefined,
 			})
-			if (
-				shouldUseApiToken({
-					tokenValues,
+			let closeMock: (() => Promise<void>) | undefined
+			try {
+				if (target === 'mock') {
+					const { ensureMockTarget } = await import('./mock/mock-server.js')
+					const mock = await ensureMockTarget({
+						resetStorage: parsed.values['reset-storage'] === true,
+					})
+					apiUrl = mock.apiUrl
+					closeMock = mock.started ? () => mock.server.close() : undefined
+					const { searchWithApiToken } = await import('./open-api-client.js')
+					const result = await searchWithApiToken({
+						token: mock.token,
+						apiUrl,
+						query: query || undefined,
+						entity:
+							typeof parsed.values.entity === 'string'
+								? parsed.values.entity
+								: undefined,
+						domain:
+							typeof parsed.values.domain === 'string'
+								? parsed.values.domain
+								: undefined,
+						limit:
+							typeof parsed.values.limit === 'string'
+								? Number(parsed.values.limit)
+								: undefined,
+					})
+					write(formatToolResult(result, json))
+					return result.isError ? 1 : 0
+				}
+				if (
+					shouldUseApiToken({
+						tokenValues,
+						mcpUrl,
+						apiUrl,
+						allowEnvWithoutLogin: true,
+						...(org ? { org } : {}),
+					})
+				) {
+					const { searchWithApiToken } = await import('./open-api-client.js')
+					const result = await searchWithApiToken({
+						token: requireApiToken(tokenValues, process.env, 'search', { apiUrl }),
+						apiUrl,
+						...(org ? { org } : {}),
+						query: query || undefined,
+						entity:
+							typeof parsed.values.entity === 'string'
+								? parsed.values.entity
+								: undefined,
+						domain:
+							typeof parsed.values.domain === 'string'
+								? parsed.values.domain
+								: undefined,
+						limit:
+							typeof parsed.values.limit === 'string'
+								? Number(parsed.values.limit)
+								: undefined,
+					})
+					write(formatToolResult(result, json))
+					return result.isError ? 1 : 0
+				}
+				const args: Record<string, unknown> = {}
+				if (query) args.query = query
+				if (typeof parsed.values.entity === 'string') args.entity = parsed.values.entity
+				if (typeof parsed.values.domain === 'string') args.domain = parsed.values.domain
+				if (typeof parsed.values.limit === 'string') args.limit = Number(parsed.values.limit)
+				const { callKodyTool } = await import('./mcp.js')
+				const result = await callKodyTool({
+					name: 'search',
+					args,
 					mcpUrl,
-					apiUrl,
-					allowEnvWithoutLogin: true,
 					...(org ? { org } : {}),
-				})
-			) {
-				const { searchWithApiToken } = await import('./open-api-client.js')
-				const result = await searchWithApiToken({
-					token: requireApiToken(tokenValues, process.env, 'search', { apiUrl }),
-					apiUrl,
-					...(org ? { org } : {}),
-					query: query || undefined,
-					entity:
-						typeof parsed.values.entity === 'string' ? parsed.values.entity : undefined,
-					domain:
-						typeof parsed.values.domain === 'string' ? parsed.values.domain : undefined,
-					limit:
-						typeof parsed.values.limit === 'string'
-							? Number(parsed.values.limit)
-							: undefined,
 				})
 				write(formatToolResult(result, json))
 				return result.isError ? 1 : 0
+			} finally {
+				await closeMock?.()
 			}
-			const args: Record<string, unknown> = {}
-			if (query) args.query = query
-			if (typeof parsed.values.entity === 'string') args.entity = parsed.values.entity
-			if (typeof parsed.values.domain === 'string') args.domain = parsed.values.domain
-			if (typeof parsed.values.limit === 'string') args.limit = Number(parsed.values.limit)
-			const { callKodyTool } = await import('./mcp.js')
-			const result = await callKodyTool({
-				name: 'search',
-				args,
-				mcpUrl,
-				...(org ? { org } : {}),
-			})
-			write(formatToolResult(result, json))
-			return result.isError ? 1 : 0
 		}
 		case 'execute': {
+			const { resolveTarget } = await import('./target.js')
+			const target = resolveTarget({
+				command: 'execute',
+				flag:
+					typeof parsed.values.target === 'string' ? parsed.values.target : undefined,
+			})
 			const invoke =
 				typeof parsed.values.invoke === 'string' ? parsed.values.invoke : undefined
 			const hasCodeFlag = typeof parsed.values.code === 'string'
 			const hasFileFlag = typeof parsed.values.file === 'string'
 			const positionalModule = parsed.positionals.join('\n').trim()
-			const local = parsed.values.local === true
+			// --target mock always runs locally against the CLI mock (no cloud sandbox).
+			const local = parsed.values.local === true || target === 'mock'
 			const tokenValues = tokenFlagValues(parsed.values)
-			if (local && invoke !== undefined) {
+			const localPackageInvoke =
+				invoke !== undefined ? await tryResolveLocalPackageInvoke(invoke) : null
+			if (local && invoke !== undefined && !localPackageInvoke) {
 				throw new Error(
-					'--invoke runs a saved package export in Kody; --local runs a module you provide (--code, --file, or a module string).',
+					'--invoke runs a saved package export in Kody; --local runs a module you provide (--code, --file, or a module string). To test an unpublished package export, pass an export key from package.json#exports (e.g. `--invoke ./on-user-deleted`) from the package directory, or use --file.',
 				)
 			}
 			if (executeSourcesConflict({ invoke, hasCodeFlag, hasFileFlag, positionalModule })) {
@@ -660,17 +732,20 @@ async function dispatch(
 			const fileArg = hasFileFlag ? (parsed.values.file as string) : undefined
 			// `--code` wins over `--file`. Only attribute the path when the file is the source.
 			const modulePath =
-				!hasCodeFlag && fileArg !== undefined && fileArg !== '-' ? fileArg : undefined
+				localPackageInvoke?.modulePath ??
+				(!hasCodeFlag && fileArg !== undefined && fileArg !== '-' ? fileArg : undefined)
 			const code =
-				invoke !== undefined
+				invoke !== undefined && !localPackageInvoke
 					? undefined
 					: hasCodeFlag
 						? parsed.values.code
-						: modulePath !== undefined
+						: modulePath !== undefined && !localPackageInvoke
 							? await readFile(modulePath, 'utf8')
-							: fileArg === '-'
-								? await readStdin()
-								: positionalModule || undefined
+							: localPackageInvoke
+								? await readFile(localPackageInvoke.modulePath, 'utf8')
+								: fileArg === '-'
+									? await readStdin()
+									: positionalModule || undefined
 			const credentials = parseCredentialFlags(
 				Array.isArray(parsed.values.credential)
 					? parsed.values.credential.filter(
@@ -681,7 +756,7 @@ async function dispatch(
 						: undefined,
 			)
 			const args = buildExecuteToolArgs({
-				invoke,
+				invoke: localPackageInvoke ? undefined : invoke,
 				code: typeof code === 'string' ? code : undefined,
 				paramsJson:
 					typeof parsed.values.params === 'string' ? parsed.values.params : undefined,
@@ -691,65 +766,239 @@ async function dispatch(
 						: undefined,
 				credentials,
 			})
-			const apiUrl = apiUrlFrom({
+			let apiUrl = apiUrlFrom({
 				apiUrl:
 					typeof parsed.values['api-url'] === 'string'
 						? parsed.values['api-url']
 						: undefined,
 			})
-			const useToken =
-				local ||
-				shouldUseApiToken({
-					tokenValues,
-					mcpUrl,
-					apiUrl,
-					allowEnvWithoutLogin: true,
-					...(org ? { org } : {}),
-				})
-			const result = local
-				? await (await import('./local-execute.js')).runLocalExecute({
-						code: args.code as string,
-						...(modulePath !== undefined ? { modulePath } : {}),
+			let closeMock: (() => Promise<void>) | undefined
+			let mockToken: string | undefined
+			try {
+				if (target === 'mock') {
+					const { ensureMockTarget } = await import('./mock/mock-server.js')
+					const mock = await ensureMockTarget({
+						resetStorage: parsed.values['reset-storage'] === true,
+						packageId: localPackageInvoke
+							? `local:${localPackageInvoke.kodyId}`
+							: undefined,
+					})
+					apiUrl = mock.apiUrl
+					mockToken = mock.token
+					closeMock = mock.started ? () => mock.server.close() : undefined
+				}
+				if (localPackageInvoke) {
+					const { buildLocalPackageContext, runLocalPackageModule } =
+						await import('./local-package-run.js')
+					const result = await runLocalPackageModule({
+						modulePath: localPackageInvoke.modulePath,
 						params: args.params,
-						conversationId: args.conversationId as string | undefined,
-						...(credentials !== undefined ? { credentials } : {}),
-						token: await resolveLocalExecuteBearer({
-							tokenValues,
-							mcpUrl,
-							apiUrl,
-							purpose: 'execute --local',
-							...(org ? { org } : {}),
-						}),
+						token:
+							mockToken ??
+							(await resolveLocalExecuteBearer({
+								tokenValues,
+								mcpUrl,
+								apiUrl,
+								purpose: 'execute local package export',
+								...(org ? { org } : {}),
+							})),
 						apiUrl,
-						...(org ? { org } : {}),
+						target,
+						packageContext: buildLocalPackageContext({
+							kodyId: localPackageInvoke.kodyId,
+							hostedUrl: 'http://127.0.0.1:0',
+						}),
 						allowPrivateNetwork:
 							parsed.values['allow-private-network'] === true,
 						onStatus: (message) => writeErr(`${message}\n`),
 					})
-				: useToken
-					? await (await import('./remote-execute.js')).runRemoteExecuteWithToken({
-							code: typeof args.code === 'string' ? args.code : undefined,
-							invoke,
+					write(formatToolResult(result, json))
+					return result.isError ? 1 : 0
+				}
+				const useToken =
+					local ||
+					shouldUseApiToken({
+						tokenValues,
+						mcpUrl,
+						apiUrl,
+						allowEnvWithoutLogin: true,
+						...(org ? { org } : {}),
+					})
+				const result = local
+					? await (await import('./local-execute.js')).runLocalExecute({
+							code: args.code as string,
+							...(modulePath !== undefined ? { modulePath } : {}),
 							params: args.params,
 							conversationId: args.conversationId as string | undefined,
 							...(credentials !== undefined ? { credentials } : {}),
-							token: requireApiToken(
-								tokenValues,
-								process.env,
-								'execute with an API token',
-								{ apiUrl },
-							),
+							token:
+								mockToken ??
+								(await resolveLocalExecuteBearer({
+									tokenValues,
+									mcpUrl,
+									apiUrl,
+									purpose: 'execute --local',
+									...(org ? { org } : {}),
+								})),
 							apiUrl,
 							...(org ? { org } : {}),
+							allowPrivateNetwork:
+								parsed.values['allow-private-network'] === true,
+							onStatus: (message) => writeErr(`${message}\n`),
 						})
-					: await (await import('./mcp.js')).callKodyTool({
-							name: 'execute',
-							args,
+					: useToken
+						? await (await import('./remote-execute.js')).runRemoteExecuteWithToken({
+								code: typeof args.code === 'string' ? args.code : undefined,
+								invoke,
+								params: args.params,
+								conversationId: args.conversationId as string | undefined,
+								...(credentials !== undefined ? { credentials } : {}),
+								token: requireApiToken(
+									tokenValues,
+									process.env,
+									'execute with an API token',
+									{ apiUrl },
+								),
+								apiUrl,
+								...(org ? { org } : {}),
+							})
+						: await (await import('./mcp.js')).callKodyTool({
+								name: 'execute',
+								args,
+								mcpUrl,
+								...(org ? { org } : {}),
+							})
+				write(formatToolResult(result, json))
+				return result.isError ? 1 : 0
+			} finally {
+				await closeMock?.()
+			}
+		}
+		case 'dev': {
+			const { resolveTarget } = await import('./target.js')
+			const {
+				parseDevSubcommand,
+				resolveDevAuth,
+				runDevCheck,
+				runDevEmit,
+				runDevFetch,
+				runDevJob,
+				runDevServe,
+				runDevWebhook,
+			} = await import('./dev-command.js')
+			const target = resolveTarget({
+				command: 'dev',
+				flag:
+					typeof parsed.values.target === 'string' ? parsed.values.target : undefined,
+			})
+			const { subcommand, rest } = parseDevSubcommand(parsed.positionals)
+			const tokenValues = tokenFlagValues(parsed.values)
+			const prodApiUrl = apiUrlFrom({
+				apiUrl:
+					typeof parsed.values['api-url'] === 'string'
+						? parsed.values['api-url']
+						: undefined,
+			})
+			const token =
+				target === 'prod'
+					? await resolveLocalExecuteBearer({
+							tokenValues,
 							mcpUrl,
+							apiUrl: prodApiUrl,
+							purpose: 'kody dev',
 							...(org ? { org } : {}),
 						})
-			write(formatToolResult(result, json))
-			return result.isError ? 1 : 0
+					: 'mock'
+			const auth = await resolveDevAuth({
+				target,
+				token,
+				apiUrl: prodApiUrl,
+				resetStorage: parsed.values['reset-storage'] === true,
+			})
+			const io = { stdout: write, stderr: writeErr }
+			const port =
+				typeof parsed.values.port === 'string' ? Number(parsed.values.port) : undefined
+			const appBasePath =
+				typeof parsed.values['app-base-path'] === 'string'
+					? parsed.values['app-base-path']
+					: undefined
+			const bodyPath =
+				typeof parsed.values.body === 'string' ? parsed.values.body : undefined
+			switch (subcommand) {
+				case 'serve':
+					return await runDevServe({
+						target,
+						auth,
+						port,
+						appBasePath,
+						allowPrivateNetwork:
+							parsed.values['allow-private-network'] === true,
+						io,
+					})
+				case 'fetch': {
+					const path = rest[0]
+					if (!path) {
+						throw new Error('Usage: kody dev fetch <path> [--method GET] [--body file.json]')
+					}
+					let body: string | undefined
+					if (bodyPath) body = await readFile(bodyPath, 'utf8')
+					return await runDevFetch({
+						target,
+						auth,
+						path,
+						method:
+							typeof parsed.values.method === 'string'
+								? parsed.values.method
+								: undefined,
+						body,
+						port,
+						appBasePath,
+						json,
+						io,
+					})
+				}
+				case 'job': {
+					const jobName = rest[0]
+					if (!jobName) throw new Error('Usage: kody dev job <name>')
+					return await runDevJob({ target, auth, jobName, json, io })
+				}
+				case 'webhook': {
+					const webhookName = rest[0]
+					if (!webhookName || !bodyPath) {
+						throw new Error(
+							'Usage: kody dev webhook <name> --body file.json',
+						)
+					}
+					return await runDevWebhook({
+						target,
+						auth,
+						webhookName,
+						bodyPath,
+						json,
+						io,
+					})
+				}
+				case 'emit': {
+					const event = rest[0]
+					if (!event || !bodyPath) {
+						throw new Error('Usage: kody dev emit <event> --body event.json')
+					}
+					return await runDevEmit({
+						target,
+						auth,
+						event,
+						bodyPath,
+						json,
+						io,
+					})
+				}
+				case 'check':
+					return await runDevCheck({ target, json, io })
+				default: {
+					const exhaustive: never = subcommand
+					throw new Error(`Unhandled kody dev subcommand: ${String(exhaustive)}`)
+				}
+			}
 		}
 		case 'api': {
 			const operationId = parsed.positionals[0]?.trim() ?? ''
@@ -820,6 +1069,22 @@ async function readStdin(): Promise<string> {
 		chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
 	}
 	return Buffer.concat(chunks).toString('utf8')
+}
+
+async function tryResolveLocalPackageInvoke(
+	invoke: string,
+): Promise<{ modulePath: string; kodyId: string } | null> {
+	const trimmed = invoke.trim()
+	if (!trimmed || trimmed.startsWith('kody:@')) return null
+	try {
+		const { loadPackageManifest, resolveExportModulePath } =
+			await import('./package-manifest.js')
+		const manifest = await loadPackageManifest(process.cwd())
+		const modulePath = resolveExportModulePath(manifest, trimmed)
+		return { modulePath, kodyId: manifest.kodyId }
+	} catch {
+		return null
+	}
 }
 
 /** True when --invoke is set alongside any code source (--code, --file, or positional). */
