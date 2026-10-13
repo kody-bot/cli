@@ -211,7 +211,13 @@ async function dispatch(
 					write(`If the browser does not open, visit:\n${url.href}\n`)
 				},
 			})
-			write(`Logged in to ${result.credentials.mcpUrl}.\n`)
+			const orgLabel = result.org ? ` as org ${result.org}` : ''
+			const accountLabel = result.account?.email
+				? ` (${result.account.email})`
+				: result.account?.displayName
+					? ` (${result.account.displayName})`
+					: ''
+			write(`Logged in to ${result.credentials.mcpUrl}${orgLabel}${accountLabel}.\n`)
 			if (result.backendKind === 'file' && result.backendPath) {
 				write(
 					`OS keychain was unavailable; credentials saved at ${result.backendPath} (mode 0600).\n`,

@@ -17,6 +17,16 @@ import {
 	defaultScopes,
 	loginTimeoutMs,
 } from './defaults.js'
+import {
+	discoverLoginIdentity,
+	type LoginIdentity,
+} from './discover-login-identity.js'
+import {
+	loginCallbackErrorFromOAuthError,
+	renderLoginCallbackPage,
+	type LoginCallbackAccount,
+	type LoginCallbackErrorKind,
+} from './login-callback-page.js'
 import { createCliOAuthProvider, orgSlugFromFlag } from './oauth-provider.js'
 import { redactError } from './redact.js'
 import {
@@ -36,6 +46,16 @@ export type LoginOptions = {
 	now?: () => number
 	fetchFn?: typeof fetch
 	onAuthorizationUrl?: (url: URL) => void
+	/**
+	 * Test seam / coordination with multi-org login (#42): resolve org +
+	 * account after the code exchange so the localhost callback page can show
+	 * them. Defaults to `metaGetCurrentUser` via {@link discoverLoginIdentity}.
+	 */
+	discoverIdentity?: (input: {
+		mcpUrl: string
+		accessToken: string
+		fetchFn?: typeof fetch
+	}) => Promise<LoginIdentity>
 }
 
 export function isAccessTokenExpired(
@@ -191,21 +211,66 @@ function startCallbackServer(redirectUri: URL): Promise<Server> {
 	})
 }
 
+type CallbackSuccess = {
+	code: string
+	iss?: string
+	/**
+	 * Hold the browser response open until exchange + identity resolve, then
+	 * write the designed success/error page (never echoes code/tokens).
+	 */
+	complete: (page: Parameters<typeof renderLoginCallbackPage>[0]) => void
+}
+
+function sendCallbackHtml(
+	response: ServerResponse,
+	status: number,
+	page: Parameters<typeof renderLoginCallbackPage>[0],
+): void {
+	if (response.headersSent) return
+	response.writeHead(status, {
+		'Content-Type': 'text/html; charset=utf-8',
+		'Cache-Control': 'no-store',
+	})
+	response.end(renderLoginCallbackPage(page))
+}
+
 function waitForCallback(input: {
 	server: Server
 	redirectUri: URL
 	expectedState: string
 	timeoutMs: number
-}): Promise<{ code: string; iss?: string }> {
+}): Promise<CallbackSuccess> {
 	return new Promise((resolve, reject) => {
-		const finish = (error: Error | null, result?: { code: string; iss?: string }) => {
-			clearTimeout(timer)
+		let settled = false
+		let pendingResponse: ServerResponse | undefined
+
+		const closeServer = () => {
 			input.server.close()
-			if (error) reject(error)
-			else resolve(result ?? { code: '' })
 		}
+
+		const rejectOnce = (error: Error) => {
+			if (settled) return
+			settled = true
+			clearTimeout(timer)
+			closeServer()
+			reject(error)
+		}
+
+		const resolveOnce = (result: CallbackSuccess) => {
+			if (settled) return
+			settled = true
+			clearTimeout(timer)
+			resolve(result)
+		}
+
 		const timer = setTimeout(() => {
-			finish(new Error('Timed out waiting for the browser login.'))
+			if (pendingResponse && !pendingResponse.headersSent) {
+				sendCallbackHtml(pendingResponse, 408, {
+					kind: 'error',
+					error: 'expired',
+				})
+			}
+			rejectOnce(new Error('Timed out waiting for the browser login.'))
 		}, input.timeoutMs)
 
 		input.server.on('request', (request: IncomingMessage, response: ServerResponse) => {
@@ -218,28 +283,38 @@ function waitForCallback(input: {
 				const error = url.searchParams.get('error')
 				if (error) {
 					const description = url.searchParams.get('error_description') ?? ''
-					response
-						.writeHead(400, { 'Content-Type': 'text/html' })
-						.end('<p>Authorization failed. You can close this window.</p>')
-					finish(new Error(description || error))
+					const kind = loginCallbackErrorFromOAuthError(error)
+					sendCallbackHtml(response, 400, { kind: 'error', error: kind })
+					rejectOnce(new Error(description || error))
 					return
 				}
 				const state = url.searchParams.get('state')
 				const code = url.searchParams.get('code')
 				const iss = url.searchParams.get('iss') ?? undefined
 				if (state !== input.expectedState || !code) {
-					response
-						.writeHead(400, { 'Content-Type': 'text/html' })
-						.end('<p>Invalid OAuth callback. You can close this window.</p>')
-					finish(new Error('OAuth callback missing code or state.'))
+					const kind: LoginCallbackErrorKind =
+						state && state !== input.expectedState
+							? 'state_mismatch'
+							: 'failed'
+					sendCallbackHtml(response, 400, { kind: 'error', error: kind })
+					rejectOnce(new Error('OAuth callback missing code or state.'))
 					return
 				}
-				response
-					.writeHead(200, { 'Content-Type': 'text/html' })
-					.end('<p>Kody CLI is signed in. You can close this window.</p>')
-				finish(null, { code, ...(iss ? { iss } : {}) })
+				pendingResponse = response
+				resolveOnce({
+					code,
+					...(iss ? { iss } : {}),
+					complete(page) {
+						sendCallbackHtml(
+							response,
+							page.kind === 'success' ? 200 : 400,
+							page,
+						)
+						closeServer()
+					},
+				})
 			} catch (error) {
-				finish(redactError(error))
+				rejectOnce(redactError(error))
 			}
 		})
 	})
@@ -250,9 +325,12 @@ export async function login(options: LoginOptions = {}): Promise<{
 	authorizationUrl: URL
 	backendKind: 'keyring' | 'file'
 	backendPath?: string
+	org?: string
+	account?: LoginCallbackAccount
 }> {
 	const mcpUrl = options.mcpUrl ?? defaultMcpUrl
-	const org = options.org === undefined ? undefined : orgSlugFromFlag(options.org)
+	const orgHint =
+		options.org === undefined ? undefined : orgSlugFromFlag(options.org)
 	const redirectUri = cliRedirectUrl()
 	const expectedState = crypto.randomUUID()
 	const server = await startCallbackServer(redirectUri)
@@ -263,12 +341,13 @@ export async function login(options: LoginOptions = {}): Promise<{
 		loadStoredTokens: false,
 		openBrowser: options.openBrowser !== false,
 		expectedState,
-		...(org ? { org } : {}),
+		...(orgHint ? { org: orgHint } : {}),
 		onAuthorizationUrl: (url) => {
 			authorizationUrl = url
 			options.onAuthorizationUrl?.(url)
 		},
 	})
+	let completeCallback: CallbackSuccess['complete'] | undefined
 	try {
 		const first = await auth(provider, {
 			serverUrl: mcpUrl,
@@ -282,6 +361,7 @@ export async function login(options: LoginOptions = {}): Promise<{
 				expectedState,
 				timeoutMs: options.timeoutMs ?? loginTimeoutMs,
 			})
+			completeCallback = callback.complete
 			const exchanged = await auth(provider, {
 				serverUrl: mcpUrl,
 				authorizationCode: callback.code,
@@ -290,6 +370,8 @@ export async function login(options: LoginOptions = {}): Promise<{
 				fetchFn: options.fetchFn,
 			})
 			if (exchanged !== 'AUTHORIZED') {
+				completeCallback({ kind: 'error', error: 'failed' })
+				completeCallback = undefined
 				throw new Error('OAuth redirect completed without tokens.')
 			}
 		} else {
@@ -301,13 +383,54 @@ export async function login(options: LoginOptions = {}): Promise<{
 			backend: options.backend,
 			now: options.now?.(),
 		})
+
+		let org = orgHint
+		let account: LoginCallbackAccount | undefined
+		const discover = options.discoverIdentity ?? discoverLoginIdentity
+		try {
+			const identity = await discover({
+				mcpUrl,
+				accessToken: credentials.accessToken,
+				fetchFn: options.fetchFn,
+			})
+			if (orgHint && identity.org !== orgHint) {
+				completeCallback?.({ kind: 'error', error: 'failed' })
+				completeCallback = undefined
+				throw new Error(
+					`Login was bound to org "${identity.org}" but \`--org ${orgHint}\` was requested.`,
+				)
+			}
+			org = identity.org
+			account = identity.account
+		} catch (error) {
+			// Keep the saved session. Discovery feeds the callback page (and
+			// multi-org #42); a transient metaGetCurrentUser failure must not
+			// undo an otherwise successful OAuth exchange.
+			if (
+				error instanceof Error &&
+				error.message.startsWith('Login was bound to org ')
+			) {
+				throw error
+			}
+		}
+
+		completeCallback?.({
+			kind: 'success',
+			...(org ? { org } : {}),
+			...(account ? { account } : {}),
+		})
+		completeCallback = undefined
+
 		return {
 			credentials,
 			authorizationUrl,
 			backendKind: saved.backend.kind,
 			backendPath: saved.backend.path,
+			...(org ? { org } : {}),
+			...(account ? { account } : {}),
 		}
 	} catch (error) {
+		completeCallback?.({ kind: 'error', error: 'failed' })
 		server.close()
 		throw redactError(error)
 	}
