@@ -830,18 +830,20 @@ function bootstrapMinter(input: {
 	apiUrl: string
 	tokenValues: { token?: string }
 }): (params: Record<string, unknown>) => Promise<unknown> {
-	if (
-		shouldUseApiToken({
-			tokenValues: input.tokenValues,
-			mcpUrl: input.mcpUrl,
-			apiUrl: input.apiUrl,
-			allowEnvWithoutLogin: true,
-		})
-	) {
-		const token = requireApiToken(input.tokenValues, process.env, 'auth bootstrap --scopes', {
-			apiUrl: input.apiUrl,
-		})
-		return async (params) => {
+	// Resolve credentials lazily so `auth setup-git` can validate login/token
+	// presence (and print its own guidance) before mint runs.
+	return async (params) => {
+		if (
+			shouldUseApiToken({
+				tokenValues: input.tokenValues,
+				mcpUrl: input.mcpUrl,
+				apiUrl: input.apiUrl,
+				allowEnvWithoutLogin: true,
+			})
+		) {
+			const token = requireApiToken(input.tokenValues, process.env, 'auth bootstrap --scopes', {
+				apiUrl: input.apiUrl,
+			})
 			const { callOpenApiOperation } = await import('./open-api-client.js')
 			try {
 				return await callOpenApiOperation({
@@ -859,18 +861,17 @@ function bootstrapMinter(input: {
 				throw error
 			}
 		}
-	}
-	if (loadCredentials(input.mcpUrl)) {
-		return async (params) =>
-			(await import('./mcp.js')).callKodyApiOperation({
+		if (loadCredentials(input.mcpUrl)) {
+			return (await import('./mcp.js')).callKodyApiOperation({
 				operationId: cliCredentialBootstrapOperationId,
 				params,
 				mcpUrl: input.mcpUrl,
 			})
+		}
+		throw new Error(
+			`auth bootstrap --scopes mints with your current Kody credential, and none was found. Run \`kody login\` and retry, or from Kody MCP call \`${cliBootstrapMintCall(input.scopes, bootstrapMintLifetimeFields(input.lifetime))}\` and run the returned cli_command.`,
+		)
 	}
-	throw new Error(
-		`auth bootstrap --scopes mints with your current Kody credential, and none was found. Run \`kody login\` and retry, or from Kody MCP call \`${cliBootstrapMintCall(input.scopes, bootstrapMintLifetimeFields(input.lifetime))}\` and run the returned cli_command.`,
-	)
 }
 
 function tokenFlagValues(values: ReturnType<typeof parseKnown>['values']): {

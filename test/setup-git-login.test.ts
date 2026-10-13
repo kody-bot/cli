@@ -258,6 +258,7 @@ test('auth setup-git with neither login nor token fails like Kent saw', async ()
 				apiUrl,
 			])
 			assert.equal(result.code, 1)
+			assert.match(result.stderr, /setup-git needs a Kody credential/)
 			assert.match(result.stderr, /Run `kody login`/)
 		},
 	)
