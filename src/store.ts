@@ -450,6 +450,17 @@ export function loadCredentials(
 	return pickCredentialsFromStore(snapshot, options?.org)
 }
 
+/** Legacy pending session only (not the active named org). */
+export function loadPendingCredentials(
+	mcpUrl: string = defaultMcpUrl,
+	backend?: SecretBackend,
+	resolution?: StoreResolution,
+): StoredCredentials | null {
+	const snapshot = loadCredentialStore(mcpUrl, backend, resolution)
+	if (!snapshot?.pending) return null
+	return recordToCredentials(snapshot.mcpUrl, snapshot.pending)
+}
+
 export function pickCredentialsFromStore(
 	snapshot: MultiOrgCredentialStore,
 	org?: string,

@@ -33,6 +33,7 @@ import { redactError } from './redact.js'
 import {
 	loadCredentialStore,
 	loadCredentials,
+	loadPendingCredentials,
 	promotePendingOrg,
 	saveCredentials,
 	type SecretBackend,
@@ -198,6 +199,7 @@ export async function resolvePendingOrgSlug(input: {
 	mcpUrl?: string
 	backend?: SecretBackend
 	resolution?: StoreResolution
+	now?: number
 	fetchFn?: typeof fetch
 	discoverOrg?: (input: {
 		mcpUrl: string
@@ -208,11 +210,27 @@ export async function resolvePendingOrgSlug(input: {
 	const mcpUrl = input.mcpUrl ?? defaultMcpUrl
 	const snapshot = loadCredentialStore(mcpUrl, input.backend, input.resolution)
 	if (!snapshot?.pending) return snapshot?.activeOrg ?? null
+	let pending = loadPendingCredentials(mcpUrl, input.backend, input.resolution)
+	if (!pending) return snapshot.activeOrg ?? null
+	if (isAccessTokenExpired(pending, input.now)) {
+		if (!pending.refreshToken) return null
+		try {
+			pending = await refreshStoredCredentials({
+				credentials: pending,
+				backend: input.backend,
+				resolution: input.resolution,
+				now: input.now,
+				fetchFn: input.fetchFn,
+			})
+		} catch {
+			return null
+		}
+	}
 	const discover = input.discoverOrg ?? discoverOrgSlugFromAccessToken
 	try {
 		const slug = await discover({
 			mcpUrl,
-			accessToken: snapshot.pending.accessToken,
+			accessToken: pending.accessToken,
 			fetchFn: input.fetchFn,
 		})
 		promotePendingOrg(mcpUrl, slug, input.backend, input.resolution)
@@ -240,6 +258,7 @@ export async function ensureFreshCredentials(input: {
 		mcpUrl,
 		backend: input.backend,
 		resolution: input.resolution,
+		now: input.now,
 		fetchFn: input.fetchFn,
 		discoverOrg: input.discoverOrg,
 	})
@@ -475,14 +494,29 @@ export async function login(options: LoginOptions = {}): Promise<{
 			org = identity.org
 			account = identity.account
 		} catch (error) {
-			// Soft-fail discovery for the callback page / pending migration:
-			// keep orgHint when present so multi-org can still name the login.
-			// Org mismatch always fails (thrown above / rethrown here).
+			// Org mismatch always fails. Soft-fail other discovery errors only
+			// when we can still name the login (--org) or park a sole pending
+			// migration (no named orgs yet). Otherwise a nameless pending
+			// beside existing orgs would never become active.
 			if (
 				error instanceof Error &&
 				error.message.startsWith('Login was bound to org ')
 			) {
 				throw error
+			}
+			if (!orgHint) {
+				const existing = loadCredentialStore(
+					mcpUrl,
+					options.backend,
+					options.resolution,
+				)
+				if (existing && Object.keys(existing.orgs).length > 0) {
+					completeCallback?.({ kind: 'error', error: 'failed' })
+					completeCallback = undefined
+					throw new Error(
+						'Could not determine the organization for this login. Re-run with `kody login --org <slug>`.',
+					)
+				}
 			}
 		}
 

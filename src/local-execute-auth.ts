@@ -64,7 +64,14 @@ export async function resolveLocalExecuteBearer(
 			now: input.now,
 		})
 		return credentials.accessToken
-	} catch {
+	} catch (error) {
+		// Preserve org-specific guidance from ensureFreshCredentials.
+		if (
+			error instanceof Error &&
+			/^No login stored for org "/.test(error.message)
+		) {
+			throw error
+		}
 		throw new Error(missingLocalExecuteAuthMessage(input.purpose ?? 'execute --local'))
 	}
 }
