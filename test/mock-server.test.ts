@@ -143,4 +143,99 @@ test('supported mock operation lists are non-empty contract anchors', () => {
 	assert.ok(mockOpenApiOperationIds.includes('search'))
 	assert.ok(mockCapabilityPaths.includes('kody.metaGetCurrentUser'))
 	assert.ok(mockCapabilityPaths.includes('kody.search'))
+	assert.ok(mockCapabilityPaths.includes('kody.credentialClientOpenAll'))
+	assert.ok(mockCapabilityPaths.includes('kody.authenticatedFetch'))
+	assert.ok(mockCapabilityPaths.includes('kody.adminUserList'))
+})
+
+test('mock credentialClientOpen returns hosts so credential() can iterate', async () => {
+	const cache = await mkdtemp(join(tmpdir(), 'kody-mock-cred-'))
+	try {
+		await withMockServer(
+			{ sessionId: 'cred', env: { KODY_CACHE_DIR: cache }, resetStorage: true },
+			async (server) => {
+				const token = mintMockApiToken(server.sessionId)
+				const response = await fetch(`${server.url}/v1/capability-proxy/call`, {
+					method: 'POST',
+					headers: {
+						authorization: `Bearer ${token}`,
+						'content-type': 'application/json',
+					},
+					body: JSON.stringify({
+						path: ['kody', 'credentialClientOpen'],
+						args: [{ key: 'MOCK_SECRET' }],
+					}),
+				})
+				assert.equal(response.status, 200)
+				const body = (await response.json()) as {
+					result: {
+						ok: boolean
+						value: { hosts: Array<string>; name: string; kind: string }
+					}
+				}
+				assert.equal(body.result.ok, true)
+				assert.equal(body.result.value.name, 'MOCK_SECRET')
+				assert.ok(Array.isArray(body.result.value.hosts))
+				assert.ok(body.result.value.hosts.length > 0)
+			},
+		)
+	} finally {
+		await rm(cache, { recursive: true, force: true })
+	}
+})
+
+test('mock credentials OpenAll + authenticatedFetch + adminUserList fixtures', async () => {
+	const cache = await mkdtemp(join(tmpdir(), 'kody-mock-ops-'))
+	try {
+		await withMockServer(
+			{ sessionId: 'ops', env: { KODY_CACHE_DIR: cache }, resetStorage: true },
+			async (server) => {
+				const token = mintMockApiToken(server.sessionId)
+				const call = async (path: Array<string>, args: Array<unknown> = [{}]) => {
+					const response = await fetch(`${server.url}/v1/capability-proxy/call`, {
+						method: 'POST',
+						headers: {
+							authorization: `Bearer ${token}`,
+							'content-type': 'application/json',
+						},
+						body: JSON.stringify({ path, args }),
+					})
+					assert.equal(response.status, 200)
+					return (await response.json()) as { result: unknown }
+				}
+
+				const openAll = (await call(['kody', 'credentialClientOpenAll'], [
+					{ key: 'MOCK_SECRET' },
+				])) as {
+					result: { ok: boolean; value: Array<{ name: string; hosts: Array<string> }> }
+				}
+				assert.equal(openAll.result.ok, true)
+				assert.equal(openAll.result.value.length, 1)
+				assert.equal(openAll.result.value[0]?.name, 'MOCK_SECRET')
+
+				const oauth = (await call(['kody', 'authenticatedFetch'], [
+					{
+						providerName: 'linkedin',
+						request: { url: 'https://api.linkedin.com/v2/userinfo', method: 'GET' },
+					},
+				])) as {
+					result: { status: number; bodyBase64: string }
+				}
+				assert.equal(oauth.result.status, 200)
+				const decoded = JSON.parse(
+					Buffer.from(oauth.result.bodyBase64, 'base64').toString('utf8'),
+				) as { mock: boolean; providerName: string }
+				assert.equal(decoded.mock, true)
+				assert.equal(decoded.providerName, 'linkedin')
+
+				const admin = (await call(['kody', 'adminUserList'], [{ page: 1 }])) as {
+					result: { users: Array<{ username: string }>; mock: boolean }
+				}
+				assert.equal(admin.result.mock, true)
+				assert.equal(admin.result.users[0]?.username, 'mock-user')
+			},
+		)
+	} finally {
+		await rm(cache, { recursive: true, force: true })
+	}
 })

@@ -30,6 +30,15 @@ export type DevAuth = {
 	apiUrl: string
 	/** User-owned token org selection (`?org=`) for --target prod hops. */
 	org?: string
+	/**
+	 * When target is mock: fetch stamped `kody:@` modules from prod while
+	 * CapabilityProxy stays on the mock.
+	 */
+	depResolve?: {
+		apiUrl: string
+		token: string
+		org?: string
+	}
 	/** Present when target is mock and this command started (or reused) it. */
 	mockServer?: MockServer
 	closeMock?: () => Promise<void>
@@ -43,6 +52,7 @@ export async function resolveDevAuth(input: {
 	resetStorage?: boolean
 	sessionId?: string
 	packageId?: string
+	depResolve?: DevAuth['depResolve']
 }): Promise<DevAuth> {
 	if (input.target !== 'mock') {
 		return {
@@ -61,6 +71,7 @@ export async function resolveDevAuth(input: {
 		token: ensured.token,
 		apiUrl: ensured.apiUrl,
 		...(input.org ? { org: input.org } : {}),
+		...(input.depResolve ? { depResolve: input.depResolve } : {}),
 		mockServer: ensured.server,
 		closeMock: ensured.started
 			? async () => {
@@ -92,6 +103,7 @@ export async function runDevServe(input: {
 		port: input.port,
 		appBasePath: input.appBasePath,
 		...(input.auth.org ? { org: input.auth.org } : {}),
+		...(input.auth.depResolve ? { depResolve: input.auth.depResolve } : {}),
 		allowPrivateNetwork: input.allowPrivateNetwork,
 		onStatus: (message) => input.io.stderr(`${message}\n`),
 		onError: (message) => input.io.stderr(`${message}\n`),
@@ -145,8 +157,10 @@ export async function runDevFetch(input: {
 		port: input.port,
 		appBasePath: input.appBasePath,
 		...(input.auth.org ? { org: input.auth.org } : {}),
+		...(input.auth.depResolve ? { depResolve: input.auth.depResolve } : {}),
 		watch: false,
 		onStatus: (message) => input.io.stderr(`${message}\n`),
+		onError: (message) => input.io.stderr(`${message}\n`),
 	})
 	try {
 		const result = await server.fetchPath(input.path, {
@@ -174,6 +188,7 @@ export async function runDevJob(input: {
 	jobName: string
 	cwd?: string
 	json?: boolean
+	dryRun?: boolean
 	io: DevIo
 }): Promise<number> {
 	const manifest = await loadPackageManifest(input.cwd)
@@ -187,10 +202,28 @@ export async function runDevJob(input: {
 			target: input.target,
 		})
 	}
+	const modulePath = resolvePackagePath(manifest, job.entry)
+	if (input.dryRun) {
+		return printDevDryRun({
+			target: input.target,
+			surface: `job:${input.jobName}`,
+			modulePath,
+			params: undefined,
+			extra: {
+				schedule: job.schedule,
+				scheduleRaw: job.scheduleRaw,
+				timezone: job.timezone ?? null,
+				enabled: job.enabled ?? null,
+			},
+			json: input.json,
+			io: input.io,
+			closeMock: input.auth.closeMock,
+		})
+	}
 	// Scheduler contract: no params. Never schedules locally — runs once.
 	return await runPackageModuleOnce({
 		manifest,
-		modulePath: resolvePackagePath(manifest, job.entry),
+		modulePath,
 		params: undefined,
 		target: input.target,
 		auth: input.auth,
@@ -207,6 +240,7 @@ export async function runDevWebhook(input: {
 	bodyPath: string
 	cwd?: string
 	json?: boolean
+	dryRun?: boolean
 	io: DevIo
 }): Promise<number> {
 	const manifest = await loadPackageManifest(input.cwd)
@@ -245,9 +279,22 @@ export async function runDevWebhook(input: {
 					},
 					synthetic: true as const,
 				}
+	const modulePath = resolveExportModulePath(manifest, webhook.export)
+	if (input.dryRun) {
+		return printDevDryRun({
+			target: input.target,
+			surface: `webhook:${input.webhookName}`,
+			modulePath,
+			params,
+			extra: { export: webhook.export, bodyPath: input.bodyPath },
+			json: input.json,
+			io: input.io,
+			closeMock: input.auth.closeMock,
+		})
+	}
 	return await runPackageModuleOnce({
 		manifest,
-		modulePath: resolveExportModulePath(manifest, webhook.export),
+		modulePath,
 		params,
 		target: input.target,
 		auth: input.auth,
@@ -268,6 +315,7 @@ export async function runDevEmit(input: {
 	bodyPath: string
 	cwd?: string
 	json?: boolean
+	dryRun?: boolean
 	io: DevIo
 }): Promise<number> {
 	const manifest = await loadPackageManifest(input.cwd)
@@ -315,9 +363,22 @@ export async function runDevEmit(input: {
 	if (envelope.idempotency_key === undefined) {
 		envelope.idempotency_key = `synthetic:local:${Date.now()}`
 	}
+	const modulePath = resolvePackagePath(manifest, subscription.handler)
+	if (input.dryRun) {
+		return printDevDryRun({
+			target: input.target,
+			surface: `subscription:${input.event}`,
+			modulePath,
+			params: envelope,
+			extra: { handler: subscription.handler, bodyPath: input.bodyPath },
+			json: input.json,
+			io: input.io,
+			closeMock: input.auth.closeMock,
+		})
+	}
 	return await runPackageModuleOnce({
 		manifest,
-		modulePath: resolvePackagePath(manifest, subscription.handler),
+		modulePath,
 		params: envelope,
 		target: input.target,
 		auth: input.auth,
@@ -459,12 +520,60 @@ async function runPackageModuleOnce(input: {
 			target: input.target,
 			packageContext,
 			...(input.auth.org ? { org: input.auth.org } : {}),
+			...(input.auth.depResolve ? { depResolve: input.auth.depResolve } : {}),
 			onStatus: (message) => input.io.stderr(`${message}\n`),
 		})
 		input.io.stdout(formatToolResult(result, input.json === true))
 		return result.isError ? 1 : 0
 	} finally {
 		await input.auth.closeMock?.()
+	}
+}
+
+/**
+ * Show what `kody dev job|webhook|emit` would run without invoking the module
+ * (safe against prod side effects).
+ */
+async function printDevDryRun(input: {
+	target: KodyTarget
+	surface: string
+	modulePath: string
+	params: unknown
+	extra?: Record<string, unknown>
+	json?: boolean
+	io: DevIo
+	closeMock?: () => Promise<void>
+}): Promise<number> {
+	try {
+		const plan = {
+			dryRun: true,
+			wouldInvoke: true,
+			target: input.target,
+			surface: input.surface,
+			modulePath: input.modulePath,
+			params: input.params ?? null,
+			...(input.extra ?? {}),
+			note:
+				input.target === 'prod'
+					? 'No module run and no prod side effects. Drop --dry-run to invoke once against prod CapabilityProxy.'
+					: 'No module run. Drop --dry-run to invoke against the selected target.',
+		}
+		if (input.json) {
+			input.io.stdout(`${JSON.stringify(plan, null, 2)}\n`)
+		} else {
+			input.io.stdout(
+				`dry-run: would invoke ${input.surface} on --target ${input.target}\n` +
+					`module: ${input.modulePath}\n` +
+					`params: ${JSON.stringify(input.params ?? null, null, 2)}\n` +
+					(input.extra
+						? `detail: ${JSON.stringify(input.extra, null, 2)}\n`
+						: '') +
+					`${plan.note}\n`,
+			)
+		}
+		return 0
+	} finally {
+		await input.closeMock?.()
 	}
 }
 

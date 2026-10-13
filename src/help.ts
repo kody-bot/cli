@@ -245,6 +245,10 @@ ${orgBlock}
              With \`--target mock\`, wipe the mock session's scratch storage
              before the command.
 
+  --dry-run  With \`kody dev job|webhook|emit\`, print the module path and
+             params that would run without invoking (safe against prod side
+             effects). Does not apply to serve/fetch/check.
+
   kody dev   Local testing for unpublished packages. Serves \`kody.app.entry\`
              on localhost via workerd with hot reload (mount-stripped path;
              packageContext.hostedUrl / appBasePath point at localhost).
@@ -254,7 +258,10 @@ ${orgBlock}
              (\`kody dev webhook\`), schedules (\`kody dev job\` — runs once,
              never schedules locally), subscriptions
              (\`kody dev emit <event> --body event.json\`). \`kody dev check\`
-             bundles + light publish validations without running. Share
+             bundles + light publish validations without running. On
+             \`--target mock\`, stamped \`kody:@\` dependency *source* is
+             resolved from prod package-graph when a login/API token is
+             available (storage/credentials stay on the mock). Share
              previews are out of scope.
 
 Environment:

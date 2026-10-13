@@ -127,6 +127,7 @@ function parseKnown(args: Array<string>) {
 			org: { type: 'string' },
 			target: { type: 'string' },
 			'reset-storage': { type: 'boolean' },
+			'dry-run': { type: 'boolean' },
 			port: { type: 'string' },
 			'app-base-path': { type: 'string' },
 			method: { type: 'string' },
@@ -267,6 +268,11 @@ async function dispatch(
 		parsed.command !== 'search'
 	) {
 		throw new Error('`--reset-storage` is only used with --target mock on execute, search, or dev.')
+	}
+	if (parsed.values['dry-run'] === true && parsed.command !== 'dev') {
+		throw new Error(
+			'`--dry-run` is only used with `kody dev job|webhook|emit` (shows the plan without invoking).',
+		)
 	}
 	const orgFlag =
 		typeof parsed.values.org === 'string' ? parsed.values.org : undefined
@@ -789,14 +795,18 @@ async function dispatch(
 						: undefined,
 				credentials,
 			})
-			let apiUrl = apiUrlFrom({
+			const prodApiUrl = apiUrlFrom({
 				apiUrl:
 					typeof parsed.values['api-url'] === 'string'
 						? parsed.values['api-url']
 						: undefined,
 			})
+			let apiUrl = prodApiUrl
 			let closeMock: (() => Promise<void>) | undefined
 			let mockToken: string | undefined
+			let mockDepResolve:
+				| { apiUrl: string; token: string; org?: string }
+				| undefined
 			try {
 				if (target === 'mock') {
 					const { ensureMockTarget } = await import('./mock/mock-server.js')
@@ -809,6 +819,13 @@ async function dispatch(
 					apiUrl = mock.apiUrl
 					mockToken = mock.token
 					closeMock = mock.started ? () => mock.server.close() : undefined
+					const { tryResolveMockDepResolve } = await import('./mock-dep-resolve.js')
+					mockDepResolve = await tryResolveMockDepResolve({
+						tokenValues,
+						apiUrl: prodApiUrl,
+						mcpUrl,
+						...(org ? { org } : {}),
+					})
 				}
 				if (localPackageInvoke) {
 					const { buildLocalPackageContext, runLocalPackageModule } =
@@ -832,6 +849,7 @@ async function dispatch(
 							hostedUrl: 'http://127.0.0.1:0',
 						}),
 						...(org ? { org } : {}),
+						...(mockDepResolve ? { depResolve: mockDepResolve } : {}),
 						allowPrivateNetwork:
 							parsed.values['allow-private-network'] === true,
 						onStatus: (message) => writeErr(`${message}\n`),
@@ -866,6 +884,7 @@ async function dispatch(
 								})),
 							apiUrl,
 							...(org ? { org } : {}),
+							...(mockDepResolve ? { depResolve: mockDepResolve } : {}),
 							allowPrivateNetwork:
 								parsed.values['allow-private-network'] === true,
 							onStatus: (message) => writeErr(`${message}\n`),
@@ -932,6 +951,17 @@ async function dispatch(
 			if (subcommand === 'check') {
 				return await runDevCheck({ target, json, io })
 			}
+			const dryRun = parsed.values['dry-run'] === true
+			if (
+				dryRun &&
+				subcommand !== 'job' &&
+				subcommand !== 'webhook' &&
+				subcommand !== 'emit'
+			) {
+				throw new Error(
+					'`--dry-run` applies to `kody dev job|webhook|emit` only (shows the plan without invoking).',
+				)
+			}
 			const token =
 				target === 'prod'
 					? await resolveLocalExecuteBearer({
@@ -942,11 +972,23 @@ async function dispatch(
 							...(org ? { org } : {}),
 						})
 					: 'mock'
+			const mockDepResolve =
+				target === 'mock'
+					? await (
+							await import('./mock-dep-resolve.js')
+						).tryResolveMockDepResolve({
+							tokenValues,
+							apiUrl: prodApiUrl,
+							mcpUrl,
+							...(org ? { org } : {}),
+						})
+					: undefined
 			const auth = await resolveDevAuth({
 				target,
 				token,
 				apiUrl: prodApiUrl,
 				...(org ? { org } : {}),
+				...(mockDepResolve ? { depResolve: mockDepResolve } : {}),
 				resetStorage: parsed.values['reset-storage'] === true,
 			})
 			const port =
@@ -994,7 +1036,14 @@ async function dispatch(
 					case 'job': {
 						const jobName = rest[0]
 						if (!jobName) throw new Error('Usage: kody dev job <name>')
-						return await runDevJob({ target, auth, jobName, json, io })
+						return await runDevJob({
+							target,
+							auth,
+							jobName,
+							json,
+							dryRun,
+							io,
+						})
 					}
 					case 'webhook': {
 						const webhookName = rest[0]
@@ -1009,6 +1058,7 @@ async function dispatch(
 							webhookName,
 							bodyPath,
 							json,
+							dryRun,
 							io,
 						})
 					}
@@ -1025,6 +1075,7 @@ async function dispatch(
 							event,
 							bodyPath,
 							json,
+							dryRun,
 							io,
 						})
 					}

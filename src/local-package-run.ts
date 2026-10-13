@@ -25,9 +25,11 @@ import {
 import { apiTokenEnvVar } from './defaults.js'
 import { bundleLocalUserModule } from './local-bundle.js'
 import {
-	createWorkerdConfig,
-	type WorkerdPackageModuleFile,
-} from './local-runtime-source.js'
+	localExecuteGatewayFetchShimModuleName,
+	resolveLocalPackageGraph,
+	writePackageModuleFiles,
+} from './local-package-graph.js'
+import { createWorkerdConfig } from './local-runtime-source.js'
 import {
 	createPackageLocalRuntimeModuleSource,
 	createPackageModuleEntrySource,
@@ -51,6 +53,16 @@ export type LocalPackageRunInput = {
 	fetchFn?: typeof fetch
 	/** User-owned token org selection (`?org=`), same as execute --local. */
 	org?: string
+	/**
+	 * Fetch stamped `kody:@` modules from prod while CapabilityProxy stays on
+	 * mock (published source is not a secret).
+	 */
+	depResolve?: {
+		apiUrl: string
+		token: string
+		org?: string
+		fetchFn?: typeof fetch
+	}
 	workerdPath?: string
 	allowPrivateNetwork?: boolean
 	onStatus?: (message: string) => void
@@ -130,6 +142,12 @@ export async function runLocalPackageModule(
 	}
 
 	try {
+		const packageGraph = await resolveLocalPackageGraph({
+			...client,
+			code,
+			...(input.depResolve ? { depResolve: input.depResolve } : {}),
+			onStatus: input.onStatus,
+		})
 		bridge = await startBridge({
 			runSecret,
 			forward: (call, signal) =>
@@ -140,7 +158,13 @@ export async function runLocalPackageModule(
 				}),
 		})
 		const files = { entry: 'entry.js', user: 'main.js', runtime: 'runtime.js' }
-		await writeFile(join(workDir, files.entry), createPackageModuleEntrySource())
+		const gatewayFetchShimModules = packageGraph.modules
+			.map((module) => module.name)
+			.filter((name) => name === localExecuteGatewayFetchShimModuleName)
+		await writeFile(
+			join(workDir, files.entry),
+			createPackageModuleEntrySource({ sideEffectModules: gatewayFetchShimModules }),
+		)
 		await writeFile(join(workDir, files.user), code)
 		await writeFile(
 			join(workDir, files.runtime),
@@ -149,7 +173,12 @@ export async function runLocalPackageModule(
 				mockStorage: input.target === 'mock',
 			}),
 		)
-		const packageModules: Array<WorkerdPackageModuleFile> = []
+		const packageModules = await writePackageModuleFiles(
+			workDir,
+			packageGraph,
+			writeFile,
+			join,
+		)
 		const configPath = join(workDir, 'config.capnp')
 		await writeFile(
 			configPath,

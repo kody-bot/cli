@@ -91,6 +91,98 @@ export class LocalPackageGraphError extends Error {
 export const localExecuteGatewayFetchShimModuleName =
 	'.__kody_virtual__/runtime.js'
 
+/**
+ * Write package-graph modules into a workerd temp dir and return capnp entries.
+ * Shared by execute --local, local package runs, and kody dev app bundling.
+ */
+export async function writePackageModuleFiles(
+	workDir: string,
+	graph: LocalPackageGraph,
+	writeFile: (path: string, data: string) => Promise<void>,
+	joinPath: (...parts: string[]) => string,
+): Promise<Array<{ name: string; file: string }>> {
+	const written: Array<{ name: string; file: string }> = []
+	for (const [index, module] of graph.modules.entries()) {
+		const file = `pkg-${index}.js`
+		await writeFile(joinPath(workDir, file), module.esModule)
+		written.push({ name: module.name, file })
+	}
+	return written
+}
+
+/**
+ * Resolve stamped `kody:@` modules for local workerd.
+ * On `--target mock`, capability hops stay on the mock, but published dependency
+ * *source* is fetched from the real package-graph API when `depResolve` is set
+ * (login / API token). Published source is not a secret.
+ */
+export async function resolveLocalPackageGraph(input: {
+	code: string
+	/** API used for CapabilityProxy (mock or prod). */
+	apiUrl: string
+	token: string
+	org?: string
+	fetchFn?: typeof fetch
+	conversationId?: string
+	/**
+	 * When set (typical for --target mock), fetch stamped modules from this
+	 * client instead of `apiUrl`/`token`.
+	 */
+	depResolve?: {
+		apiUrl: string
+		token: string
+		org?: string
+		fetchFn?: typeof fetch
+	}
+	onStatus?: (message: string) => void
+}): Promise<LocalPackageGraph> {
+	const imports = listSavedPackageImports(input.code)
+	// Mock package-graph is empty by design. When deps are resolved from a
+	// separate prod client, skip the round-trip if there are no kody:@ imports.
+	// Prod CapabilityProxy still needs package-graph for the gateway-fetch shim
+	// even with zero imports — so never early-return on the prod path.
+	if (
+		input.depResolve &&
+		imports.length === 0 &&
+		!hasLiteralDynamicSavedPackageImports(input.code)
+	) {
+		return { modules: [], imports: [] }
+	}
+	if (imports.length > 0 && !input.depResolve && isLikelyMockBearer(input.token)) {
+		throw new LocalPackageGraphError(
+			`kody:@ dependencies need published package-graph while --target mock keeps storage/credentials local. Log in (\`kody login\` / \`kody auth bootstrap\`) or set KODY_API_TOKEN so the CLI can fetch dependency source from prod.`,
+			{ code: 'mock_package_deps_need_auth' },
+		)
+	}
+	const client = input.depResolve
+		? {
+				apiUrl: input.depResolve.apiUrl,
+				token: input.depResolve.token,
+				fetchFn: input.depResolve.fetchFn ?? input.fetchFn,
+				...(input.depResolve.org ? { org: input.depResolve.org } : {}),
+			}
+		: {
+				apiUrl: input.apiUrl,
+				token: input.token,
+				fetchFn: input.fetchFn,
+				...(input.org ? { org: input.org } : {}),
+			}
+	if (input.depResolve && imports.length > 0) {
+		input.onStatus?.(
+			`Resolving ${imports.length} kody:@ dependenc${imports.length === 1 ? 'y' : 'ies'} from published package-graph (mock keeps storage/credentials local)…`,
+		)
+	}
+	return await fetchLocalPackageGraph({
+		...client,
+		code: input.code,
+		conversationId: input.conversationId,
+	})
+}
+
+function isLikelyMockBearer(token: string): boolean {
+	return token === 'mock' || token.startsWith('kody_mock_')
+}
+
 export async function fetchLocalPackageGraph(
 	input: CapabilityProxyClientInput & { code: string; conversationId?: string },
 ): Promise<LocalPackageGraph> {

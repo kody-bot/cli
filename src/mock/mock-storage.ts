@@ -26,6 +26,9 @@ export type MockSessionState = {
 			id: string
 			name: string
 			kind: 'secret' | 'oauth'
+			/** Host allow-list for credential().fetch (ADR 0068 client shape). */
+			hosts: Array<string>
+			scope?: 'personal' | 'org'
 			/** Placeholder value used only inside the mock. */
 			mockValue: string
 		}
@@ -68,7 +71,7 @@ export async function loadMockSession(input: {
 	try {
 		const raw = JSON.parse(await readFile(path, 'utf8')) as MockSessionState
 		if (raw?.version === 1 && raw.sessionId === sessionId) {
-			return raw
+			return normalizeMockSessionCredentials(raw)
 		}
 	} catch {
 		// miss → create
@@ -85,6 +88,8 @@ export async function loadMockSession(input: {
 				id: 'cred_mock_secret',
 				name: 'MOCK_SECRET',
 				kind: 'secret',
+				hosts: ['example.com'],
+				scope: 'personal',
 				mockValue: 'mock-secret-value',
 			},
 		},
@@ -121,6 +126,30 @@ export async function persistMockSession(
 	const root = mockSessionRoot(state.sessionId, env)
 	await mkdir(root, { recursive: true })
 	await writeFile(join(root, mockStateFile), `${JSON.stringify(state, null, 2)}\n`)
+}
+
+/** Backfill hosts/scope on older mock session files so credential() stays iterable. */
+function normalizeMockSessionCredentials(state: MockSessionState): MockSessionState {
+	const credentials: MockSessionState['credentials'] = {}
+	for (const [key, cred] of Object.entries(state.credentials ?? {})) {
+		credentials[key] = {
+			...cred,
+			hosts: Array.isArray(cred.hosts) && cred.hosts.length > 0 ? cred.hosts : ['example.com'],
+			scope: cred.scope === 'org' ? 'org' : 'personal',
+		}
+	}
+	if (!credentials.MOCK_SECRET) {
+		credentials.MOCK_SECRET = {
+			id: 'cred_mock_secret',
+			name: 'MOCK_SECRET',
+			kind: 'secret',
+			hosts: ['example.com'],
+			scope: 'personal',
+			mockValue: 'mock-secret-value',
+		}
+	}
+	state.credentials = credentials
+	return state
 }
 
 export function packageStorageGet(

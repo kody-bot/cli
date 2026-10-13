@@ -296,34 +296,114 @@ async function dispatchCapabilityCall(
 			return { entries: packageStorageList(state, ctx.packageId) }
 		}
 		case 'kody.credentialClientOpen': {
-			const key = String((args[0] as { key?: string })?.key ?? args[0] ?? '')
-			const cred = state.credentials[key] ?? state.credentials[key.toUpperCase()]
-			if (!cred) {
-				throw new StructuredCliError({
-					code: 'missing_secret',
-					message: `Mock credential ${JSON.stringify(key)} is not defined for this session.`,
-					target: 'mock',
-					fix: 'Add a fake credential to the mock session or use --target prod with a real allow-listed secret.',
-					details: { key },
-				})
+			const input = (args[0] ?? {}) as { key?: string; name?: string }
+			const key = String(input.key ?? input.name ?? args[0] ?? '').trim()
+			const opened = openMockCredential(state, key)
+			return { ok: true, value: opened }
+		}
+		case 'kody.credentialClientOpenAll': {
+			const key = String((args[0] as { key?: string })?.key ?? '').trim()
+			const matches = Object.values(state.credentials).filter(
+				(cred) =>
+					!key ||
+					cred.name === key ||
+					cred.name.toUpperCase() === key.toUpperCase() ||
+					cred.id === key,
+			)
+			if (key && matches.length === 0) {
+				return { ok: true, value: [] }
 			}
-			return {
-				ok: true,
-				value: {
-					handle: `mock-handle:${cred.id}`,
-					name: cred.name,
-					kind: cred.kind,
-					// Never expose a real secret; mockValue is session-local scratch only.
-					metadata: { mock: true },
-				},
-			}
+			const opened = (key ? matches : Object.values(state.credentials)).map((cred) =>
+				mockOpenedCredential(cred),
+			)
+			return { ok: true, value: opened }
 		}
 		case 'kody.credentialClientCheck':
-			return { ok: true, warnings: [] }
+			return { ok: true, value: { warnings: [], checked: args[0] ?? null, strict: false } }
+		case 'kody.credentialClientRefresh':
+			return { ok: true, value: { refreshed: false, mock: true } }
+		case 'kody.authenticatedFetch': {
+			const input = (args[0] ?? {}) as {
+				providerName?: string
+				request?: {
+					url?: string
+					method?: string
+					headers?: Record<string, string>
+				}
+			}
+			const providerName = String(input.providerName ?? '').trim() || 'unknown'
+			const requestUrl = String(input.request?.url ?? '')
+			const body = JSON.stringify({
+				mock: true,
+				providerName,
+				url: requestUrl,
+				method: String(input.request?.method ?? 'GET'),
+				note: 'CLI mock authenticatedFetch fixture — not a real OAuth upstream response.',
+			})
+			return {
+				status: 200,
+				statusText: 'OK',
+				headers: { 'content-type': 'application/json; charset=utf-8' },
+				bodyBase64: Buffer.from(body, 'utf8').toString('base64'),
+			}
+		}
+		case 'kody.adminUserList': {
+			const params = (args[0] ?? {}) as { page?: number; limit?: number }
+			return {
+				users: [
+					{
+						id: 'user_mock',
+						username: 'mock-user',
+						email: 'mock@example.com',
+						display_name: 'Mock User',
+					},
+				],
+				page: typeof params.page === 'number' ? params.page : 1,
+				limit: typeof params.limit === 'number' ? params.limit : 20,
+				total: 1,
+				mock: true,
+			}
+		}
 		default: {
 			const exhaustive: never = pathKey as never
 			throw notImplementedInMock({ operation: String(exhaustive) })
 		}
+	}
+}
+
+function openMockCredential(
+	state: MockSessionState,
+	key: string,
+): ReturnType<typeof mockOpenedCredential> {
+	const cred =
+		state.credentials[key] ??
+		state.credentials[key.toUpperCase()] ??
+		Object.values(state.credentials).find(
+			(entry) => entry.name === key || entry.name.toUpperCase() === key.toUpperCase(),
+		)
+	if (!cred) {
+		throw new StructuredCliError({
+			code: 'missing_secret',
+			message: `Mock credential ${JSON.stringify(key)} is not defined for this session.`,
+			target: 'mock',
+			fix: 'Add a fake credential to the mock session state or use --target prod with a real allow-listed secret.',
+			details: { key },
+		})
+	}
+	return mockOpenedCredential(cred)
+}
+
+function mockOpenedCredential(cred: MockSessionState['credentials'][string]) {
+	return {
+		handle: `mock-handle:${cred.id}`,
+		key: cred.name,
+		name: cred.name,
+		scope: cred.scope ?? 'personal',
+		kind: cred.kind,
+		hosts: [...(cred.hosts?.length ? cred.hosts : ['example.com'])],
+		hint: 'mock',
+		// Never expose a real secret; mockValue stays session-local scratch only.
+		metadata: { mock: true },
 	}
 }
 

@@ -9,6 +9,7 @@ import {
 	localExecuteGatewayFetchShimModuleName,
 	localPackageGraphPath,
 	localPackageGraphPlatformIssueUrl,
+	resolveLocalPackageGraph,
 } from '../src/local-package-graph.js'
 
 const goodToken = 'kody_tok_pkg'
@@ -222,4 +223,84 @@ test('fetchLocalPackageGraph rejects incomplete module lists', async () => {
 			}),
 		/omitted modules for: kody:@a\/pkg\/one/,
 	)
+})
+
+test('resolveLocalPackageGraph uses depResolve client for mock → prod package-graph', async () => {
+	const code = `import x from 'kody:@a/pkg/one'\nexport default async () => x`
+	const urls: Array<string> = []
+	const result = await resolveLocalPackageGraph({
+		code,
+		apiUrl: 'http://127.0.0.1:9',
+		token: 'kody_mock_session',
+		depResolve: {
+			apiUrl: 'https://api.kody.codes',
+			token: goodToken,
+			fetchFn: async (input) => {
+				urls.push(String(input))
+				return new Response(
+					JSON.stringify({
+						imports: ['kody:@a/pkg/one'],
+						modules: [
+							{
+								name: 'kody:@a/pkg/one',
+								esModule: 'export default 1\n',
+							},
+						],
+					}),
+					{ status: 200, headers: { 'content-type': 'application/json' } },
+				)
+			},
+		},
+	})
+	assert.equal(urls.length, 1)
+	assert.match(urls[0]!, /api\.kody\.codes/)
+	assert.equal(result.modules[0]?.name, 'kody:@a/pkg/one')
+})
+
+test('resolveLocalPackageGraph refuses mock deps without depResolve auth', async () => {
+	const code = `import x from 'kody:@a/pkg/one'\nexport default async () => x`
+	await assert.rejects(
+		() =>
+			resolveLocalPackageGraph({
+				code,
+				apiUrl: 'http://127.0.0.1:9',
+				token: 'kody_mock_session',
+				fetchFn: async () => {
+					throw new Error('should not fetch mock package-graph')
+				},
+			}),
+		(error: unknown) => {
+			assert.ok(error instanceof LocalPackageGraphError)
+			assert.equal(error.code, 'mock_package_deps_need_auth')
+			assert.match(error.message, /KODY_API_TOKEN/)
+			return true
+		},
+	)
+})
+
+test('resolveLocalPackageGraph still hits prod package-graph with zero imports (gateway shim)', async () => {
+	const code = `export default async () => ({ ok: true })`
+	let called = false
+	const result = await resolveLocalPackageGraph({
+		code,
+		apiUrl: 'https://api.kody.codes',
+		token: goodToken,
+		fetchFn: async () => {
+			called = true
+			return new Response(
+				JSON.stringify({
+					imports: [],
+					modules: [
+						{
+							name: localExecuteGatewayFetchShimModuleName,
+							esModule: 'export {}\n',
+						},
+					],
+				}),
+				{ status: 200, headers: { 'content-type': 'application/json' } },
+			)
+		},
+	})
+	assert.equal(called, true)
+	assert.equal(result.modules[0]?.name, localExecuteGatewayFetchShimModuleName)
 })

@@ -265,6 +265,46 @@ test('execute --invoke local export against mock', async () => {
 	}
 })
 
+test('kody dev job --dry-run prints the plan without invoking', async () => {
+	const auth = await resolveDevAuth({
+		target: 'mock',
+		token: 'mock',
+		apiUrl: 'https://api.kody.codes',
+		resetStorage: true,
+		packageId: 'local:sample-dev-package',
+	})
+	try {
+		let stdout = ''
+		const code = await runDevJob({
+			target: 'mock',
+			auth: { ...auth, closeMock: undefined },
+			jobName: 'heartbeat',
+			cwd: fixtureRoot,
+			dryRun: true,
+			json: true,
+			io: {
+				stdout: (text) => {
+					stdout += text
+				},
+				stderr: () => {},
+			},
+		})
+		assert.equal(code, 0)
+		const plan = JSON.parse(stdout) as {
+			dryRun: boolean
+			surface: string
+			modulePath: string
+			wouldInvoke: boolean
+		}
+		assert.equal(plan.dryRun, true)
+		assert.equal(plan.wouldInvoke, true)
+		assert.equal(plan.surface, 'job:heartbeat')
+		assert.match(plan.modulePath, /heartbeat-job/)
+	} finally {
+		await auth.closeMock?.()
+	}
+})
+
 test('search --target mock hits the mock catalog', async () => {
 	const cache = await mkdtemp(join(tmpdir(), 'kody-search-mock-'))
 	const previous = process.env.KODY_CACHE_DIR

@@ -28,9 +28,10 @@ import {
 import { assertLocalExecuteNodeEngine } from './node-engine.js'
 import { apiTokenEnvVar } from './defaults.js'
 import {
-	fetchLocalPackageGraph,
 	hasSavedPackageImports,
 	localExecuteGatewayFetchShimModuleName,
+	resolveLocalPackageGraph,
+	writePackageModuleFiles as writeGraphModuleFiles,
 	type LocalPackageGraph,
 } from './local-package-graph.js'
 import {
@@ -73,6 +74,16 @@ export type LocalExecuteInput = {
 	fetchFn?: typeof fetch
 	/** User-owned token org selection (`?org=`). */
 	org?: string
+	/**
+	 * When CapabilityProxy points at the CLI mock, still fetch stamped `kody:@`
+	 * modules from prod package-graph with this client (published source only).
+	 */
+	depResolve?: {
+		apiUrl: string
+		token: string
+		org?: string
+		fetchFn?: typeof fetch
+	}
 	/** Skip the pinned download and run this workerd binary. */
 	workerdPath?: string
 	allowPrivateNetwork?: boolean
@@ -129,10 +140,12 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 			? savedPackageImportLocalResolveStatus
 			: localExecutePackageGraphResolveStatus,
 	)
-	const packageGraph = await fetchLocalPackageGraph({
+	const packageGraph = await resolveLocalPackageGraph({
 		...client,
 		code,
 		conversationId: input.conversationId,
+		...(input.depResolve ? { depResolve: input.depResolve } : {}),
+		onStatus: input.onStatus,
 	})
 
 	const workerdPath =
@@ -236,13 +249,7 @@ async function writePackageModuleFiles(
 	workDir: string,
 	graph: LocalPackageGraph,
 ): Promise<Array<WorkerdPackageModuleFile>> {
-	const written: Array<WorkerdPackageModuleFile> = []
-	for (const [index, module] of graph.modules.entries()) {
-		const file = `pkg-${index}.js`
-		await writeFile(join(workDir, file), module.esModule)
-		written.push({ name: module.name, file })
-	}
-	return written
+	return await writeGraphModuleFiles(workDir, graph, writeFile, join)
 }
 
 /** Same envelope as cloud execute so `formatToolResult` and `--json` behave identically. */

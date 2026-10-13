@@ -25,6 +25,11 @@ import {
 } from './capability-proxy.js'
 import { apiTokenEnvVar } from './defaults.js'
 import { bundleLocalUserModule } from './local-bundle.js'
+import {
+	localExecuteGatewayFetchShimModuleName,
+	resolveLocalPackageGraph,
+	writePackageModuleFiles,
+} from './local-package-graph.js'
 import { createWorkerdConfig } from './local-runtime-source.js'
 import { buildLocalPackageContext } from './local-package-run.js'
 import {
@@ -51,6 +56,16 @@ export type PackageAppDevOptions = {
 	appBasePath?: string
 	/** User-owned token org selection (`?org=`), same as execute --local. */
 	org?: string
+	/**
+	 * Fetch stamped `kody:@` modules from prod while CapabilityProxy stays on
+	 * mock (published source is not a secret).
+	 */
+	depResolve?: {
+		apiUrl: string
+		token: string
+		org?: string
+		fetchFn?: typeof fetch
+	}
 	allowPrivateNetwork?: boolean
 	workerdPath?: string
 	fetchFn?: typeof fetch
@@ -109,6 +124,8 @@ export async function startPackageAppDev(
 	let workerdPort: number | undefined
 	let reloadTimer: NodeJS.Timeout | undefined
 	let closed = false
+	/** Last workerd stderr chunk(s) — surfaced when the app returns HTTP 5xx. */
+	let lastWorkerdStderr = ''
 
 	const proxy = createServer((req, res) => {
 		void proxyRequest(req, res)
@@ -149,6 +166,12 @@ export async function startPackageAppDev(
 			mockStorage: options.target === 'mock',
 			bridgePort: bridge!.port,
 			allowPrivateNetwork: options.allowPrivateNetwork,
+			apiUrl: options.apiUrl,
+			token: options.token,
+			org: options.org,
+			fetchFn: options.fetchFn,
+			depResolve: options.depResolve,
+			onStatus: options.onStatus,
 		})
 		await restartWorkerd()
 	}
@@ -162,10 +185,17 @@ export async function startPackageAppDev(
 		const env: NodeJS.ProcessEnv = { ...process.env, [runSecretEnvVar]: runSecret }
 		delete env[apiTokenEnvVar]
 		const configPath = join(workDir, 'config.capnp')
+		lastWorkerdStderr = ''
 		child = spawn(workerdPath, ['serve', configPath, '--control-fd=3'], {
 			cwd: workDir,
 			env,
 			stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+		})
+		child.stderr?.on('data', (chunk: Buffer) => {
+			lastWorkerdStderr += chunk.toString('utf8')
+			if (lastWorkerdStderr.length > 32_000) {
+				lastWorkerdStderr = lastWorkerdStderr.slice(-24_000)
+			}
 		})
 		const workerd = watchWorkerd(child)
 		const started = await workerd.listening
@@ -205,9 +235,26 @@ export async function startPackageAppDev(
 					forwardUrl,
 					{ method: req.method, headers },
 					(upstreamRes) => {
-						res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers)
-						upstreamRes.pipe(res)
-						upstreamRes.on('end', () => resolve())
+						const status = upstreamRes.statusCode ?? 502
+						const chunks: Array<Buffer> = []
+						upstreamRes.on('data', (chunk) => {
+							chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+						})
+						upstreamRes.on('end', () => {
+							const responseBody = Buffer.concat(chunks)
+							if (status >= 500) {
+								const preview = responseBody.toString('utf8').slice(0, 2000)
+								const workerdLogs = lastWorkerdStderr.trim()
+								options.onError?.(
+									`App handler HTTP ${status}${workerdLogs ? `\nworkerd stderr:\n${workerdLogs}` : ''}${preview ? `\nbody:\n${preview}` : ''}`,
+								)
+							}
+							if (!res.headersSent) {
+								res.writeHead(status, upstreamRes.headers)
+							}
+							res.end(responseBody)
+							resolve()
+						})
 						upstreamRes.on('error', reject)
 					},
 				)
@@ -217,7 +264,10 @@ export async function startPackageAppDev(
 			})
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error)
-			options.onError?.(message)
+			const workerdLogs = lastWorkerdStderr.trim()
+			options.onError?.(
+				workerdLogs ? `${message}\nworkerd stderr:\n${workerdLogs}` : message,
+			)
 			if (!res.headersSent) {
 				res.writeHead(502, { 'content-type': 'text/plain' })
 				res.end(`Dev proxy error: ${message}`)
@@ -294,10 +344,31 @@ async function writeWorkerFiles(input: {
 	mockStorage: boolean
 	bridgePort: number
 	allowPrivateNetwork?: boolean
+	apiUrl: string
+	token: string
+	org?: string
+	fetchFn?: typeof fetch
+	depResolve?: PackageAppDevOptions['depResolve']
+	onStatus?: (message: string) => void
 }): Promise<void> {
 	await mkdir(input.workDir, { recursive: true })
+	const packageGraph = await resolveLocalPackageGraph({
+		code: input.code,
+		apiUrl: input.apiUrl,
+		token: input.token,
+		...(input.org ? { org: input.org } : {}),
+		fetchFn: input.fetchFn,
+		...(input.depResolve ? { depResolve: input.depResolve } : {}),
+		onStatus: input.onStatus,
+	})
 	const files = { entry: 'entry.js', user: 'main.js', runtime: 'runtime.js' }
-	await writeFile(join(input.workDir, files.entry), createPackageAppEntrySource())
+	const gatewayFetchShimModules = packageGraph.modules
+		.map((module) => module.name)
+		.filter((name) => name === localExecuteGatewayFetchShimModuleName)
+	await writeFile(
+		join(input.workDir, files.entry),
+		createPackageAppEntrySource({ sideEffectModules: gatewayFetchShimModules }),
+	)
 	await writeFile(join(input.workDir, files.user), input.code)
 	await writeFile(
 		join(input.workDir, files.runtime),
@@ -306,11 +377,18 @@ async function writeWorkerFiles(input: {
 			mockStorage: input.mockStorage,
 		}),
 	)
+	const packageModules = await writePackageModuleFiles(
+		input.workDir,
+		packageGraph,
+		writeFile,
+		join,
+	)
 	await writeFile(
 		join(input.workDir, 'config.capnp'),
 		createWorkerdConfig({
 			bridgePort: input.bridgePort,
 			files,
+			packageModules,
 			allowPrivateNetwork: input.allowPrivateNetwork,
 		}),
 	)

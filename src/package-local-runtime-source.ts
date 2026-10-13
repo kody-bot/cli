@@ -149,11 +149,83 @@ function __kodyBase64ToBytes(value) {
 	return bytes;
 }
 
-export function createAuthenticatedFetch(input) {
-	return async (resource, init) => {
-		return await __kodyCall(['kody', 'createAuthenticatedFetch'], [
-			{ input, resource: String(resource), init: init ?? {} },
-		]);
+async function __kodyBodyToBytes(body) {
+	if (body == null) return null;
+	if (typeof body === 'string') return new TextEncoder().encode(body);
+	if (body instanceof Uint8Array) return body;
+	if (body instanceof ArrayBuffer) return new Uint8Array(body);
+	if (ArrayBuffer.isView(body)) {
+		return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+	}
+	if (typeof Blob !== 'undefined' && body instanceof Blob) {
+		return new Uint8Array(await body.arrayBuffer());
+	}
+	if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+		return new TextEncoder().encode(body.toString());
+	}
+	if (body && typeof body.getReader === 'function') {
+		return new Uint8Array(await new Response(body).arrayBuffer());
+	}
+	if (typeof FormData !== 'undefined' && body instanceof FormData) {
+		throw new Error(
+			'Local package createAuthenticatedFetch does not support FormData bodies yet; use Uint8Array, Blob, or string.',
+		);
+	}
+	throw new Error(
+		'Local package createAuthenticatedFetch could not serialize the request body.',
+	);
+}
+
+/**
+ * Match local-execute: hop through CapabilityProxy \`kody.authenticatedFetch\`
+ * (not a non-existent \`kody.createAuthenticatedFetch\` runtime function).
+ */
+export async function createAuthenticatedFetch(providerName) {
+	const name = String(providerName ?? '').trim();
+	if (!name) {
+		throw new Error('Integration name is required.');
+	}
+	return async (input, init) => {
+		let url;
+		let method = 'GET';
+		let headers = {};
+		let bodyBytes = null;
+		if (typeof input === 'string' || input instanceof URL) {
+			url = String(input);
+			method = String(init?.method ?? 'GET');
+			headers = Object.fromEntries(new Headers(init?.headers).entries());
+			if (init?.body != null) {
+				bodyBytes = await __kodyBodyToBytes(init.body);
+			}
+		} else {
+			const merged = new Request(input, init);
+			url = merged.url;
+			method = merged.method;
+			headers = Object.fromEntries(merged.headers.entries());
+			if (method !== 'GET' && method !== 'HEAD') {
+				bodyBytes = new Uint8Array(await merged.arrayBuffer());
+			}
+		}
+		const result = await __kodyCall(['kody', 'authenticatedFetch'], [{
+			providerName: name,
+			request: {
+				url,
+				method,
+				headers,
+				...(bodyBytes != null
+					? { bodyBase64: __kodyBytesToBase64(bodyBytes) }
+					: {}),
+			},
+		}]);
+		const bytes = __kodyBase64ToBytes(result.bodyBase64 ?? '');
+		return new Response(
+			__kodyNullBodyStatuses.has(result.status) ? null : bytes,
+			{
+				status: result.status,
+				statusText: result.statusText,
+				headers: result.headers,
+			},
+		);
 	};
 }
 
@@ -234,9 +306,16 @@ void __kodyBase64ToBytes;
 }
 
 /** Execute-style entry: default export function(params). */
-export function createPackageModuleEntrySource(): string {
+export function createPackageModuleEntrySource(
+	input: { sideEffectModules?: ReadonlyArray<string> } = {},
+): string {
+	const sideEffectImports = [...new Set(input.sideEffectModules ?? [])]
+		.filter((name) => typeof name === 'string' && name.trim().length > 0)
+		.map((name) => `import ${JSON.stringify(name)};`)
+		.join('\n')
+	const sideEffectBlock = sideEffectImports ? `${sideEffectImports}\n` : ''
 	return `
-import {
+${sideEffectBlock}import {
 	__kodyInstallLocalBridge,
 	__kodyRunInLocalRuntime,
 } from ${JSON.stringify(localWorkerModuleNames.runtime)};
@@ -303,9 +382,16 @@ export default {
  * `{ fetch }` export. Mount is already stripped by the Node proxy before this
  * request reaches workerd (pathname is the rest path).
  */
-export function createPackageAppEntrySource(): string {
+export function createPackageAppEntrySource(
+	input: { sideEffectModules?: ReadonlyArray<string> } = {},
+): string {
+	const sideEffectImports = [...new Set(input.sideEffectModules ?? [])]
+		.filter((name) => typeof name === 'string' && name.trim().length > 0)
+		.map((name) => `import ${JSON.stringify(name)};`)
+		.join('\n')
+	const sideEffectBlock = sideEffectImports ? `${sideEffectImports}\n` : ''
 	return `
-import {
+${sideEffectBlock}import {
 	__kodyInstallLocalBridge,
 	__kodyRunInLocalRuntime,
 } from ${JSON.stringify(localWorkerModuleNames.runtime)};
