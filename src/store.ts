@@ -145,6 +145,21 @@ export function parseCredentials(raw: string): StoredCredentials {
 	if (parsed.version !== 1 || !parsed.accessToken || !parsed.clientId) {
 		throw new Error('Stored Kody credentials are invalid. Run `kody login`.')
 	}
+	// Pre-SEP-2352 / partial payloads may omit authorizationServerUrl. Derive
+	// the issuer stamp from the MCP origin so reload does not warn, and the
+	// next successful save/refresh persists the real AS issuer.
+	if (
+		typeof parsed.authorizationServerUrl !== 'string' ||
+		!parsed.authorizationServerUrl.trim()
+	) {
+		if (typeof parsed.mcpUrl !== 'string' || !parsed.mcpUrl) {
+			throw new Error('Stored Kody credentials are invalid. Run `kody login`.')
+		}
+		return {
+			...parsed,
+			authorizationServerUrl: new URL(parsed.mcpUrl).origin,
+		}
+	}
 	return parsed
 }
 

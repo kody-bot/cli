@@ -40,6 +40,15 @@ export function orgSlugFromFlag(value: string): string {
 	return slug
 }
 
+/** SEP-2352 issuer stamp restored from durable CLI storage. */
+export function issuerFromStoredCredentials(
+	credentials: StoredCredentials,
+): string {
+	const recorded = credentials.authorizationServerUrl?.trim()
+	if (recorded) return recorded
+	return new URL(credentials.mcpUrl).origin
+}
+
 export function createCliOAuthProvider(input: {
 	mcpUrl: string
 	redirectUri: URL
@@ -59,8 +68,12 @@ export function createCliOAuthProvider(input: {
 	validateClientMetadataUrl(clientMetadataUrl)
 	let codeVerifier = ''
 	let discoveryState: OAuthDiscoveryState | undefined
-	// Always present a CIMD client_id. Leaving this empty would let the SDK
-	// fall back to deprecated dynamic client registration.
+	// Leave clientInformation unset on a fresh login. Seeding `{ client_id }`
+	// without an `issuer` stamp makes auth() warn (SEP-2352) on the first
+	// read. With `clientMetadataUrl` set, the SDK writes
+	// `{ client_id: clientMetadataUrl, issuer }` when the AS advertises CIMD.
+	// When reloading stored credentials, stamp `issuer` from durable storage
+	// so SEP-2352 isolation stays active without a relogin.
 	let clientInformation: StoredOAuthClientInformation | undefined =
 		input.existing
 			? {
@@ -68,9 +81,9 @@ export function createCliOAuthProvider(input: {
 					...(input.existing.clientSecret
 						? { client_secret: input.existing.clientSecret }
 						: {}),
-					issuer: input.existing.authorizationServerUrl,
+					issuer: issuerFromStoredCredentials(input.existing),
 				}
-			: { client_id: clientMetadataUrl }
+			: undefined
 	let tokens: StoredOAuthTokens | undefined =
 		input.loadStoredTokens && input.existing
 			? {
@@ -80,7 +93,7 @@ export function createCliOAuthProvider(input: {
 						? { refresh_token: input.existing.refreshToken }
 						: {}),
 					...(input.existing.scope ? { scope: input.existing.scope } : {}),
-					issuer: input.existing.authorizationServerUrl,
+					issuer: issuerFromStoredCredentials(input.existing),
 				}
 			: undefined
 
@@ -99,12 +112,14 @@ export function createCliOAuthProvider(input: {
 			return clientInformation
 		},
 		saveClientInformation(next) {
+			// Round-trip the SEP-2352 `issuer` stamp verbatim.
 			clientInformation = next
 		},
 		tokens() {
 			return tokens
 		},
 		saveTokens(next) {
+			// Round-trip the SEP-2352 `issuer` stamp verbatim.
 			tokens = next
 		},
 		async redirectToAuthorization(authorizationUrl) {

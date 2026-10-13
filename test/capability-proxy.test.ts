@@ -480,7 +480,7 @@ test('with env proxy enabled on older Node, createCapabilityProxyFetch fails clo
 	if (nodeAgentHonorsEnvProxy()) return
 	assert.throws(
 		() => createCapabilityProxyFetch({ useEnvProxy: true }),
-		/upgrade Node or unset NODE_USE_ENV_PROXY/,
+		/Upgrade Node or unset NODE_USE_ENV_PROXY/,
 	)
 })
 

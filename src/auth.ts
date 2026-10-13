@@ -93,11 +93,16 @@ async function persistAuthorizedSession(input: {
 	if (!tokens || !client) {
 		throw new Error('OAuth completed without tokens. Run `kody login`.')
 	}
+	const clientIssuer =
+		'issuer' in client && typeof client.issuer === 'string'
+			? client.issuer
+			: undefined
 	const credentials = credentialsFromTokens({
 		mcpUrl: input.mcpUrl,
 		resource: input.mcpUrl,
 		authorizationServerUrl:
 			tokens.issuer ??
+			clientIssuer ??
 			input.previous?.authorizationServerUrl ??
 			new URL(input.mcpUrl).origin,
 		client,
