@@ -26,7 +26,7 @@ import {
 } from './credential-call-map.js'
 import { defaultApiUrl, defaultMcpUrl, modernMcpProtocolVersion } from './defaults.js'
 import { buildUsage } from './help.js'
-import { resolveOrgSlug } from './org-resolve.js'
+import { orgSlugFromFlag, resolveOrgSlug } from './org-resolve.js'
 import { refreshGitCredentialHelperPinIfNeeded } from './setup-git.js'
 import { deleteCredentials, listStoredOrgs, loadCredentials } from './store.js'
 import { formatToolResult } from './tool-result.js'
@@ -232,6 +232,10 @@ async function dispatch(
 			`\`--org\` is not used with \`kody ${parsed.command}\`. Use it with login, logout, whoami, search, api, execute, or auth.`,
 		)
 	}
+	// Login/logout honor `--org` only — not KODY_ORG (that env is for one-shot
+	// org-scoped commands and must not bind browser login or change logout).
+	const orgFlagOnly =
+		orgFlag !== undefined ? orgSlugFromFlag(orgFlag) : undefined
 	const org = resolveOrgSlug({ flag: orgFlag })
 
 	switch (parsed.command) {
@@ -246,7 +250,7 @@ async function dispatch(
 			write('Opening the Kody login page in your browser…\n')
 			const result = await login({
 				mcpUrl,
-				...(org ? { org } : {}),
+				...(orgFlagOnly ? { org: orgFlagOnly } : {}),
 				openBrowser: parsed.values['no-browser'] !== true,
 				onAuthorizationUrl: (url) => {
 					write(`If the browser does not open, visit:\n${url.href}\n`)
@@ -283,18 +287,18 @@ async function dispatch(
 				mcpUrl,
 				undefined,
 				undefined,
-				org ? { org } : undefined,
+				orgFlagOnly ? { org: orgFlagOnly } : undefined,
 			)
 			// Clear the bootstrap/API token only when removing the last org login
 			// or when not targeting a specific remaining multi-org set.
-			const clearApiToken = !org || oauth.remaining === 0
+			const clearApiToken = !orgFlagOnly || oauth.remaining === 0
 			const apiToken = clearApiToken
 				? deleteStoredApiToken(apiUrl)
 				: { deleted: false }
 			if (!oauth.deleted && !apiToken.deleted) {
 				write(
-					org
-						? `No stored login for org "${org}".\n`
+					orgFlagOnly
+						? `No stored login for org "${orgFlagOnly}".\n`
 						: 'No stored credentials.\n',
 				)
 				return 0
@@ -302,8 +306,8 @@ async function dispatch(
 			const parts: Array<string> = []
 			if (oauth.deleted) {
 				parts.push(
-					org
-						? `Logged out of org ${org}.`
+					orgFlagOnly
+						? `Logged out of org ${orgFlagOnly}.`
 						: 'Logged out of the active org (kody login).',
 				)
 			}
@@ -527,6 +531,7 @@ async function dispatch(
 					mcpUrl,
 					apiUrl,
 					allowEnvWithoutLogin: true,
+					...(org ? { org } : {}),
 				})
 			) {
 				const { whoamiWithApiToken } = await import('./open-api-client.js')
@@ -598,6 +603,7 @@ async function dispatch(
 					mcpUrl,
 					apiUrl,
 					allowEnvWithoutLogin: true,
+					...(org ? { org } : {}),
 				})
 			) {
 				const { searchWithApiToken } = await import('./open-api-client.js')
@@ -699,6 +705,7 @@ async function dispatch(
 					mcpUrl,
 					apiUrl,
 					allowEnvWithoutLogin: true,
+					...(org ? { org } : {}),
 				})
 			const result = local
 				? await (await import('./local-execute.js')).runLocalExecute({
@@ -998,6 +1005,7 @@ function bootstrapMinter(input: {
 				mcpUrl: input.mcpUrl,
 				apiUrl: input.apiUrl,
 				allowEnvWithoutLogin: true,
+				...(input.org ? { org: input.org } : {}),
 			})
 		) {
 			const token = requireApiToken(input.tokenValues, process.env, 'auth bootstrap --scopes', {
@@ -1075,6 +1083,8 @@ export function shouldUseApiToken(input: {
 	allowEnvWithoutLogin: boolean
 	env?: NodeJS.ProcessEnv
 	apiUrl?: string
+	/** When set, only a login for this org counts as a session. */
+	org?: string
 	/** Override session detection (tests). */
 	hasSession?: boolean
 	/** Test seam for stored bootstrap/API token lookup. */
@@ -1095,6 +1105,9 @@ export function shouldUseApiToken(input: {
 		return false
 	}
 	const loggedIn =
-		input.hasSession ?? loadCredentials(input.mcpUrl) != null
+		input.hasSession ??
+		loadCredentials(input.mcpUrl, undefined, undefined, {
+			org: input.org,
+		}) != null
 	return !loggedIn
 }

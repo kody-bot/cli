@@ -482,13 +482,18 @@ export function pickCredentialsFromStore(
 }
 
 /**
- * Upsert one org's credentials and make it active. Replaces that org's prior
- * tokens when the slug already exists; leaves other orgs untouched.
+ * Upsert one org's credentials. Replaces that org's prior tokens when the slug
+ * already exists; leaves other orgs untouched.
+ *
+ * `activate` (default true) makes the saved org active — used by `kody login`.
+ * Pass `activate: false` for token refresh so a one-shot `--org` / `KODY_ORG`
+ * refresh does not steal the active org from `kody org use`.
  */
 export function saveCredentials(
 	credentials: StoredCredentials,
 	backend?: SecretBackend,
 	resolution?: StoreResolution,
+	options?: { activate?: boolean },
 ): { backend: SecretBackend } {
 	const mcpUrl = credentials.mcpUrl
 	const existing =
@@ -502,13 +507,20 @@ export function saveCredentials(
 		...(slug ? { org: slug } : {}),
 		authorizationServerUrl: withDerivedIssuer(credentials).authorizationServerUrl,
 	})
+	const activate = options?.activate !== false
 
 	let next: MultiOrgCredentialStore
 	if (slug) {
+		const currentActive =
+			typeof existing.activeOrg === 'string' &&
+			existing.activeOrg.length > 0 &&
+			existing.orgs[existing.activeOrg]
+				? existing.activeOrg
+				: null
 		next = {
 			version: 2,
 			mcpUrl,
-			activeOrg: slug,
+			activeOrg: activate || !currentActive ? slug : currentActive,
 			orgs: {
 				...existing.orgs,
 				[slug]: { ...record, org: slug },
@@ -729,6 +741,13 @@ function deleteOrgFromStore(
 		if (store.kind === 'keyring' && !backend) {
 			const fallback = fileBackendFor(snapshot.mcpUrl, resolution)
 			writeStore(fallback, next)
+			// Drop the stale keyring secret so the next load prefers the file
+			// (loadCredentials prefers keyring over file when both exist).
+			try {
+				store.delete()
+			} catch {
+				// best-effort; file has the reduced store either way
+			}
 			return { deleted: true, backend: fallback, remaining: remainingSlugs.length }
 		}
 		throw error

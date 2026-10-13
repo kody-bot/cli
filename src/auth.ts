@@ -114,6 +114,8 @@ async function persistAuthorizedSession(input: {
 	previous?: StoredCredentials
 	org?: string
 	now?: number
+	/** When false, refresh tokens without changing the active org. Default true. */
+	activate?: boolean
 }): Promise<{
 	credentials: StoredCredentials
 	saved: ReturnType<typeof saveCredentials>
@@ -141,7 +143,9 @@ async function persistAuthorizedSession(input: {
 		org: input.org ?? input.previous?.org,
 		now: input.now,
 	})
-	const saved = saveCredentials(credentials, input.backend, input.resolution)
+	const saved = saveCredentials(credentials, input.backend, input.resolution, {
+		activate: input.activate !== false,
+	})
 	return { credentials, saved }
 }
 
@@ -180,6 +184,8 @@ export async function refreshStoredCredentials(input: {
 		previous: credentials,
 		org: credentials.org,
 		now: input.now,
+		// Do not steal activeOrg during a one-shot `--org` / KODY_ORG refresh.
+		activate: false,
 	})
 	return next
 }

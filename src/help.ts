@@ -73,9 +73,10 @@ Usage:
 Orgs (local store, offline):
 ${orgBlock}
   --org <slug>
-             For \`kody login\`: bind the browser grant to this organization
-             (adds/replaces that org's stored login; other orgs stay).
-             Example: \`kody login --org acme\`
+             For \`kody login\` / \`kody logout\`: only the flag counts
+             (${orgEnvVar} is ignored). Login binds the browser grant to
+             this organization (adds/replaces that org's stored login;
+             other orgs stay). Example: \`kody login --org acme\`
              Omit and the server picker binds one org.
              For org-scoped commands (whoami, search, api, execute, …):
              run as this org for one call. Precedence: flag, then

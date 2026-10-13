@@ -143,6 +143,23 @@ test('promotePendingOrg finishes silent migration', () => {
 	assert.equal(store?.orgs.kentcdodds?.accessToken, 'access-1')
 })
 
+test('saveCredentials activate:false refreshes tokens without switching activeOrg', () => {
+	const backend = tempBackend()
+	saveCredentials(sample({ org: 'acme', accessToken: 'a1' }), backend)
+	saveCredentials(sample({ org: 'beta', accessToken: 'b1' }), backend)
+	setActiveOrg(mcpUrl, 'acme', backend)
+	saveCredentials(
+		sample({ org: 'beta', accessToken: 'b2', refreshToken: 'b2-r' }),
+		backend,
+		undefined,
+		{ activate: false },
+	)
+	const store = loadCredentialStore(mcpUrl, backend)
+	assert.equal(store?.activeOrg, 'acme')
+	assert.equal(store?.orgs.beta?.accessToken, 'b2')
+	assert.equal(store?.orgs.acme?.accessToken, 'a1')
+})
+
 test('promotePendingOrg does not overwrite a fresh named login or steal activeOrg', () => {
 	const backend = tempBackend()
 	saveCredentials(sample({ accessToken: 'legacy', refreshToken: 'legacy-r' }), backend)
