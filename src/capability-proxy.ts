@@ -1,5 +1,5 @@
 import type { Agent as HttpAgent, IncomingMessage, request as httpRequest } from 'node:http'
-import type { TLSSocket } from 'node:tls'
+import type { Socket } from 'node:net'
 import {
 	apiTokenMintInstructions,
 	cliBootstrapInstructions,
@@ -143,14 +143,14 @@ export function createCapabilityProxyFetch(
 			request.on('socket', (socket) => {
 				const clearConnectTimer = () => clearTimeout(connectTimer)
 				if (url.protocol === 'https:') {
-					const tlsSocket = socket as TLSSocket
 					// `encrypted` is always true on TLSSocket; secureConnecting is the
-					// handshake flag. Keep-alive reuse skips secureConnect.
-					if (tlsSocket.secureConnecting === false) {
+					// handshake flag (not always in @types/node). Keep-alive reuse skips
+					// secureConnect.
+					if (tlsHandshakePending(socket) === false) {
 						clearConnectTimer()
 						return
 					}
-					tlsSocket.once('secureConnect', clearConnectTimer)
+					socket.once('secureConnect', clearConnectTimer)
 					return
 				}
 				if (!socket.connecting) {
@@ -204,6 +204,12 @@ function unrefFreeSockets(agent: HttpAgent): HttpAgent {
 		socket.unref()
 	})
 	return agent
+}
+
+/** `true` while TLS handshake is in progress; `false` once established; else unknown. */
+function tlsHandshakePending(socket: Socket): boolean | null {
+	if (!('secureConnecting' in socket)) return null
+	return (socket as Socket & { secureConnecting: boolean }).secureConnecting
 }
 
 function abortError(reason: unknown): Error {
