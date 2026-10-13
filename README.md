@@ -205,6 +205,37 @@ config helpers, revokes and deletes the stored API token; leaves login alone).
 Push moves live HEAD only (packages do not auto-publish). Existing `kody login`
 / `auth bootstrap` flows are unchanged.
 
+## Local package testing (`kody dev`)
+
+Test an unpublished package (app, exports, jobs, webhooks, subscriptions)
+before publish. Bundling reuses the same esbuild path as `execute --file` /
+publish (`local-bundle.ts`). One shared flag:
+
+| Command | `--target prod` (default for execute/search) | `--target mock` (default for `kody dev`) |
+| --- | --- | --- |
+| `kody dev` | Local app against real Kody | Local app against the CLI mock |
+| `execute` / `search` | Real capabilities, storage, secrets | Mock catalog / scratch storage / fake credentials |
+
+The mock is built into the CLI (no kody-celld). It refuses unimplemented routes
+with `not_implemented_in_mock` rather than faking success. `--reset-storage`
+wipes the mock session's scratch store. Share previews are out of scope;
+`execute --local` behavior is unchanged when `--target` is omitted (prod).
+
+```bash
+cd ./my-package
+kody dev                         # serve kody.app.entry; hot reload; --target mock
+kody dev fetch /health           # agent-friendly HTTP probe
+kody dev job heartbeat           # run a declared job once (never schedules locally)
+kody dev webhook ping --body ./fixture.json
+kody dev emit demo.event --body ./event.json   # subscription delivery shape
+kody dev check                   # bundle + light publish validations
+
+# Four surfaces against mock then prod:
+kody execute --target mock --invoke ./greet --params '{"name":"kent"}'
+kody execute --target prod --invoke ./greet --params '{"name":"kent"}'
+kody search --target mock local
+```
+
 ## Local execute
 
 `kody execute --local` runs the same execute module (default export called
