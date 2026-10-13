@@ -4,13 +4,15 @@ import {
 	type CapabilityProxyClientInput,
 } from './capability-proxy.js'
 import {
+	apiTokenMintInstructions,
+	cliBootstrapInstructions,
 	featureDisabledMessage,
 	insufficientScopeMessage,
 	isScopedApiToken,
 	readInsufficientScopeDetails,
 	rejectedOauthBearerMessage,
 } from './api-token.js'
-import { cliName } from './defaults.js'
+import { apiTokenEnvVar, cliName } from './defaults.js'
 import { describeNetworkError } from './network-error.js'
 import { readPackageVersion } from './package-info.js'
 
@@ -204,8 +206,9 @@ function describePackageGraphFailure(
 		)
 	}
 	if (status === 401) {
+		// Same wording as CapabilityProxy session 401 — package-graph is now the auth gate.
 		const message = isScopedApiToken(token)
-			? `Kody rejected the API token while fetching the local package graph.${detail}`
+			? `Kody rejected the API token (expired, revoked, or malformed). Mint a fresh scoped token and pass it with --token or ${apiTokenEnvVar}.${detail}`
 			: `${rejectedOauthBearerMessage()}${detail}`
 		return new LocalPackageGraphError(message, { status, code })
 	}
@@ -217,7 +220,13 @@ function describePackageGraphFailure(
 	}
 	if (code === 'insufficient_scope') {
 		return new LocalPackageGraphError(
-			`Fetching the local package graph failed. ${insufficientScopeMessage(readInsufficientScopeDetails(body))}${detail}`,
+			`${insufficientScopeMessage(readInsufficientScopeDetails(body))}${detail}`,
+			{ status, code },
+		)
+	}
+	if (status === 403) {
+		return new LocalPackageGraphError(
+			`The API token is not allowed to use CapabilityProxy${code ? ` (${code})` : ''}. ${cliBootstrapInstructions()} (lifetime short|long). ${apiTokenMintInstructions()}${detail}`,
 			{ status, code },
 		)
 	}
@@ -225,7 +234,6 @@ function describePackageGraphFailure(
 		code === 'package_import_unresolved' ||
 		code === 'not_found' ||
 		status === 400 ||
-		status === 403 ||
 		status === 422
 	) {
 		return new LocalPackageGraphError(

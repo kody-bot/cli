@@ -795,7 +795,12 @@ test('runLocalExecute stops before starting workerd when the token or flag is re
 				apiUrl,
 				workerdPath: neverRuns,
 			}),
-		/rejected the API token/,
+		(error: Error) => {
+			assert.match(error.message, /rejected the API token \(expired, revoked, or malformed\)/)
+			assert.match(error.message, /Mint a fresh scoped token/)
+			assert.match(error.message, /--token or KODY_API_TOKEN/)
+			return true
+		},
 	)
 	packageGraphStatus = {
 		status: 403,
@@ -811,7 +816,26 @@ test('runLocalExecute stops before starting workerd when the token or flag is re
 			}),
 		/feature flag `local-execute`/,
 	)
-	assert.equal(proxyRequests.length, 2)
+	packageGraphStatus = {
+		status: 403,
+		body: { error: { code: 'forbidden', message: 'token cannot execute' } },
+	}
+	await assert.rejects(
+		() =>
+			runLocalExecute({
+				code: 'export default () => 1',
+				token: goodToken,
+				apiUrl,
+				workerdPath: neverRuns,
+			}),
+		(error: Error) => {
+			assert.match(error.message, /not allowed to use CapabilityProxy \(forbidden\)/)
+			assert.match(error.message, /cliCredentialBootstrap|auth bootstrap|tokenCreate/)
+			assert.equal(error.message.includes('saved package import'), false)
+			return true
+		},
+	)
+	assert.equal(proxyRequests.length, 3)
 	assert.ok(proxyRequests.every((request) => request.url === `/${localPackageGraphPath}`))
 })
 
