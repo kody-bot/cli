@@ -17,6 +17,7 @@ import {
 } from '../src/local-execute.js'
 import {
 	createLocalEntrySource,
+	createLocalRuntimeModuleSource,
 	createWorkerdConfig,
 } from '../src/local-runtime-source.js'
 import {
@@ -87,6 +88,23 @@ before(async () => {
 			const { path, args } = body as { path: Array<string>; args: Array<unknown> }
 			if (path.join('.') === 'kody.explode') {
 				send(200, { error: { code: 'capability_failed', message: 'explode is broken' } })
+				return
+			}
+			if (path.join('.') === 'kody.credentialClientOpen') {
+				// Origin returns metadata + opaque handle only — never a secret value.
+				send(200, {
+					result: {
+						ok: true,
+						value: {
+							handle: 'kch1.test-handle',
+							key: (args[0] as { key?: string } | undefined)?.key ?? null,
+							name: 'resend',
+							scope: 'personal',
+							kind: 'secret',
+							hosts: ['api.resend.com'],
+						},
+					},
+				})
 				return
 			}
 			send(200, { result: { echoed: path.join('.'), args } })
@@ -391,6 +409,99 @@ export default async function main(params) {
 			args: [{ to: 'kent' }],
 			conversationId: 'conv-local',
 		})
+	},
+)
+
+test('createLocalRuntimeModuleSource exports credential and credentials for ad hoc local execute', () => {
+	const source = createLocalRuntimeModuleSource()
+	assert.match(source, /export const credential = __kodyCredentialRuntime\.credential/)
+	assert.match(source, /export const credentials = __kodyCredentialRuntime\.credentials/)
+	assert.match(source, /x-kody-credential-client/)
+	assert.match(source, /credentialClientOpen/)
+	// Secret values stay on origin: the host only hops tool names + opaque handles.
+	assert.doesNotMatch(source, /secretValue|plaintext|apiKeyValue/)
+	assert.match(
+		source,
+		/credential,\s*credentials,/s,
+	)
+})
+
+test(
+	'runLocalExecute exposes credential() on kody:runtime and hops credentialClientOpen without secret values',
+	{ timeout: 180_000 },
+	async () => {
+		reset()
+		const code = `
+import { credential, credentials } from 'kody:runtime'
+export default async function main() {
+	const opened = await credential('resend')
+	const listed = await credentials('resend')
+	return {
+		typeofCredential: typeof credential,
+		typeofNamed: typeof credential.named,
+		typeofFetch: typeof opened.fetch,
+		name: opened.name,
+		kind: opened.kind,
+		scope: opened.scope,
+		hosts: opened.hosts,
+		listedCount: listed.length,
+		listedName: listed[0]?.name ?? null,
+		ownKeys: Reflect.ownKeys(opened).map(String).sort(),
+	}
+}
+`
+		const result = await runLocalExecute({
+			code,
+			token: goodToken,
+			apiUrl,
+		})
+		assert.equal(result.isError, false)
+		const structured = result.structuredContent as {
+			result: {
+				typeofCredential: string
+				typeofNamed: string
+				typeofFetch: string
+				name: string
+				kind: string
+				scope: string
+				hosts: Array<string>
+				listedCount: number
+				listedName: string | null
+				ownKeys: Array<string>
+			}
+		}
+		assert.equal(structured.result.typeofCredential, 'function')
+		assert.equal(structured.result.typeofNamed, 'function')
+		assert.equal(structured.result.typeofFetch, 'function')
+		assert.equal(structured.result.name, 'resend')
+		assert.equal(structured.result.kind, 'secret')
+		assert.equal(structured.result.scope, 'personal')
+		assert.deepEqual(structured.result.hosts, ['api.resend.com'])
+		assert.equal(structured.result.listedCount, 1)
+		assert.equal(structured.result.listedName, 'resend')
+		// Client enumerates metadata only — never a handle or secret value.
+		assert.deepEqual(structured.result.ownKeys, [
+			'fetch',
+			'hosts',
+			'kind',
+			'name',
+			'scope',
+		])
+		const openCall = proxyRequests.find(
+			(request) =>
+				request.url === '/v1/capability-proxy/call' &&
+				Array.isArray((request.body as { path?: unknown })?.path) &&
+				((request.body as { path: Array<string> }).path.join('.') ===
+					'kody.credentialClientOpen'),
+		)
+		assert.ok(openCall)
+		assert.deepEqual(openCall?.body, {
+			path: ['kody', 'credentialClientOpen'],
+			args: [{ key: 'resend' }],
+		})
+		const serialized = JSON.stringify(proxyRequests)
+		assert.equal(serialized.includes('sk_live'), false)
+		assert.equal(serialized.includes('secret-value'), false)
 	},
 )
 

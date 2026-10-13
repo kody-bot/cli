@@ -6,11 +6,14 @@
  *
  * Stamped `kody:@…` packages also receive a package-graph CapabilityProxy shim
  * from origin. This host module still binds createAuthenticatedFetch /
- * secretHeaders / oauthClientCredentials for ad hoc imports, and the entry
- * installs the shared runtime ALS before evaluating user code so published
- * bundles that inline optional runtime exports (Dropbox-style) see a populated
- * store at module evaluation — matching cloud `__kodyRunInRuntime`.
+ * secretHeaders / oauthClientCredentials / credential / credentials for ad hoc
+ * imports, and the entry installs the shared runtime ALS before evaluating user
+ * code so published bundles that inline optional runtime exports
+ * (Dropbox-style) see a populated store at module evaluation — matching cloud
+ * `__kodyRunInRuntime`.
  */
+
+import { credentialClientRuntimeSource } from './credential-client-runtime-source.js'
 
 export const localExecuteCompatibilityDate = '2026-04-16'
 export const localExecuteCompatibilityFlags = ['nodejs_compat'] as const
@@ -215,6 +218,17 @@ export async function oauthClientCredentials(input) {
 	return await __kodyCall(['kody', 'oauthClientCredentials'], [input ?? {}]);
 }
 
+// Scoped credential clients (ADR 0068): open/sign/callTool/refresh through
+// CapabilityProxy \`kody.credentialClient*\`. Fetches carry only an opaque
+// handle; origin's gateway places the credential. Secret values never enter
+// local workerd — same security as hosted and the package-graph shim.
+${credentialClientRuntimeSource}
+const __kodyCredentialRuntime = __kodyCreateCredentialRuntime((name, args) =>
+	__kodyCall(['kody', name], [args ?? {}]),
+);
+export const credential = __kodyCredentialRuntime.credential;
+export const credentials = __kodyCredentialRuntime.credentials;
+
 const __kodyRuntimeStorageSymbol = Symbol.for(${JSON.stringify(kodyRuntimeStorageSymbolDescription)});
 const __globalAny = globalThis;
 const __kodyRuntimeStorage =
@@ -227,6 +241,8 @@ const __kodyRuntimeDefault = Object.freeze({
 	createAuthenticatedFetch,
 	secretHeaders,
 	oauthClientCredentials,
+	credential,
+	credentials,
 	packageContext,
 	packageSecrets,
 	email,
