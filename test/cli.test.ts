@@ -66,7 +66,31 @@ test('resolveCommand maps subcommands and flags', () => {
 		resolveCommand(['execute', '--invoke', 'kody:@scope/pkg/export']).values.invoke,
 		'kody:@scope/pkg/export',
 	)
-	assert.throws(() => resolveCommand(['explode']), /Unknown command/)
+	assert.throws(() => resolveCommand(['explode']), /Unknown command "explode"/)
+	assert.throws(() => resolveCommand(['explode']), /kody --help/)
+	assert.throws(
+		() => resolveCommand(['explode']),
+		(error: unknown) =>
+			error instanceof Error &&
+			!error.message.includes('Install Kody as a remote MCP server'),
+	)
+})
+
+test('unknown commands write a short error to stderr only (no help on stdout)', async () => {
+	let stdout = ''
+	let stderr = ''
+	const code = await runCli(['git-credential-typo'], {
+		stdout: (text) => {
+			stdout += text
+		},
+		stderr: (text) => {
+			stderr += text
+		},
+	})
+	assert.equal(code, 1)
+	assert.equal(stdout, '')
+	assert.match(stderr, /Unknown command "git-credential-typo"/)
+	assert.doesNotMatch(stderr, /Install Kody as a remote MCP server/)
 })
 
 test('parseApiParamsJson requires a flat object', () => {

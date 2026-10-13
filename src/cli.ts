@@ -26,6 +26,7 @@ import {
 } from './credential-call-map.js'
 import { defaultApiUrl, defaultMcpUrl, modernMcpProtocolVersion } from './defaults.js'
 import { usage } from './help.js'
+import { refreshGitCredentialHelperPinIfNeeded } from './setup-git.js'
 import { deleteCredentials, loadCredentials } from './store.js'
 import { formatToolResult } from './tool-result.js'
 import { resolveLocalExecuteBearer } from './local-execute-auth.js'
@@ -144,7 +145,13 @@ export function resolveCommand(argv: Array<string>): {
 		case 'version':
 			return { command: raw, positionals: positionals.slice(1), values }
 		default:
-			throw new Error(`Unknown command "${raw}".\n\n${usage}`)
+			// Never embed full usage here: git credential helpers treat any
+			// unexpected stdout as protocol data, and older CLIs that dumped
+			// help on unknown commands broke `git push`. Keep the hint short;
+			// `runCli` always writes errors to stderr only.
+			throw new Error(
+				`Unknown command "${raw}". Run \`kody --help\` for usage.`,
+			)
 	}
 }
 
@@ -154,6 +161,23 @@ export async function runCli(
 ): Promise<number> {
 	const write = io.stdout ?? ((text: string) => process.stdout.write(text))
 	const writeErr = io.stderr ?? ((text: string) => process.stderr.write(text))
+	// Best-effort: upgrade stale git helper pins (major-only / ephemeral /
+	// outdated exact) before any command, including git-credential. Must not
+	// write to stdout — git reads the helper protocol from stdout only.
+	// Skip under node:test so unit tests never rewrite the developer's
+	// global git config; production / E2E / npx always refresh.
+	if (
+		process.env.NODE_TEST !== '1' &&
+		process.env.KODY_SKIP_GIT_HELPER_REFRESH !== '1'
+	) {
+		try {
+			refreshGitCredentialHelperPinIfNeeded({
+				mcpUrl: process.env.KODY_MCP_URL || undefined,
+			})
+		} catch {
+			// Ignore refresh failures; the user's command still runs.
+		}
+	}
 	try {
 		const parsed = resolveCommand(argv)
 		if (parsed.values.help && parsed.command !== 'help') {
@@ -293,9 +317,16 @@ async function dispatch(
 					write,
 				})
 			}
+			if (action === 'remove-git') {
+				return runAuthRemoveGit({
+					values: parsed.values,
+					mcpUrl,
+					write,
+				})
+			}
 			if (action !== 'bootstrap') {
 				throw new Error(
-					'Usage: kody auth bootstrap (…) | kody auth setup-git [--lifetime long|short] [--scopes <list>] [--api-url <url>] [--mcp-url <url>]',
+					'Usage: kody auth bootstrap (…) | kody auth setup-git […] | kody auth remove-git [--api-url <url>] [--mcp-url <url>]',
 				)
 			}
 			const code =
@@ -811,9 +842,30 @@ async function runAuthSetupGit(input: {
 			'',
 			'This user-owned token authorizes every @owner/name.git you can access (all orgs).',
 			'Try: git clone https://kody.codes/@owner/name.git',
+			'Undo later: kody auth remove-git',
 			'',
 		].join('\n'),
 	)
+	return 0
+}
+
+async function runAuthRemoveGit(input: {
+	values: ReturnType<typeof parseKnown>['values']
+	mcpUrl: string
+	write: (text: string) => void
+}): Promise<number> {
+	const { authRemoveGit, formatAuthRemoveGitReport } = await import('./setup-git.js')
+	const apiUrl = apiUrlFrom({
+		apiUrl:
+			typeof input.values['api-url'] === 'string'
+				? input.values['api-url']
+				: undefined,
+	})
+	const result = await authRemoveGit({
+		apiUrl,
+		mcpUrl: input.mcpUrl,
+	})
+	input.write(formatAuthRemoveGitReport(result))
 	return 0
 }
 

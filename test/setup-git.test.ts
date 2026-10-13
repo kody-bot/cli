@@ -3,14 +3,22 @@ import { test } from 'node:test'
 import {
 	apiTokenNeedsRefresh,
 	assertUserOwnedTokensLive,
+	authRemoveGit,
 	authSetupGit,
-	cliMajorVersionForNpx,
+	cliExactVersionForNpx,
+	cliVersionSupportsGitCredential,
 	decideSetupGitToken,
 	ensureSetupGitScopes,
+	exactNpxHelperVersion,
+	formatAuthRemoveGitReport,
 	gitCredentialHelperCommand,
+	gitCredentialHelperNeedsRepair,
 	gitCredentialHostFromMcpUrl,
 	isEphemeralNpxEntryPath,
+	isKodyGitCredentialHelperValue,
+	isMajorOnlyNpxHelper,
 	installGitCredentialConfig,
+	refreshGitCredentialHelperPinIfNeeded,
 	scopesIncludeRequired,
 	setupGitDefaultScopes,
 	setupGitRequiredScopes,
@@ -41,9 +49,10 @@ const sampleStored = (scopes: Array<string>): StoredApiToken => ({
 	createdVia: 'cli-bootstrap',
 })
 
-test('resolveCommand maps auth setup-git and git-credential', () => {
+test('resolveCommand maps auth setup-git, remove-git, and git-credential', () => {
 	assert.equal(resolveCommand(['auth', 'setup-git']).command, 'auth')
 	assert.equal(resolveCommand(['auth', 'setup-git']).positionals[0], 'setup-git')
+	assert.equal(resolveCommand(['auth', 'remove-git']).positionals[0], 'remove-git')
 	assert.equal(resolveCommand(['git-credential', 'get']).command, 'git-credential')
 	assert.equal(resolveCommand(['git-credential', 'get']).positionals[0], 'get')
 })
@@ -148,7 +157,7 @@ test('installGitCredentialConfig writes helper + useHttpPath', () => {
 	])
 })
 
-test('gitCredentialHelperCommand prefers stable paths over ephemeral npx', () => {
+test('gitCredentialHelperCommand prefers version-capable global or exact npx pin', () => {
 	assert.equal(
 		isEphemeralNpxEntryPath(
 			'/Users/kent/.npm/_npx/4309649e9362ebcf/node_modules/.bin/kody',
@@ -156,8 +165,10 @@ test('gitCredentialHelperCommand prefers stable paths over ephemeral npx', () =>
 		true,
 	)
 	assert.equal(isEphemeralNpxEntryPath('/usr/local/bin/kody'), false)
-	assert.equal(cliMajorVersionForNpx('1.16.2'), '1')
-	assert.equal(cliMajorVersionForNpx('0.0.0-semantically-released'), '1')
+	assert.equal(cliExactVersionForNpx('1.16.5'), '1.16.5')
+	assert.equal(cliExactVersionForNpx('0.0.0-semantically-released'), '1.16.0')
+	assert.equal(cliVersionSupportsGitCredential('1.16.0'), true)
+	assert.equal(cliVersionSupportsGitCredential('1.1.0'), false)
 
 	const stableEntry = gitCredentialHelperCommand({
 		execPath: '/usr/bin/node',
@@ -169,15 +180,99 @@ test('gitCredentialHelperCommand prefers stable paths over ephemeral npx', () =>
 	const globalKody = gitCredentialHelperCommand({
 		entryPath: '/Users/kent/.npm/_npx/abc/node_modules/.bin/kody',
 		which: () => '/usr/local/bin/kody',
+		readKodyVersion: () => '1.16.5',
 	})
 	assert.equal(globalKody, '!/usr/local/bin/kody git-credential')
+
+	const staleGlobal = gitCredentialHelperCommand({
+		entryPath: '/Users/kent/.npm/_npx/abc/node_modules/.bin/kody',
+		which: () => '/usr/local/bin/kody',
+		readKodyVersion: () => '1.1.0',
+		packageVersion: '1.16.5',
+	})
+	assert.equal(staleGlobal, '!npx -y @kodycodes/cli@1.16.5 git-credential')
 
 	const npxPinned = gitCredentialHelperCommand({
 		entryPath: '/Users/kent/.npm/_npx/abc/node_modules/.bin/kody',
 		which: () => undefined,
-		packageVersion: '1.16.2',
+		packageVersion: '1.16.5',
 	})
-	assert.equal(npxPinned, '!npx -y @kodycodes/cli@1 git-credential')
+	assert.equal(npxPinned, '!npx -y @kodycodes/cli@1.16.5 git-credential')
+})
+
+test('gitCredentialHelperNeedsRepair detects major-only, ephemeral, and outdated pins', () => {
+	assert.equal(isMajorOnlyNpxHelper('!npx -y @kodycodes/cli@1 git-credential'), true)
+	assert.equal(exactNpxHelperVersion('!npx -y @kodycodes/cli@1.16.4 git-credential'), '1.16.4')
+	assert.equal(
+		gitCredentialHelperNeedsRepair({
+			helper: '!npx -y @kodycodes/cli@1 git-credential',
+			packageVersion: '1.16.5',
+		}),
+		true,
+	)
+	assert.equal(
+		gitCredentialHelperNeedsRepair({
+			helper: '!/Users/kent/.npm/_npx/abc/node_modules/.bin/kody git-credential',
+			packageVersion: '1.16.5',
+		}),
+		true,
+	)
+	assert.equal(
+		gitCredentialHelperNeedsRepair({
+			helper: '!npx -y @kodycodes/cli@1.16.4 git-credential',
+			packageVersion: '1.16.5',
+		}),
+		true,
+	)
+	assert.equal(
+		gitCredentialHelperNeedsRepair({
+			helper: '!npx -y @kodycodes/cli@1.16.5 git-credential',
+			packageVersion: '1.16.5',
+		}),
+		false,
+	)
+	assert.equal(
+		gitCredentialHelperNeedsRepair({
+			helper: '!/usr/local/bin/kody git-credential',
+			packageVersion: '1.16.5',
+			readKodyVersion: () => '1.1.0',
+		}),
+		true,
+	)
+	assert.equal(
+		gitCredentialHelperNeedsRepair({
+			helper: '!/usr/local/bin/kody git-credential',
+			packageVersion: '1.16.5',
+			readKodyVersion: () => '1.16.5',
+		}),
+		false,
+	)
+})
+
+test('refreshGitCredentialHelperPinIfNeeded rewrites major-only pins', () => {
+	const writes: Array<Array<string>> = []
+	const refreshed = refreshGitCredentialHelperPinIfNeeded({
+		mcpUrl: 'https://kody.codes/mcp',
+		packageVersion: '1.16.5',
+		which: () => undefined,
+		entryPath: '/Users/kent/.npm/_npx/abc/node_modules/.bin/kody',
+		runGitGet: () => ({
+			status: 0,
+			stdout: '!npx -y @kodycodes/cli@1 git-credential',
+			stderr: '',
+		}),
+		runGit: (args) => {
+			writes.push([...args])
+			return { status: 0, stderr: '' }
+		},
+	})
+	assert.equal(refreshed, true)
+	assert.deepEqual(writes[0], [
+		'config',
+		'--global',
+		'credential.https://kody.codes.helper',
+		'!npx -y @kodycodes/cli@1.16.5 git-credential',
+	])
 })
 
 test('apiTokenNeedsRefresh treats expired and near-expiry tokens', () => {
@@ -441,4 +536,101 @@ test('authSetupGit without login or API token fails with login guidance', async 
 			}),
 		/Run `kody login`/,
 	)
+})
+
+test('isKodyGitCredentialHelperValue recognizes npx pins and kody helpers', () => {
+	assert.equal(
+		isKodyGitCredentialHelperValue('!npx -y @kodycodes/cli@1 git-credential'),
+		true,
+	)
+	assert.equal(
+		isKodyGitCredentialHelperValue('!npx -y @kodycodes/cli@1.16.5 git-credential'),
+		true,
+	)
+	assert.equal(
+		isKodyGitCredentialHelperValue(
+			'!/Users/kent/.npm/_npx/abc/node_modules/.bin/kody git-credential',
+		),
+		true,
+	)
+	assert.equal(isKodyGitCredentialHelperValue('!/usr/local/bin/kody git-credential'), true)
+	assert.equal(isKodyGitCredentialHelperValue('osxkeychain'), false)
+})
+
+test('authRemoveGit clears helpers, revokes token, deletes store; idempotent when empty', async () => {
+	const home = mkdtempSync(join(tmpdir(), 'kody-remove-git-'))
+	const tokenPath = join(home, 'token.json')
+	const stored = {
+		...sampleStored(['package:read', 'package:write', 'token:delete']),
+		apiUrl: 'https://api.remove-git.test',
+		tokenId: 'tok_remove',
+	}
+	writeFileSync(tokenPath, JSON.stringify(stored))
+	const backend = createFileBackend(tokenPath)
+	const unsets: Array<Array<string>> = []
+	const config: Record<string, string> = {
+		'--global\tcredential.https://kody.codes.helper':
+			'!npx -y @kodycodes/cli@1 git-credential',
+		'--global\tcredential.https://kody.codes.useHttpPath': 'true',
+		'--local\tcredential.https://kody.codes.helper':
+			'!/Users/kent/.npm/_npx/old/node_modules/.bin/kody git-credential',
+	}
+
+	let revokeCalls = 0
+	const result = await authRemoveGit({
+		apiUrl: stored.apiUrl,
+		mcpUrl: 'https://kody.codes/mcp',
+		backend,
+		runGitGet: (args) => {
+			const scope = args[1] as string
+			const mode = args[2]
+			const key = args[3] as string
+			if (mode === '--get-all') {
+				const value = config[`${scope}\t${key}`]
+				if (!value) return { status: 1, stdout: '', stderr: '' }
+				return { status: 0, stdout: value, stderr: '' }
+			}
+			return { status: 1, stdout: '', stderr: '' }
+		},
+		runGit: (args) => {
+			unsets.push([...args])
+			if (args[2] === '--unset-all') {
+				delete config[`${args[1]}\t${args[3]}`]
+			}
+			return { status: 0, stderr: '' }
+		},
+		fetchFn: (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+			const url = String(input instanceof Request ? input.url : input)
+			assert.equal(init?.method, 'DELETE')
+			assert.ok(url.endsWith('/v1/tokens/current'))
+			revokeCalls += 1
+			return new Response(null, { status: 204 })
+		}) as typeof fetch,
+	})
+
+	assert.equal(result.removedHelpers.length, 2)
+	assert.ok(
+		result.removedHelpers.some((entry) => entry.value.includes('@kodycodes/cli@1')),
+	)
+	assert.ok(result.removedHelpers.some((entry) => entry.value.includes('/_npx/')))
+	assert.equal(result.removedPathKeys.length, 1)
+	assert.equal(result.tokenRevoked, 'yes')
+	assert.equal(result.tokenId, 'tok_remove')
+	assert.equal(result.tokenDeletedLocally, true)
+	assert.equal(revokeCalls, 1)
+	assert.equal(loadStoredApiToken(stored.apiUrl, backend), null)
+	assert.match(formatAuthRemoveGitReport(result), /Removed Kody Git HTTPS setup/)
+	assert.match(formatAuthRemoveGitReport(result), /Left kody login sessions alone/)
+
+	const empty = await authRemoveGit({
+		apiUrl: 'https://api.remove-git-empty.test',
+		mcpUrl: 'https://kody.codes/mcp',
+		backend: createFileBackend(join(home, 'missing.json')),
+		runGitGet: () => ({ status: 1, stdout: '', stderr: '' }),
+		runGit: () => ({ status: 1, stderr: 'not found' }),
+	})
+	assert.equal(empty.removedHelpers.length, 0)
+	assert.equal(empty.tokenRevoked, 'skipped')
+	assert.equal(empty.tokenDeletedLocally, false)
+	assert.match(formatAuthRemoveGitReport(empty), /Nothing to remove/)
 })

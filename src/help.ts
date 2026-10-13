@@ -13,6 +13,7 @@ Usage:
   kody auth bootstrap (--code <kody_bc_…> | --scopes <list>) (--lifetime short|long | --idle-ttl-seconds <n> --max-lifetime-seconds <n>)
                       [--token <token>] [--mcp-url <url>] [--api-url <url>]
   kody auth setup-git [--lifetime long|short] [--scopes <list>] [--token <token>] [--mcp-url <url>] [--api-url <url>]
+  kody auth remove-git [--mcp-url <url>] [--api-url <url>]
   kody git-credential <get|store|erase>
   kody whoami [--mcp-url <url>] [--token <token>] [--api-url <url>] [--json]
   kody search [query] [--entity <ref>] [--domain <id>] [--limit <n>] [--token <token>] [--api-url <url>] [--json]
@@ -72,10 +73,23 @@ Usage:
              authorizes every repo you can access across all orgs — login
              \`--org\` only scopes the MCP mint session, not git. Requires a
              server that advertises \`org_binding\`. Configures a stable
-             \`credential.https://<host>.helper\` (global \`kody\` or
-             \`npx -y @kodycodes/cli@<major>\`, never an ephemeral npx cache
-             path) + \`useHttpPath\`. Re-run to rewrite an old npx-cache
-             helper. Does not change \`kody login\` / existing auth flows.
+             \`credential.https://<host>.helper\` (global \`kody\` only when
+             its version supports \`git-credential\`, else
+             \`npx -y @kodycodes/cli@<exact>\` — never a major-only range or
+             ephemeral npx cache path) + \`useHttpPath\`. Re-run (or any
+             newer CLI command) rewrites stale helper pins. Undo with
+             \`kody auth remove-git\`. Does not change \`kody login\` /
+             existing auth flows.
+
+  auth remove-git
+             Inverse of \`auth setup-git\`: removes every
+             \`credential.https://<host>.*\` helper entry setup-git may have
+             written (global and local; including stale \`~/.npm/_npx\` and
+             major-only \`@1\` pins), revokes the stored API token on the
+             server (\`token:delete\` / DELETE /v1/tokens/current), and
+             deletes it from the OS keychain. Idempotent when nothing is
+             set up; prints what it removed. Leaves \`kody login\` sessions
+             alone.
 
   git-credential
              Git credential helper invoked by git after \`auth setup-git\`

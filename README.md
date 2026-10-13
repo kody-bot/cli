@@ -66,6 +66,7 @@ Or run via `npx @kodycodes/cli` without a global install.
 | `kody auth bootstrap --code` | Redeems a one-shot `kody_bc_…` from MCP `cliCredentialBootstrap` and stores the resulting `kody_at_…` for `execute --local` (never prints the token). |
 | `kody auth bootstrap --scopes` | Opt-in extra scopes: mints the code itself by passing `scopes` to `cliCredentialBootstrap` (with `--token`, else the `kody login` session, else a stored token), then redeems and stores it. See [Opt-in scopes](#opt-in-scopes). |
 | `kody auth setup-git` | Installs a Git credential helper for `https://kody.codes/@owner/name.git` (persistent `kody_at_…`, user-owned token with `package:read`/`package:write`). See [Git HTTPS](#git-https-setup-git). |
+| `kody auth remove-git` | Inverse of `setup-git`: clears Kody HTTPS git helpers, revokes the stored API token, deletes it from the keychain. Leaves `kody login` alone. |
 | `kody git-credential` | Credential helper invoked by Git after `setup-git` (`get` / `store` / `erase`). |
 | `kody whoami` | Confirms the CLI MCP connection and lists tools. With a scoped API token (and no login), shows token identity via the Open API. |
 | `kody search [query]` | Calls Kody `search` from the CLI (prefer the host MCP tool). Token-only auth uses Open API `GET /v1/search`. |
@@ -171,9 +172,11 @@ authorizes every `@owner/name.git` you can access across all orgs — login
 already stored it probes `org_binding` on `GET /v1/tokens/current`; after a
 fresh login with no API token yet, it mints via the login session and checks
 `org_binding` on the minted token. Configures a **stable** credential helper
-(global `kody` when available, otherwise `npx -y @kodycodes/cli@1 …` — never
-an ephemeral `~/.npm/_npx/…` path). Re-running `setup-git` rewrites any old
-npx-cache helper entry.
+(global `kody` only when that install's version supports `git-credential`,
+otherwise `npx -y @kodycodes/cli@<exact-version> …` — never a major-only
+`@1` range that can reuse a stale npx cache, and never an ephemeral
+`~/.npm/_npx/…` path). Re-running `setup-git` rewrites stale helper entries;
+every CLI command also refreshes an outdated pin silently.
 
 ```bash
 git config --global credential.https://kody.codes.helper '!… git-credential'
@@ -182,8 +185,10 @@ git config --global credential.https://kody.codes.useHttpPath true
 
 The helper silently remints via your stored `kody login` when the API token is
 expired or within an hour of expiry, so you should not need to re-run
-`setup-git` for token lifetime. Push moves live HEAD only (packages do not
-auto-publish). Existing `kody login` / `auth bootstrap` flows are unchanged.
+`setup-git` for token lifetime. Undo with `kody auth remove-git` (clears git
+config helpers, revokes and deletes the stored API token; leaves login alone).
+Push moves live HEAD only (packages do not auto-publish). Existing `kody login`
+/ `auth bootstrap` flows are unchanged.
 
 ## Local execute
 

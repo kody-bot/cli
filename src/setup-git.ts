@@ -13,10 +13,11 @@ import {
 	type ResolvedCliTokenLifetime,
 } from './auth-bootstrap.js'
 import {
+	deleteStoredApiToken,
 	loadStoredApiToken,
 	type StoredApiToken,
 } from './api-token-store.js'
-import { OpenApiError, openApiGet } from './open-api-client.js'
+import { OpenApiError, openApiGet, openApiRequest } from './open-api-client.js'
 import type { SecretBackend, StoreResolution } from './store.js'
 import { which as whichOnPath } from './which.js'
 
@@ -229,14 +230,26 @@ export function installGitCredentialConfig(input: {
 /** Refresh git HTTPS tokens this long before `expiresAt` (or when past it). */
 export const gitApiTokenRefreshSkewMs = 60 * 60 * 1000
 
+/**
+ * First published CLI line that includes `git-credential` / `auth setup-git`.
+ * Global installs older than this must not be preferred as the helper binary.
+ */
+export const gitCredentialMinCliVersion = '1.16.0'
+
+/**
+ * Fallback exact pin for local `0.0.0-semantically-released` builds. Published
+ * tarballs always carry a real x.y.z from semantic-release.
+ */
+export const gitCredentialHelperPinFallbackVersion = gitCredentialMinCliVersion
+
 const requireFromSetupGit = createRequire(import.meta.url)
 
 export function readCliPackageVersion(): string {
 	try {
 		const pkg = requireFromSetupGit('../package.json') as { version?: string }
-		return typeof pkg.version === 'string' ? pkg.version : '1'
+		return typeof pkg.version === 'string' ? pkg.version : gitCredentialHelperPinFallbackVersion
 	} catch {
-		return '1'
+		return gitCredentialHelperPinFallbackVersion
 	}
 }
 
@@ -253,14 +266,62 @@ export function isEphemeralNpxEntryPath(entryPath: string): boolean {
 	)
 }
 
+export type CliSemver = { major: number; minor: number; patch: number }
+
+/** Parse a leading `x.y.z` from a CLI version string (ignores prerelease tags). */
+export function parseCliSemver(version: string): CliSemver | null {
+	const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version.trim())
+	if (!match) return null
+	return {
+		major: Number(match[1]),
+		minor: Number(match[2]),
+		patch: Number(match[3]),
+	}
+}
+
+export function compareCliSemver(a: CliSemver, b: CliSemver): number {
+	if (a.major !== b.major) return a.major < b.major ? -1 : 1
+	if (a.minor !== b.minor) return a.minor < b.minor ? -1 : 1
+	if (a.patch !== b.patch) return a.patch < b.patch ? -1 : 1
+	return 0
+}
+
+export function cliVersionGte(version: string, minimum: string): boolean {
+	const left = parseCliSemver(version)
+	const right = parseCliSemver(minimum)
+	if (!left || !right) return false
+	return compareCliSemver(left, right) >= 0
+}
+
+export function cliVersionGt(version: string, other: string): boolean {
+	const left = parseCliSemver(version)
+	const right = parseCliSemver(other)
+	if (!left || !right) return false
+	return compareCliSemver(left, right) > 0
+}
+
+/** True when this CLI version knows the `git-credential` command. */
+export function cliVersionSupportsGitCredential(version: string): boolean {
+	return cliVersionGte(version, gitCredentialMinCliVersion)
+}
+
 /**
- * Major version for `npx -y @kodycodes/cli@<major>`. Local
- * `0.0.0-semantically-released` builds pin to `1` (current published line).
+ * Exact version for `npx -y @kodycodes/cli@<x.y.z>`. Major-only ranges are
+ * unsafe: npx can reuse a stale cache (e.g. 1.1.0 for `@1`). Local
+ * `0.0.0-semantically-released` builds fall back to
+ * {@link gitCredentialHelperPinFallbackVersion}.
  */
+export function cliExactVersionForNpx(packageVersion: string): string {
+	const parsed = parseCliSemver(packageVersion)
+	if (parsed && parsed.major >= 1) {
+		return `${parsed.major}.${parsed.minor}.${parsed.patch}`
+	}
+	return gitCredentialHelperPinFallbackVersion
+}
+
+/** @deprecated Use {@link cliExactVersionForNpx}. Kept for one release as alias. */
 export function cliMajorVersionForNpx(packageVersion: string): string {
-	const major = Number.parseInt(packageVersion.split('.')[0] ?? '', 10)
-	if (Number.isFinite(major) && major >= 1) return String(major)
-	return '1'
+	return cliExactVersionForNpx(packageVersion)
 }
 
 /** Whether a stored API token should be reminted for git HTTPS. */
@@ -276,11 +337,37 @@ export function apiTokenNeedsRefresh(
 	return expiresMs - nowMs <= skewMs
 }
 
+export type KodyVersionReader = (binPath: string) => string | null
+
 /**
- * Helper argv for git config. Prefer a stable global `kody`, else a non-npx
- * entry path, else `npx -y @kodycodes/cli@<major>` so cache cleans cannot
- * orphan the helper. Re-running `auth setup-git` rewrites any prior ephemeral
- * `~/.npm/_npx/…` helper entry.
+ * Read `kody --version` (or `node entry --version`) stdout. Returns null on
+ * failure so callers can skip preferring an unverifiable binary.
+ */
+export function readVersionFromKodyBinary(
+	binPath: string,
+	args: ReadonlyArray<string> = ['--version'],
+): string | null {
+	const result = spawnSync(binPath, [...args], {
+		encoding: 'utf8',
+		env: process.env,
+		timeout: 8_000,
+	})
+	if (result.error || (result.status ?? 1) !== 0) return null
+	const text = `${result.stdout || ''}\n${result.stderr || ''}`
+	const match = /(\d+\.\d+\.\d+)/.exec(text)
+	return match?.[1] ?? null
+}
+
+function defaultReadGlobalKodyVersion(binPath: string): string | null {
+	return readVersionFromKodyBinary(binPath)
+}
+
+/**
+ * Helper argv for git config. Prefer a global `kody` only when its version
+ * supports `git-credential`; else a non-npx entry path; else
+ * `npx -y @kodycodes/cli@<exact>` so npx cannot reuse a stale major-range
+ * cache. Re-running `auth setup-git` (and every CLI command via pin refresh)
+ * rewrites ephemeral / major-range / outdated pins.
  */
 export function gitCredentialHelperCommand(input?: {
 	execPath?: string
@@ -288,27 +375,171 @@ export function gitCredentialHelperCommand(input?: {
 	env?: NodeJS.ProcessEnv
 	which?: typeof whichOnPath
 	packageVersion?: string
+	readKodyVersion?: KodyVersionReader
 }): string {
 	const env = input?.env ?? process.env
 	const whichFn = input?.which ?? whichOnPath
 	const entryPath = input?.entryPath ?? process.argv[1]
+	const readVersion = input?.readKodyVersion ?? defaultReadGlobalKodyVersion
 	const globalKody = whichFn('kody', env)
 	if (globalKody && !isEphemeralNpxEntryPath(globalKody)) {
-		return `!${shellQuote(globalKody)} git-credential`
+		const globalVersion = readVersion(globalKody)
+		if (globalVersion && cliVersionSupportsGitCredential(globalVersion)) {
+			return `!${shellQuote(globalKody)} git-credential`
+		}
 	}
 	if (entryPath && entryPath.length > 0 && !isEphemeralNpxEntryPath(entryPath)) {
 		const execPath = input?.execPath ?? process.execPath
 		return `!${shellQuote(execPath)} ${shellQuote(entryPath)} git-credential`
 	}
-	const major = cliMajorVersionForNpx(
+	const exact = cliExactVersionForNpx(
 		input?.packageVersion ?? readCliPackageVersion(),
 	)
-	return `!npx -y ${cliName}@${major} git-credential`
+	return `!npx -y ${cliName}@${exact} git-credential`
 }
 
 function shellQuote(value: string): string {
 	if (/^[A-Za-z0-9_./:@+=,-]+$/.test(value)) return value
 	return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+/** Detect major-only npx pins (`@1`, `@2`) that can resolve to a stale cache. */
+export function isMajorOnlyNpxHelper(helper: string): boolean {
+	return /@kodycodes\/cli@\d+(?![\.\d])/.test(helper)
+}
+
+/** Exact `@kodycodes/cli@x.y.z` pin from a helper command, if present. */
+export function exactNpxHelperVersion(helper: string): string | null {
+	const match = /@kodycodes\/cli@(\d+\.\d+\.\d+)/.exec(helper)
+	return match?.[1] ?? null
+}
+
+/**
+ * True when an installed helper should be rewritten: ephemeral npx path,
+ * major-only pin, exact pin older than the running CLI, or a binary that
+ * does not support `git-credential`.
+ */
+export function gitCredentialHelperNeedsRepair(input: {
+	helper: string | null | undefined
+	packageVersion?: string
+	readKodyVersion?: KodyVersionReader
+}): boolean {
+	const helper = input.helper?.trim()
+	if (!helper) return false
+	if (isEphemeralNpxEntryPath(helper)) return true
+	if (isMajorOnlyNpxHelper(helper)) return true
+
+	const pinned = exactNpxHelperVersion(helper)
+	if (pinned) {
+		if (!cliVersionSupportsGitCredential(pinned)) return true
+		const current = cliExactVersionForNpx(
+			input.packageVersion ?? readCliPackageVersion(),
+		)
+		return cliVersionGt(current, pinned)
+	}
+
+	// `!/path/to/kody git-credential` or `!node /path/to/bin.js git-credential`
+	const readVersion = input.readKodyVersion ?? defaultReadGlobalKodyVersion
+	const bang = helper.startsWith('!') ? helper.slice(1).trim() : helper.trim()
+	const parts = bang.split(/\s+/).filter(Boolean)
+	if (parts.length >= 2 && parts[parts.length - 1] === 'git-credential') {
+		const invocation = parts.slice(0, -1)
+		if (invocation.length === 1) {
+			const version = readVersion(invocation[0]!)
+			if (version && !cliVersionSupportsGitCredential(version)) return true
+		} else if (invocation.length >= 2) {
+			const version = readVersionFromKodyBinary(invocation[0]!, [
+				...invocation.slice(1),
+				'--version',
+			])
+			if (version && !cliVersionSupportsGitCredential(version)) return true
+		}
+	}
+	return false
+}
+
+export type GitConfigGetRunner = (args: ReadonlyArray<string>) => {
+	status: number
+	stdout: string
+	stderr: string
+}
+
+export function defaultGitConfigGetRunner(args: ReadonlyArray<string>): {
+	status: number
+	stdout: string
+	stderr: string
+} {
+	const result = spawnSync('git', [...args], {
+		encoding: 'utf8',
+		env: process.env,
+	})
+	if (result.error) {
+		return { status: 1, stdout: '', stderr: result.error.message }
+	}
+	return {
+		status: result.status ?? 1,
+		stdout: (result.stdout || '').trim(),
+		stderr: (result.stderr || '').trim(),
+	}
+}
+
+/**
+ * Best-effort: if a Kody HTTPS credential helper is installed but stale,
+ * rewrite it to {@link gitCredentialHelperCommand}. Silent — safe to call
+ * from every CLI entry including `git-credential` (must not touch stdout).
+ * Returns whether a rewrite ran.
+ */
+export function refreshGitCredentialHelperPinIfNeeded(input?: {
+	mcpUrl?: string
+	global?: boolean
+	packageVersion?: string
+	helperCommand?: string
+	runGitGet?: GitConfigGetRunner
+	runGit?: GitConfigRunner
+	readKodyVersion?: KodyVersionReader
+	which?: typeof whichOnPath
+	execPath?: string
+	entryPath?: string
+	env?: NodeJS.ProcessEnv
+}): boolean {
+	const mcpUrl = input?.mcpUrl || defaultMcpUrl
+	const host = gitCredentialHostFromMcpUrl(mcpUrl)
+	const scope = input?.global === false ? '--local' : '--global'
+	const runGet = input?.runGitGet ?? defaultGitConfigGetRunner
+	const helperKey = `credential.https://${host}.helper`
+	const got = runGet(['config', scope, '--get', helperKey])
+	if (got.status !== 0 || !got.stdout) return false
+
+	const packageVersion = input?.packageVersion ?? readCliPackageVersion()
+	if (
+		!gitCredentialHelperNeedsRepair({
+			helper: got.stdout,
+			packageVersion,
+			readKodyVersion: input?.readKodyVersion,
+		})
+	) {
+		return false
+	}
+
+	const helperCommand =
+		input?.helperCommand ??
+		gitCredentialHelperCommand({
+			packageVersion,
+			which: input?.which,
+			execPath: input?.execPath,
+			entryPath: input?.entryPath,
+			env: input?.env,
+			readKodyVersion: input?.readKodyVersion,
+		})
+	if (helperCommand === got.stdout) return false
+
+	installGitCredentialConfig({
+		host,
+		helperCommand,
+		global: input?.global,
+		runGit: input?.runGit,
+	})
+	return true
 }
 
 export type AuthSetupGitResult = {
@@ -467,6 +698,192 @@ export async function authSetupGit(input: {
 		...(backendPath ? { backendPath } : {}),
 		expiresAt: finalMetadata.expiresAt,
 	}
+}
+
+/** Git config scopes `setup-git` may write (never `--system`). */
+export const setupGitConfigScopes = ['--global', '--local'] as const
+
+export type GitConfigScope = (typeof setupGitConfigScopes)[number]
+
+export type RemovedGitConfigEntry = {
+	scope: GitConfigScope
+	key: string
+	value: string
+}
+
+export type AuthRemoveGitResult = {
+	host: string
+	removedHelpers: Array<RemovedGitConfigEntry>
+	removedPathKeys: Array<Omit<RemovedGitConfigEntry, 'value'> & { value?: string }>
+	tokenId: string | null
+	/** Server-side revoke via DELETE /v1/tokens/current (`token:delete`). */
+	tokenRevoked: 'yes' | 'no' | 'already' | 'skipped' | 'failed'
+	tokenRevokeError?: string
+	tokenDeletedLocally: boolean
+}
+
+/**
+ * True when a URL-scoped helper value was installed by Kody setup-git /
+ * pin refresh (exact npx pin, major-only `@1`, ephemeral `_npx`, or a
+ * `kody git-credential` invocation).
+ */
+export function isKodyGitCredentialHelperValue(value: string): boolean {
+	const v = value.trim()
+	if (!v) return false
+	if (v.includes('@kodycodes/cli')) return true
+	if (isEphemeralNpxEntryPath(v)) return true
+	if (/\bgit-credential\b/.test(v) && /(^|[\/\s!])kody(\s|$)/.test(v)) return true
+	if (/\bgit-credential\b/.test(v) && /kody/i.test(v)) return true
+	return false
+}
+
+/**
+ * Inverse of {@link authSetupGit}: remove URL-scoped Kody credential helper
+ * entries for the MCP host (global + local), revoke the stored API token
+ * server-side, and delete it from the keychain/file store. Leaves `kody login`
+ * OAuth sessions alone. Idempotent when nothing is configured.
+ */
+export async function authRemoveGit(input: {
+	apiUrl?: string
+	mcpUrl?: string
+	fetchFn?: typeof fetch
+	backend?: SecretBackend
+	resolution?: StoreResolution
+	runGitGet?: GitConfigGetRunner
+	/** Used for `--unset-all` (status/stderr only). */
+	runGit?: GitConfigRunner
+}): Promise<AuthRemoveGitResult> {
+	const apiUrl = input.apiUrl || defaultApiUrl
+	const mcpUrl = input.mcpUrl || defaultMcpUrl
+	const host = gitCredentialHostFromMcpUrl(mcpUrl)
+	const runGet = input.runGitGet ?? defaultGitConfigGetRunner
+	const runGit = input.runGit ?? defaultGitConfigRunner
+
+	const helperKey = `credential.https://${host}.helper`
+	const pathKey = `credential.https://${host}.useHttpPath`
+	const removedHelpers: Array<RemovedGitConfigEntry> = []
+	const removedPathKeys: AuthRemoveGitResult['removedPathKeys'] = []
+
+	for (const scope of setupGitConfigScopes) {
+		// URL-scoped keys for this host are owned by setup-git (exact pin,
+		// major-only @1, ephemeral _npx, global kody, …). Clear them all.
+		const helpers = runGet(['config', scope, '--get-all', helperKey])
+		if (helpers.status === 0 && helpers.stdout.trim()) {
+			const values = helpers.stdout
+				.split(/\r?\n/)
+				.map((line) => line.trim())
+				.filter(Boolean)
+			const unset = runGit(['config', scope, '--unset-all', helperKey])
+			if (unset.status === 0) {
+				for (const value of values) {
+					removedHelpers.push({ scope, key: helperKey, value })
+				}
+			}
+		}
+
+		const pathGot = runGet(['config', scope, '--get-all', pathKey])
+		if (pathGot.status === 0 && pathGot.stdout.trim()) {
+			const unset = runGit(['config', scope, '--unset-all', pathKey])
+			if (unset.status === 0) {
+				removedPathKeys.push({
+					scope,
+					key: pathKey,
+					value: pathGot.stdout.trim().split(/\r?\n/)[0],
+				})
+			}
+		}
+	}
+
+	const stored = loadStoredApiToken(apiUrl, input.backend, input.resolution)
+	let tokenRevoked: AuthRemoveGitResult['tokenRevoked'] = 'skipped'
+	let tokenRevokeError: string | undefined
+	let tokenId: string | null = stored?.tokenId ?? null
+
+	if (stored?.token) {
+		try {
+			await openApiRequest({
+				token: stored.token,
+				apiUrl,
+				method: 'DELETE',
+				path: 'v1/tokens/current',
+				fetchFn: input.fetchFn,
+			})
+			tokenRevoked = 'yes'
+		} catch (error) {
+			if (error instanceof OpenApiError && (error.status === 401 || error.status === 404)) {
+				tokenRevoked = 'already'
+			} else {
+				tokenRevoked = 'failed'
+				tokenRevokeError =
+					error instanceof Error ? error.message : String(error)
+			}
+		}
+	}
+
+	const deleted = deleteStoredApiToken(apiUrl, input.backend, input.resolution)
+
+	return {
+		host,
+		removedHelpers,
+		removedPathKeys,
+		tokenId,
+		tokenRevoked,
+		...(tokenRevokeError ? { tokenRevokeError } : {}),
+		tokenDeletedLocally: deleted.deleted,
+	}
+}
+
+/** Human-readable lines for `kody auth remove-git` (always prints something). */
+export function formatAuthRemoveGitReport(result: AuthRemoveGitResult): string {
+	const lines: Array<string> = []
+	const removedAnything =
+		result.removedHelpers.length > 0 ||
+		result.removedPathKeys.length > 0 ||
+		result.tokenDeletedLocally ||
+		result.tokenRevoked === 'yes' ||
+		result.tokenRevoked === 'already'
+
+	if (!removedAnything) {
+		return [
+			`No Kody Git HTTPS credential helper or stored API token found for https://${result.host}/.`,
+			'Nothing to remove. (kody login sessions were not touched.)',
+			'',
+		].join('\n')
+	}
+
+	lines.push(`Removed Kody Git HTTPS setup for https://${result.host}/`)
+	for (const entry of result.removedHelpers) {
+		lines.push(`  ${entry.scope} ${entry.key}: ${entry.value}`)
+	}
+	for (const entry of result.removedPathKeys) {
+		lines.push(`  ${entry.scope} ${entry.key}${entry.value ? `: ${entry.value}` : ''}`)
+	}
+
+	if (result.tokenRevoked === 'yes') {
+		lines.push(
+			`Revoked API token${result.tokenId ? ` ${result.tokenId}` : ''} on the server (token:delete).`,
+		)
+	} else if (result.tokenRevoked === 'already') {
+		lines.push(
+			`API token${result.tokenId ? ` ${result.tokenId}` : ''} already revoked or expired on the server.`,
+		)
+	} else if (result.tokenRevoked === 'failed') {
+		lines.push(
+			`Could not revoke API token on the server${result.tokenRevokeError ? `: ${result.tokenRevokeError}` : '.'}`,
+		)
+	} else if (result.tokenRevoked === 'skipped') {
+		lines.push('No stored API token to revoke.')
+	}
+
+	if (result.tokenDeletedLocally) {
+		lines.push('Deleted stored API token from the OS keychain (and file fallback).')
+	} else if (result.tokenRevoked !== 'skipped') {
+		lines.push('Stored API token was already absent from the local store.')
+	}
+
+	lines.push('Left kody login sessions alone.')
+	lines.push('')
+	return lines.join('\n')
 }
 
 export { cliTokenLifetimeAliases }
