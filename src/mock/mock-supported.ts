@@ -26,6 +26,12 @@ export const mockCapabilityPaths = [
 	'kody.__mockPackageStorageSet',
 	'kody.__mockPackageStorageDelete',
 	'kody.__mockPackageStorageList',
+	// Published package-app-kit / packageStorage helpers may hop these names
+	// directly (same scratch store as the __mock* bridges above).
+	'kody.packageStorageGet',
+	'kody.packageStorageSet',
+	'kody.packageStorageDelete',
+	'kody.packageStorageList',
 	// Credential client: fake metadata + handles only (never prod secrets).
 	'kody.credentialClientOpen',
 	'kody.credentialClientOpenAll',

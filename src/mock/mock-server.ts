@@ -276,23 +276,27 @@ async function dispatchCapabilityCall(
 				fix: 'Use `kody execute --local --target mock` so the module runs in local workerd against this mock.',
 			})
 		}
-		case 'kody.__mockPackageStorageGet': {
+		case 'kody.__mockPackageStorageGet':
+		case 'kody.packageStorageGet': {
 			const key = String((args[0] as { key?: string })?.key ?? '')
 			return { value: packageStorageGet(state, ctx.packageId, key) ?? null }
 		}
-		case 'kody.__mockPackageStorageSet': {
+		case 'kody.__mockPackageStorageSet':
+		case 'kody.packageStorageSet': {
 			const input = args[0] as { key?: string; value?: unknown }
 			packageStorageSet(state, ctx.packageId, String(input?.key ?? ''), input?.value)
 			await ctx.setState(state)
 			return { ok: true }
 		}
-		case 'kody.__mockPackageStorageDelete': {
+		case 'kody.__mockPackageStorageDelete':
+		case 'kody.packageStorageDelete': {
 			const key = String((args[0] as { key?: string })?.key ?? '')
 			const deleted = packageStorageDelete(state, ctx.packageId, key)
 			await ctx.setState(state)
 			return { deleted }
 		}
-		case 'kody.__mockPackageStorageList': {
+		case 'kody.__mockPackageStorageList':
+		case 'kody.packageStorageList': {
 			return { entries: packageStorageList(state, ctx.packageId) }
 		}
 		case 'kody.credentialClientOpen': {
@@ -333,13 +337,13 @@ async function dispatchCapabilityCall(
 			}
 			const providerName = String(input.providerName ?? '').trim() || 'unknown'
 			const requestUrl = String(input.request?.url ?? '')
-			const body = JSON.stringify({
-				mock: true,
-				providerName,
-				url: requestUrl,
-				method: String(input.request?.method ?? 'GET'),
-				note: 'CLI mock authenticatedFetch fixture — not a real OAuth upstream response.',
-			})
+			const body = JSON.stringify(
+				mockAuthenticatedFetchBody({
+					providerName,
+					url: requestUrl,
+					method: String(input.request?.method ?? 'GET'),
+				}),
+			)
 			return {
 				status: 200,
 				statusText: 'OK',
@@ -404,6 +408,34 @@ function mockOpenedCredential(cred: MockSessionState['credentials'][string]) {
 		hint: 'mock',
 		// Never expose a real secret; mockValue stays session-local scratch only.
 		metadata: { mock: true },
+	}
+}
+
+/** Provider-shaped fixtures so OAuth packages can smoke end-to-end on mock. */
+function mockAuthenticatedFetchBody(input: {
+	providerName: string
+	url: string
+	method: string
+}): Record<string, unknown> {
+	const provider = input.providerName.toLowerCase()
+	if (provider === 'linkedin' || /linkedin\.com/i.test(input.url)) {
+		return {
+			sub: 'mock-linkedin-sub',
+			name: 'Mock LinkedIn User',
+			email: 'mock-linkedin@example.com',
+			picture: null,
+			mock: true,
+			providerName: input.providerName,
+			url: input.url,
+			method: input.method,
+		}
+	}
+	return {
+		mock: true,
+		providerName: input.providerName,
+		url: input.url,
+		method: input.method,
+		note: 'CLI mock authenticatedFetch fixture — not a real OAuth upstream response.',
 	}
 }
 

@@ -224,9 +224,19 @@ test('mock credentials OpenAll + authenticatedFetch + adminUserList fixtures', a
 				assert.equal(oauth.result.status, 200)
 				const decoded = JSON.parse(
 					Buffer.from(oauth.result.bodyBase64, 'base64').toString('utf8'),
-				) as { mock: boolean; providerName: string }
+				) as { mock: boolean; providerName: string; sub: string }
 				assert.equal(decoded.mock, true)
 				assert.equal(decoded.providerName, 'linkedin')
+				assert.equal(decoded.sub, 'mock-linkedin-sub')
+
+				const storage = (await call(['kody', 'packageStorageSet'], [
+					{ key: 'k', value: 1 },
+				])) as { result: { ok: boolean } }
+				assert.equal(storage.result.ok, true)
+				const got = (await call(['kody', 'packageStorageGet'], [{ key: 'k' }])) as {
+					result: { value: number }
+				}
+				assert.equal(got.result.value, 1)
 
 				const admin = (await call(['kody', 'adminUserList'], [{ page: 1 }])) as {
 					result: { users: Array<{ username: string }>; mock: boolean }
