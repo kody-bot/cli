@@ -43,6 +43,11 @@ import {
 	type WorkerdPackageModuleFile,
 } from './local-runtime-source.js'
 import { bundleLocalUserModule } from './local-bundle.js'
+import { installMockFetchShimModules } from './mock/install-mock-fetch-shim.js'
+import {
+	resolveMockFetchGateway,
+	tryHandleMockGatewayFetchCall,
+} from './mock/mock-fetch-gateway.js'
 import type { ToolCallResult } from './tool-result.js'
 import { redact } from './redact.js'
 import { ensureWorkerdBinary } from './workerd-binary.js'
@@ -87,6 +92,15 @@ export type LocalExecuteInput = {
 	/** Skip the pinned download and run this workerd binary. */
 	workerdPath?: string
 	allowPrivateNetwork?: boolean
+	/**
+	 * Hosts that may hit the real network under --target mock when
+	 * `.kody/mocks.ts` is active (never carries real secrets).
+	 */
+	passthroughHosts?: ReadonlyArray<string>
+	/** Package root for optional `.kody/mocks.ts` (mock only). */
+	packageRoot?: string
+	/** `--target` for mock fetch gateway gating (default prod → no mocks). */
+	target?: 'prod' | 'mock'
 	onStatus?: (message: string) => void
 }
 
@@ -173,10 +187,24 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 			conversationId: input.conversationId,
 		})
 	try {
+		const mockFetchGateway = await resolveMockFetchGateway({
+			target: input.target ?? 'prod',
+			packageRoot: input.packageRoot,
+			passthroughHosts: input.passthroughHosts,
+			allowPrivateNetwork: input.allowPrivateNetwork,
+			onStatus: input.onStatus,
+		})
 		bridge = await startBridge({
 			runSecret,
-			forward: (call, signal) =>
-				callCapabilityProxy({
+			forward: async (call, signal) => {
+				const mocked = tryHandleMockGatewayFetchCall({
+					gateway: mockFetchGateway,
+					path: call.path,
+					args: call.args,
+					signal,
+				})
+				if (mocked) return await mocked
+				return await callCapabilityProxy({
 					...client,
 					...call,
 					conversationId: input.conversationId,
@@ -184,19 +212,28 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 						? { credentials: input.credentials }
 						: {}),
 					signal,
-				}),
+				})
+			},
 		})
 		const files = { entry: 'entry.js', user: 'main.js', runtime: 'runtime.js' }
-		const gatewayFetchShimModules = packageGraph.modules
+		let packageModules = await writePackageModuleFiles(workDir, packageGraph)
+		let gatewayFetchShimModules = packageGraph.modules
 			.map((module) => module.name)
 			.filter((name) => name === localExecuteGatewayFetchShimModuleName)
+		if (mockFetchGateway) {
+			const installed = await installMockFetchShimModules({
+				workDir,
+				packageModules,
+			})
+			packageModules = installed.packageModules
+			gatewayFetchShimModules = installed.sideEffectModules
+		}
 		await writeFile(
 			join(workDir, files.entry),
 			createLocalEntrySource({ sideEffectModules: gatewayFetchShimModules }),
 		)
 		await writeFile(join(workDir, files.user), code)
 		await writeFile(join(workDir, files.runtime), createLocalRuntimeModuleSource())
-		const packageModules = await writePackageModuleFiles(workDir, packageGraph)
 		const configPath = join(workDir, 'config.capnp')
 		await writeFile(
 			configPath,

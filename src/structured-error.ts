@@ -7,6 +7,7 @@ import type { KodyTarget } from './target.js'
 
 export type StructuredErrorCode =
 	| 'not_implemented_in_mock'
+	| 'unmocked_request'
 	| 'unresolved_import'
 	| 'missing_secret'
 	| 'bundle_failed'

@@ -32,6 +32,12 @@ import {
 } from './local-package-graph.js'
 import { createWorkerdConfig } from './local-runtime-source.js'
 import { buildLocalPackageContext } from './local-package-run.js'
+import { installMockFetchShimModules } from './mock/install-mock-fetch-shim.js'
+import {
+	resolveMockFetchGateway,
+	tryHandleMockGatewayFetchCall,
+	type MockFetchGateway,
+} from './mock/mock-fetch-gateway.js'
 import {
 	createPackageAppEntrySource,
 	createPackageLocalRuntimeModuleSource,
@@ -67,6 +73,11 @@ export type PackageAppDevOptions = {
 		fetchFn?: typeof fetch
 	}
 	allowPrivateNetwork?: boolean
+	/**
+	 * Hosts that may hit the real network under --target mock when
+	 * `.kody/mocks.ts` is active (never carries real secrets).
+	 */
+	passthroughHosts?: ReadonlyArray<string>
 	workerdPath?: string
 	fetchFn?: typeof fetch
 	/** Hot reload via fs.watch (default true). One-shot `dev fetch` turns this off. */
@@ -144,14 +155,30 @@ export async function startPackageAppDev(
 		appBasePath,
 	})
 
+	const mockFetchGateway = await resolveMockFetchGateway({
+		target: options.target,
+		packageRoot: options.manifest.root,
+		passthroughHosts: options.passthroughHosts,
+		allowPrivateNetwork: options.allowPrivateNetwork,
+		onStatus: options.onStatus,
+	})
+
 	bridge = await startBridge({
 		runSecret,
-		forward: (call, signal) =>
-			callCapabilityProxy({
+		forward: async (call, signal) => {
+			const mocked = tryHandleMockGatewayFetchCall({
+				gateway: mockFetchGateway,
+				path: call.path,
+				args: call.args,
+				signal,
+			})
+			if (mocked) return await mocked
+			return await callCapabilityProxy({
 				...client,
 				...call,
 				signal,
-			}),
+			})
+		},
 	})
 
 	const entryPath = resolvePackagePath(options.manifest, options.manifest.app.entry)
@@ -171,6 +198,7 @@ export async function startPackageAppDev(
 			org: options.org,
 			fetchFn: options.fetchFn,
 			depResolve: options.depResolve,
+			mockFetchGateway,
 			onStatus: options.onStatus,
 		})
 		await restartWorkerd()
@@ -349,6 +377,7 @@ async function writeWorkerFiles(input: {
 	org?: string
 	fetchFn?: typeof fetch
 	depResolve?: PackageAppDevOptions['depResolve']
+	mockFetchGateway?: MockFetchGateway
 	onStatus?: (message: string) => void
 }): Promise<void> {
 	await mkdir(input.workDir, { recursive: true })
@@ -362,9 +391,23 @@ async function writeWorkerFiles(input: {
 		onStatus: input.onStatus,
 	})
 	const files = { entry: 'entry.js', user: 'main.js', runtime: 'runtime.js' }
-	const gatewayFetchShimModules = packageGraph.modules
+	let packageModules = await writePackageModuleFiles(
+		input.workDir,
+		packageGraph,
+		writeFile,
+		join,
+	)
+	let gatewayFetchShimModules = packageGraph.modules
 		.map((module) => module.name)
 		.filter((name) => name === localExecuteGatewayFetchShimModuleName)
+	if (input.mockFetchGateway) {
+		const installed = await installMockFetchShimModules({
+			workDir: input.workDir,
+			packageModules,
+		})
+		packageModules = installed.packageModules
+		gatewayFetchShimModules = installed.sideEffectModules
+	}
 	await writeFile(
 		join(input.workDir, files.entry),
 		createPackageAppEntrySource({ sideEffectModules: gatewayFetchShimModules }),
@@ -376,12 +419,6 @@ async function writeWorkerFiles(input: {
 			packageContext: input.packageContext,
 			mockStorage: input.mockStorage,
 		}),
-	)
-	const packageModules = await writePackageModuleFiles(
-		input.workDir,
-		packageGraph,
-		writeFile,
-		join,
 	)
 	await writeFile(
 		join(input.workDir, 'config.capnp'),

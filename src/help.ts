@@ -249,6 +249,14 @@ ${orgBlock}
              params that would run without invoking (safe against prod side
              effects). Does not apply to serve/fetch/check.
 
+  --passthrough <host,…>
+             With \`--target mock\` and a package \`.kody/mocks.ts\`, allow
+             listed hosts to use the real network (credentials stay fake —
+             never carries real secrets). Unmatched hosts fail with
+             \`unmocked_request\` plus a paste-ready MSW handler stub.
+             Ignored on \`--target prod\`. Packages without \`.kody/mocks.ts\`
+             keep native workerd fetch.
+
   kody dev   Local testing for unpublished packages. Serves \`kody.app.entry\`
              on localhost via workerd with hot reload (mount-stripped path;
              packageContext.hostedUrl / appBasePath point at localhost).
@@ -261,7 +269,9 @@ ${orgBlock}
              bundles + light publish validations without running. On
              \`--target mock\`, stamped \`kody:@\` dependency *source* is
              resolved from prod package-graph when a login/API token is
-             available (storage/credentials stay on the mock). Share
+             available (storage/credentials stay on the mock). Optional
+             \`.kody/mocks.ts\` exports MSW \`handlers\` for outbound fetch
+             mocking (Node gateway; not published with the package). Share
              previews are out of scope.
 
 Environment:
