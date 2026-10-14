@@ -11,9 +11,14 @@
  * hosts fail closed with `unmocked_request`.
  */
 
-import { getResponse, isPassthroughResponse, type RequestHandler } from 'msw'
+import type { RequestHandler } from 'msw'
 import { StructuredCliError } from '../structured-error.js'
 import type { KodyTarget } from '../target.js'
+import {
+	type EnsureMswInput,
+	importMsw,
+	mswPackageSpec,
+} from './ensure-msw.js'
 import { loadPackageMocks } from './load-package-mocks.js'
 
 export type MockGatewayFetchRequest = {
@@ -68,6 +73,7 @@ export function createMockFetchGateway(input: {
 	/** When true, unmatched hosts use real network (no mocks.ts). */
 	passthroughAll?: boolean
 	fetchFn?: typeof fetch
+	msw?: EnsureMswInput
 }): MockFetchGateway {
 	const passthroughHosts = input.passthroughHosts ?? []
 	const allowPrivateNetwork = input.allowPrivateNetwork === true
@@ -90,6 +96,7 @@ export function createMockFetchGateway(input: {
 				request,
 				fetchFn,
 				signal,
+				msw: input.msw,
 			})
 		},
 		handleAuthenticatedFetch: async (args, signal) => {
@@ -104,6 +111,7 @@ export function createMockFetchGateway(input: {
 				request,
 				fetchFn,
 				signal,
+				msw: input.msw,
 			})
 		},
 	}
@@ -117,6 +125,7 @@ export async function dispatchMockGatewayFetch(input: {
 	request: MockGatewayFetchRequest
 	fetchFn?: typeof fetch
 	signal?: AbortSignal
+	msw?: EnsureMswInput
 }): Promise<MockGatewayFetchResult> {
 	const method = (input.request.method ?? 'GET').toUpperCase()
 	const url = String(input.request.url ?? '')
@@ -162,6 +171,7 @@ export async function dispatchMockGatewayFetch(input: {
 			signal: input.signal,
 		}
 		const request = new Request(parsed.href, requestInit)
+		const { getResponse, isPassthroughResponse } = await importMsw(input.msw)
 		const response = await getResponse([...input.handlers], request)
 		if (response && !isPassthroughResponse(response)) {
 			return await serializeResponse(response)
@@ -403,9 +413,19 @@ export async function resolveMockFetchGateway(input: {
 	passthroughHosts?: ReadonlyArray<string>
 	allowPrivateNetwork?: boolean
 	onStatus?: (message: string) => void
+	msw?: EnsureMswInput
 }): Promise<MockFetchGateway | undefined> {
 	if (input.target !== 'mock') return undefined
-	const loaded = input.packageRoot ? await loadPackageMocks(input.packageRoot) : null
+	const msw: EnsureMswInput = {
+		...input.msw,
+		onInstall: (spec) => {
+			input.onStatus?.(`Installing ${spec} for --target mock…`)
+			input.msw?.onInstall?.(spec)
+		},
+	}
+	const loaded = input.packageRoot
+		? await loadPackageMocks(input.packageRoot, msw)
+		: null
 	if (loaded) {
 		input.onStatus?.(
 			`Loaded ${loaded.handlers.length} MSW handler${loaded.handlers.length === 1 ? '' : 's'} from .kody/mocks.ts (outbound fetch fail-closed on mock).`,
@@ -415,6 +435,7 @@ export async function resolveMockFetchGateway(input: {
 			passthroughHosts: input.passthroughHosts,
 			allowPrivateNetwork: input.allowPrivateNetwork,
 			passthroughAll: false,
+			msw,
 		})
 	}
 	if (input.passthroughHosts?.length) {
@@ -429,3 +450,6 @@ export async function resolveMockFetchGateway(input: {
 		passthroughAll: true,
 	})
 }
+
+/** Exported for tests / docs that mention the on-demand pin. */
+export { mswPackageSpec }

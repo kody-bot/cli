@@ -54,11 +54,11 @@
 		"add-mcp": "^2.4.0",
 		"es-module-lexer": "^3.0.3",
 		"esbuild": "^0.25.12",
-		"msw": "^3.0.3",
 		"ps-list": "^9.0.0"
 	},
 	"devDependencies": {
 		"@types/node": "^24.5.2",
+		"msw": "3.0.3",
 		"tsx": "^4.20.5",
 		"typescript": "^5.9.2"
 	}

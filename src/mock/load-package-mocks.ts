@@ -8,14 +8,16 @@
 
 import * as esbuild from 'esbuild'
 import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { RequestHandler } from 'msw'
 import { StructuredCliError } from '../structured-error.js'
-
-const requireFromCli = createRequire(import.meta.url)
+import {
+	type EnsureMswInput,
+	mswPackageSpec,
+	resolveMswEntryHref,
+} from './ensure-msw.js'
 
 export const packageMocksRelativePath = '.kody/mocks.ts'
 
@@ -42,6 +44,7 @@ export async function resolvePackageMocksPath(
  */
 export async function loadPackageMocks(
 	packageRoot: string,
+	msw: EnsureMswInput = {},
 ): Promise<LoadedPackageMocks | null> {
 	const path = await resolvePackageMocksPath(packageRoot)
 	if (!path) return null
@@ -49,7 +52,7 @@ export async function loadPackageMocks(
 	const workDir = await mkdtemp(join(tmpdir(), 'kody-mocks-'))
 	const outfile = join(workDir, 'mocks.mjs')
 	try {
-		const mswHref = pathToFileURL(requireFromCli.resolve('msw')).href
+		const mswHref = await resolveMswEntryHref(msw)
 		let result: esbuild.BuildResult
 		try {
 			result = await esbuild.build({
@@ -61,7 +64,7 @@ export async function loadPackageMocks(
 				outfile,
 				write: true,
 				logLevel: 'silent',
-				// Leave MSW external; rewrite the import to the CLI-resolved absolute URL.
+				// Leave MSW external; rewrite the import to the cache-resolved absolute URL.
 				external: ['msw', 'msw/*'],
 			})
 		} catch (error) {
@@ -99,7 +102,9 @@ export async function loadPackageMocks(
 			message: `Could not load ${packageMocksRelativePath}.`,
 			target: 'mock',
 			where: path,
-			fix: 'Ensure the file exports MSW handlers and that `msw` is resolvable from the package (or rely on the CLI’s dependency).',
+			fix:
+				`Ensure the file exports MSW handlers. The CLI installs ${mswPackageSpec} into the Kody ` +
+				`cache on first --target mock use that needs MSW.`,
 			details: {
 				cause: error instanceof Error ? error.message : String(error),
 			},
@@ -121,7 +126,9 @@ function bundleFailedError(path: string, error: unknown): StructuredCliError {
 		message: `Could not bundle ${packageMocksRelativePath} for --target mock.${formatted.summary ? ` ${formatted.summary}` : ''}`,
 		target: 'mock',
 		where: formatted.where ?? path,
-		fix: 'Fix TypeScript/syntax errors in .kody/mocks.ts and retry. Import handlers from `msw` (provided by @kodycodes/cli).',
+		fix:
+			`Fix TypeScript/syntax errors in .kody/mocks.ts and retry. Import handlers from \`msw\` ` +
+			`(the CLI installs ${mswPackageSpec} into the Kody cache on demand).`,
 		details: { errors: formatted.errors },
 	})
 }
