@@ -7,6 +7,7 @@ import {
 } from '../src/remote-execute.js'
 import {
 	buildExecuteInvokePassthroughSource,
+	isPublishedPackageInvokeSpecifier,
 	parseExecuteInvokeSpecifier,
 } from '../src/invoke-passthrough.js'
 
@@ -17,6 +18,15 @@ test('parseExecuteInvokeSpecifier normalizes @scope and hash exports', () => {
 	)
 	assert.equal(parseExecuteInvokeSpecifier('@scope/pkg#export'), 'kody:@scope/pkg/export')
 	assert.throws(() => parseExecuteInvokeSpecifier('https://example.com/x'), /Unsupported/)
+})
+
+test('isPublishedPackageInvokeSpecifier distinguishes local export keys', () => {
+	assert.equal(isPublishedPackageInvokeSpecifier('kody:@scope/pkg/export'), true)
+	assert.equal(isPublishedPackageInvokeSpecifier('@scope/pkg#export'), true)
+	assert.equal(isPublishedPackageInvokeSpecifier('@scope/pkg/export'), true)
+	assert.equal(isPublishedPackageInvokeSpecifier('./greet'), false)
+	assert.equal(isPublishedPackageInvokeSpecifier('.'), false)
+	assert.equal(isPublishedPackageInvokeSpecifier('https://example.com/x'), false)
 })
 
 test('buildExecuteInvokePassthroughSource matches the MCP thin glue shape', () => {

@@ -59,3 +59,17 @@ export default async function main(params) {
 export function resolveExecuteInvokeCode(invoke: string): string {
 	return buildExecuteInvokePassthroughSource(parseExecuteInvokeSpecifier(invoke))
 }
+
+/**
+ * True for published-package invoke forms (`kody:@scope/pkg/export`,
+ * `@scope/pkg#export`). Local package.json#exports keys (`./greet`) are false
+ * so `--invoke` from a package directory can route correctly.
+ */
+export function isPublishedPackageInvokeSpecifier(raw: string): boolean {
+	try {
+		parseExecuteInvokeSpecifier(raw)
+		return true
+	} catch {
+		return false
+	}
+}

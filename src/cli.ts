@@ -31,6 +31,10 @@ import { refreshGitCredentialHelperPinIfNeeded } from './setup-git.js'
 import { deleteCredentials, listStoredOrgs, loadCredentials } from './store.js'
 import { formatToolResult } from './tool-result.js'
 import { resolveLocalExecuteBearer } from './local-execute-auth.js'
+import {
+	isPublishedPackageInvokeSpecifier,
+	resolveExecuteInvokeCode,
+} from './invoke-passthrough.js'
 import { assertLocalExecuteNodeEngine } from './node-engine.js'
 import { readPackageVersion } from './package-info.js'
 import { redactError } from './redact.js'
@@ -807,7 +811,6 @@ async function dispatch(
 			let publishedInvokeCode: string | undefined
 			if (local && invoke !== undefined && !localPackageInvoke) {
 				try {
-					const { resolveExecuteInvokeCode } = await import('./invoke-passthrough.js')
 					publishedInvokeCode = resolveExecuteInvokeCode(invoke)
 				} catch {
 					throw new Error(
@@ -1406,7 +1409,11 @@ async function tryResolveLocalPackageInvoke(
 	invoke: string,
 ): Promise<{ modulePath: string; kodyId: string; packageRoot: string } | null> {
 	const trimmed = invoke.trim()
-	if (!trimmed || trimmed.startsWith('kody:@')) return null
+	if (!trimmed) return null
+	// Published forms (`kody:@…`, `@scope/pkg#export`) must mint passthrough —
+	// never treat them as package.json#exports keys (Bugbot: hash invoke in
+	// package dirs threw before resolveExecuteInvokeCode).
+	if (isPublishedPackageInvokeSpecifier(trimmed)) return null
 	const { loadPackageManifest, resolveExportModulePath } =
 		await import('./package-manifest.js')
 	const { StructuredCliError } = await import('./structured-error.js')

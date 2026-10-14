@@ -6,8 +6,10 @@
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
+import { runCli } from '../src/cli.js'
 import {
 	detectCredentialedFetchInSource,
 	mocksSuggestionDetail,
@@ -20,6 +22,8 @@ import {
 	buildHandlerStub,
 	unmockedRequestError,
 } from '../src/mock/mock-fetch-gateway.js'
+
+const samplePackageRoot = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/sample-package')
 
 test('unmocked_request includes ready-to-paste stub + .kody/mocks.ts pointer', () => {
 	const error = unmockedRequestError('POST', 'https://api.example.com/v1/items')
@@ -45,6 +49,30 @@ test('--invoke kody:@… mints the same thin passthrough as a --code wrapper', (
 		resolveExecuteInvokeCode('@scope/pkg#export'),
 		resolveExecuteInvokeCode('kody:@scope/pkg/export'),
 	)
+})
+
+test('execute --local --invoke @scope/pkg#export works from a package directory', async () => {
+	const previous = process.cwd()
+	let stderr = ''
+	try {
+		process.chdir(samplePackageRoot)
+		const code = await runCli(
+			['execute', '--local', '--invoke', '@scope/pkg#export', '--params', '{}'],
+			{
+				stdout: () => {},
+				stderr: (text) => {
+					stderr += text
+				},
+			},
+		)
+		assert.equal(code, 1)
+		// Must mint published passthrough — not treat # form as a missing local export.
+		assert.doesNotMatch(stderr, /No package export/)
+		assert.doesNotMatch(stderr, /neither a local package export nor a published package specifier/)
+		assert.doesNotMatch(stderr, /dev_surface_missing/)
+	} finally {
+		process.chdir(previous)
+	}
 })
 
 test('detectCredentialedFetchInSource finds createAuthenticatedFetch and credential imports', async () => {
