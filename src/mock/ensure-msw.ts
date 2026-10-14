@@ -160,24 +160,23 @@ async function npmInstallMsw(
 			],
 			{
 				cwd: stagingDir,
-				env: {
-					...env,
-					CI: 'true',
-					npm_config_yes: 'true',
-					npm_config_fund: 'false',
-					npm_config_audit: 'false',
-					npm_config_update_notifier: 'false',
-					// Never install into a user project / global prefix.
-					npm_config_global: 'false',
-				},
-				stdio: ['ignore', 'pipe', 'pipe'],
+				env: npmInstallEnv(env),
+				// Ignore stdout so a full pipe buffer cannot hang npm; keep stderr
+				// for the failure message.
+				stdio: ['ignore', 'ignore', 'pipe'],
 			},
 		)
 		let stderr = ''
 		child.stderr?.on('data', (chunk: Buffer) => {
 			stderr += chunk.toString('utf8')
+			if (stderr.length > 64_000) stderr = stderr.slice(-64_000)
 		})
+		const timer = setTimeout(() => {
+			child.kill('SIGTERM')
+			reject(new Error(`npm install ${mswPackageSpec} timed out after 120s`))
+		}, 120_000)
 		child.on('error', (error) => {
+			clearTimeout(timer)
 			reject(
 				new Error(
 					`could not spawn npm (${error instanceof Error ? error.message : String(error)})`,
@@ -185,6 +184,7 @@ async function npmInstallMsw(
 			)
 		})
 		child.on('close', (code) => {
+			clearTimeout(timer)
 			if (code === 0) {
 				resolve()
 				return
@@ -193,6 +193,49 @@ async function npmInstallMsw(
 			reject(new Error(detail))
 		})
 	})
+}
+
+/**
+ * Minimal env for the on-demand install: keep PATH/home/proxy/certs, drop user
+ * `npm_config_*` so verbose/json logging cannot flood or change behavior.
+ * Registry/cache overrides are re-applied when set (tests / offline mirrors).
+ */
+function npmInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	const keep = new Set([
+		'PATH',
+		'HOME',
+		'USERPROFILE',
+		'TMPDIR',
+		'TEMP',
+		'TMP',
+		'HTTP_PROXY',
+		'HTTPS_PROXY',
+		'NO_PROXY',
+		'ALL_PROXY',
+		'NODE_EXTRA_CA_CERTS',
+		'SSL_CERT_FILE',
+		'SSL_CERT_DIR',
+	])
+	const out: NodeJS.ProcessEnv = {}
+	for (const [key, value] of Object.entries(env)) {
+		if (value === undefined) continue
+		if (keep.has(key.toUpperCase())) out[key] = value
+	}
+	if (env.npm_config_registry) out.npm_config_registry = env.npm_config_registry
+	if (env.npm_config_cache) out.npm_config_cache = env.npm_config_cache
+	if (env.NPM_CONFIG_REGISTRY) out.NPM_CONFIG_REGISTRY = env.NPM_CONFIG_REGISTRY
+	if (env.NPM_CONFIG_CACHE) out.NPM_CONFIG_CACHE = env.NPM_CONFIG_CACHE
+	return {
+		...out,
+		CI: 'true',
+		npm_config_yes: 'true',
+		npm_config_fund: 'false',
+		npm_config_audit: 'false',
+		npm_config_update_notifier: 'false',
+		npm_config_loglevel: 'error',
+		// Never install into a user project / global prefix.
+		npm_config_global: 'false',
+	}
 }
 
 function mswInstallFailedError(input: {
