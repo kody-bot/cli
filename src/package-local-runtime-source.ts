@@ -63,6 +63,14 @@ export function packageStorage() {
 			const result = await __kodyCall(['kody', '__mockPackageStorageList'], [{}]);
 			return result?.entries ?? [];
 		},
+		/** Scratch SQLite bucket (same shape hosted packageStorage().sql returns). */
+		async sql(query, bindings = []) {
+			const result = await __kodyCall(
+				['kody', '__mockPackageStorageSql'],
+				[{ query: String(query), bindings: Array.isArray(bindings) ? bindings : [] }],
+			);
+			return result ?? { rows: [] };
+		},
 	};
 }
 `

@@ -40,6 +40,26 @@ export default async () => {
 	)
 })
 
+test('listSavedPackageImports ignores kody:@ specifiers inside strings and comments', () => {
+	assert.deepEqual(
+		listSavedPackageImports(`
+import post from 'kody:@kentcdodds/discord/post-message'
+const hint = "import scan from 'kody:@kentcdodds/gift-cliff-ops/scan'"
+const hint2 = 'from "kody:@kentcdodds/gift-cliff-ops/settings"'
+// import dead from 'kody:@dead/pkg/x'
+/* import block from 'kody:@dead/pkg/y' */
+export default async () => post
+`),
+		['kody:@kentcdodds/discord/post-message'],
+	)
+	assert.equal(
+		hasLiteralDynamicSavedPackageImports(
+			`const docs = "await import('kody:@me/p/e')"; export default async () => 1`,
+		),
+		false,
+	)
+})
+
 test('fetchLocalPackageGraph rejects literal dynamic kody:@ imports before calling the API', async () => {
 	const code = `const m = await import('kody:@me/skills/get')
 export default async () => m`

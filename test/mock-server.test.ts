@@ -238,6 +238,24 @@ test('mock credentials OpenAll + authenticatedFetch + adminUserList fixtures', a
 				}
 				assert.equal(got.result.value, 1)
 
+				const create = (await call(['kody', 'packageStorageSql'], [
+					{
+						query:
+							'CREATE TABLE IF NOT EXISTS sightings (file_id TEXT PRIMARY KEY, name TEXT NOT NULL)',
+					},
+				])) as { result: { rows: Array<unknown> } }
+				assert.deepEqual(create.result.rows, [])
+				await call(['kody', '__mockPackageStorageSql'], [
+					{
+						query: 'INSERT INTO sightings (file_id, name) VALUES (?, ?)',
+						bindings: ['f1', 'a.txt'],
+					},
+				])
+				const selected = (await call(['kody', 'packageStorageSql'], [
+					{ query: 'SELECT file_id, name FROM sightings ORDER BY file_id' },
+				])) as { result: { rows: Array<{ file_id: string; name: string }> } }
+				assert.deepEqual(selected.result.rows, [{ file_id: 'f1', name: 'a.txt' }])
+
 				const admin = (await call(['kody', 'adminUserList'], [{ page: 1 }])) as {
 					result: { users: Array<{ username: string }>; mock: boolean }
 				}

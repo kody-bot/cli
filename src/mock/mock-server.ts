@@ -18,11 +18,14 @@ import {
 	mockOpenApiOperationIds,
 } from './mock-supported.js'
 import {
+	closePackageSqlDbsForSession,
+	defaultMockSessionId,
 	loadMockSession,
 	packageStorageDelete,
 	packageStorageGet,
 	packageStorageList,
 	packageStorageSet,
+	packageStorageSql,
 	persistMockSession,
 	type MockSessionState,
 } from './mock-storage.js'
@@ -57,21 +60,30 @@ export function mintMockApiToken(sessionId: string): string {
 }
 
 export async function startMockServer(options: MockServerOptions = {}): Promise<MockServer> {
+	const sessionIdForClose =
+		options.sessionId?.trim() || defaultMockSessionId(options.env ?? process.env)
+	if (options.resetStorage) {
+		// Close SQLite handles before wiping the session directory so reset
+		// does not leave a live connection to a deleted file.
+		closePackageSqlDbsForSession(sessionIdForClose)
+	}
 	let state = await loadMockSession({
 		sessionId: options.sessionId,
 		env: options.env,
 		reset: options.resetStorage,
 	})
 	const packageId = options.packageId ?? `local-${state.sessionId}`
+	const env = options.env
 
 	const server = createServer((req, res) => {
 		void handleRequest(req, res, {
 			getState: () => state,
 			setState: async (next) => {
 				state = next
-				await persistMockSession(state, options.env)
+				await persistMockSession(state, env)
 			},
 			packageId,
+			env,
 		})
 	})
 
@@ -131,6 +143,7 @@ type RequestCtx = {
 	getState: () => MockSessionState
 	setState: (state: MockSessionState) => Promise<void>
 	packageId: string
+	env?: NodeJS.ProcessEnv
 }
 
 async function handleRequest(
@@ -298,6 +311,21 @@ async function dispatchCapabilityCall(
 		case 'kody.__mockPackageStorageList':
 		case 'kody.packageStorageList': {
 			return { entries: packageStorageList(state, ctx.packageId) }
+		}
+		case 'kody.__mockPackageStorageSql':
+		case 'kody.packageStorageSql': {
+			const input = (args[0] ?? {}) as { query?: string; bindings?: Array<unknown> }
+			const query = String(input.query ?? '')
+			if (!query.trim()) {
+				throw new Error('packageStorage().sql requires a non-empty query string.')
+			}
+			return packageStorageSql(
+				state,
+				ctx.packageId,
+				query,
+				Array.isArray(input.bindings) ? input.bindings : [],
+				ctx.env,
+			)
 		}
 		case 'kody.credentialClientOpen': {
 			const input = (args[0] ?? {}) as { key?: string; name?: string }

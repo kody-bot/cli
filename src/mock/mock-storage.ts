@@ -3,8 +3,10 @@
  * session directory under the user cache. Reset with `--reset-storage`.
  */
 
+import { mkdirSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { userCacheDir } from '../workerd-binary.js'
 
 export type MockStorageBucket = {
@@ -187,4 +189,81 @@ export function packageStorageList(
 ): Array<{ key: string; value: unknown }> {
 	const rows = state.packageStorage[packageId]?.rows ?? {}
 	return Object.entries(rows).map(([key, value]) => ({ key, value }))
+}
+
+const openSqlDbs = new Map<string, DatabaseSync>()
+
+function packageSqlDbPath(
+	state: MockSessionState,
+	packageId: string,
+	env: NodeJS.ProcessEnv = process.env,
+): string {
+	const safe = packageId.replace(/[^a-zA-Z0-9._-]+/g, '_')
+	const dir = join(mockSessionRoot(state.sessionId, env), 'sqlite')
+	mkdirSync(dir, { recursive: true })
+	return join(dir, `${safe || 'package'}.sqlite`)
+}
+
+function openPackageSqlDb(
+	state: MockSessionState,
+	packageId: string,
+	env: NodeJS.ProcessEnv = process.env,
+): DatabaseSync {
+	const path = packageSqlDbPath(state, packageId, env)
+	const cacheKey = `${state.sessionId}:${path}`
+	const existing = openSqlDbs.get(cacheKey)
+	if (existing) return existing
+	const db = new DatabaseSync(path)
+	openSqlDbs.set(cacheKey, db)
+	return db
+}
+
+/** Close cached SQLite handles for a session (after --reset-storage). */
+export function closePackageSqlDbsForSession(sessionId: string): void {
+	for (const [key, db] of openSqlDbs) {
+		if (!key.startsWith(`${sessionId}:`)) continue
+		try {
+			db.close()
+		} catch {
+			// already closed
+		}
+		openSqlDbs.delete(key)
+	}
+}
+
+/**
+ * Run SQL against the package's scratch SQLite file.
+ * Returns `{ rows }` so callers that accept either an array or `{ rows }` work
+ * (same shape dropbox-delete-me / data-table expect from hosted packageStorage).
+ */
+export function packageStorageSql(
+	state: MockSessionState,
+	packageId: string,
+	query: string,
+	bindings: Array<unknown> = [],
+	env: NodeJS.ProcessEnv = process.env,
+): { rows: Array<Record<string, unknown>>; changes?: number } {
+	const db = openPackageSqlDb(state, packageId, env)
+	const stmt = db.prepare(query)
+	const params: Array<null | number | bigint | string | Uint8Array> = bindings.map((value) => {
+		if (value === null) return null
+		if (typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint') {
+			return value
+		}
+		if (typeof value === 'boolean') return value ? 1 : 0
+		if (value instanceof Uint8Array) return value
+		return String(value)
+	})
+	const trimmed = query.trimStart().toLowerCase()
+	const isQuery =
+		trimmed.startsWith('select') ||
+		trimmed.startsWith('with') ||
+		trimmed.startsWith('pragma') ||
+		trimmed.startsWith('explain')
+	if (isQuery) {
+		const rows = stmt.all(...params) as Array<Record<string, unknown>>
+		return { rows }
+	}
+	const info = stmt.run(...params) as { changes?: number }
+	return { rows: [], changes: typeof info.changes === 'number' ? info.changes : 0 }
 }

@@ -45,10 +45,62 @@ export type LocalPackageGraph = {
 const staticImportPattern =
 	/(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+)["'](kody:@[^"']+)["']/g
 
+/**
+ * True when `index` sits inside a string literal or comment. Used so
+ * doc/example snippets like `from 'kody:@scope/pkg/export'` inside a string
+ * are not treated as real imports (gift-cliff-ops format/digest helpers;
+ * kentcdodds/kody#2808).
+ */
+export function isInsideStringOrComment(code: string, index: number): boolean {
+	let i = 0
+	while (i < index && i < code.length) {
+		const ch = code[i]!
+		const next = code[i + 1]
+		if (ch === '/' && next === '/') {
+			i += 2
+			while (i < code.length && code[i] !== '\n') i += 1
+			if (i >= index) return true
+			continue
+		}
+		if (ch === '/' && next === '*') {
+			i += 2
+			while (i < code.length && !(code[i] === '*' && code[i + 1] === '/')) {
+				if (i >= index) return true
+				i += 1
+			}
+			i += 2
+			if (i > index) return true
+			continue
+		}
+		if (ch === '"' || ch === "'" || ch === '`') {
+			const quote = ch
+			i += 1
+			while (i < code.length) {
+				if (i >= index) return true
+				if (code[i] === '\\') {
+					i += 2
+					continue
+				}
+				if (code[i] === quote) {
+					i += 1
+					break
+				}
+				i += 1
+			}
+			if (i > index) return true
+			continue
+		}
+		i += 1
+	}
+	return false
+}
+
 /** Unique `kody:@…` specifiers referenced by static or literal-dynamic imports. */
 export function listSavedPackageImports(code: string): Array<string> {
 	const found = new Set<string>()
 	for (const match of code.matchAll(staticImportPattern)) {
+		if (match.index === undefined) continue
+		if (isInsideStringOrComment(code, match.index)) continue
 		const specifier = match[1]
 		if (specifier) found.add(specifier)
 	}
@@ -65,7 +117,12 @@ export function hasSavedPackageImports(code: string): boolean {
  * time without a runtime resolver.
  */
 export function hasLiteralDynamicSavedPackageImports(code: string): boolean {
-	return /\bimport\s*\(\s*["']kody:@[^"']+["']\s*\)/.test(code)
+	for (const match of code.matchAll(/\bimport\s*\(\s*["']kody:@[^"']+["']\s*\)/g)) {
+		if (match.index === undefined) continue
+		if (isInsideStringOrComment(code, match.index)) continue
+		return true
+	}
+	return false
 }
 
 export class LocalPackageGraphError extends Error {
