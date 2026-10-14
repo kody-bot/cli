@@ -12,6 +12,7 @@ import {
 } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { notImplementedInMock, StructuredCliError } from '../structured-error.js'
+import { unmockedRequestError } from './mock-fetch-gateway.js'
 import {
 	isMockCapabilityPath,
 	isMockOpenApiOperation,
@@ -369,7 +370,7 @@ async function dispatchCapabilityCall(
 		case 'kody.gatewayFetch':
 		case 'kody.gatewayFetchStream': {
 			// Primary path is the Node MSW bridge (local-package-run / local-execute).
-			// If a call reaches the HTTP mock, fail closed — never return placeholder shapes.
+			// If a call reaches the HTTP mock, fail closed with the same paste-ready stub.
 			const request = (args[0] ?? {}) as {
 				request?: { url?: string; method?: string }
 				url?: string
@@ -378,15 +379,15 @@ async function dispatchCapabilityCall(
 			const nested = request.request ?? request
 			const method = String(nested.method ?? 'GET').toUpperCase()
 			const url = String(nested.url ?? '')
+			if (url) throw unmockedRequestError(method, url)
 			throw new StructuredCliError({
 				code: 'unmocked_request',
-				message: url
-					? `Unmocked ${method} ${url} under --target mock.`
-					: `Unmocked ${pathKey} under --target mock (missing request.url).`,
+				message: `Unmocked ${pathKey} under --target mock (missing request.url).`,
 				target: 'mock',
-				where: url ? `${method} ${url}` : pathKey,
+				where: pathKey,
 				fix:
-					'Add a handler in .kody/mocks.ts for this URL, or pass --passthrough <host> for real network without secrets. createAuthenticatedFetch, credential().fetch, gatewayFetch, and gatewayFetchStream go through the same MSW gateway.',
+					'Pass request.url, or add handlers in .kody/mocks.ts. createAuthenticatedFetch, credential().fetch, gatewayFetch, and gatewayFetchStream go through the same MSW gateway.',
+				details: { mocksPath: '.kody/mocks.ts' },
 			})
 		}
 		case 'kody.adminUserList': {

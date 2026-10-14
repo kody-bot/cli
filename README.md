@@ -234,6 +234,8 @@ kody dev check                   # bundle + light publish validations
 # Four surfaces against mock then prod:
 kody execute --target mock --invoke ./greet --params '{"name":"kent"}'
 kody execute --target prod --invoke ./greet --params '{"name":"kent"}'
+# Published export locally (no --code import wrapper):
+kody execute --local --invoke kody:@scope/pkg/export --params '{}'
 kody search --target mock local
 ```
 
@@ -265,6 +267,9 @@ npx @kodycodes/cli execute --local --file ./task.js --params '{"to":"me@example.
 # ADR 0068: pick credentials for credential(key) / credentials(key)
 npx @kodycodes/cli execute --local --credential github=work --credential resend=personal:prod \
   --code 'import { credential } from "kody:runtime"; export default async () => (await credential("github")).name'
+
+# Call a published package export without a --code import wrapper:
+npx @kodycodes/cli execute --local --invoke kody:@scope/pkg/export --params '{"name":"kent"}'
 ```
 
 - **Auth:** `--token` / `KODY_API_TOKEN` when set; else stored `auth bootstrap`

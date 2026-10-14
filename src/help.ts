@@ -206,7 +206,11 @@ ${orgBlock}
              (relative imports and npm packages; \`kody:*\` stays external)
              before workerd loads them — same shape as hosted execute /
              publish. Unresolvable imports fail with a clear bundle error.
-             Auth: \`--token\` /
+             \`--invoke kody:@scope/pkg/export\` (or \`@scope/pkg#export\`)
+             works with \`--local\` / \`--target mock\` — mints the same thin
+             passthrough as a \`--code\` import wrapper. From a package
+             directory, \`--invoke ./export\` runs a local package.json#exports
+             key. Auth: \`--token\` /
              ${apiTokenEnvVar}, else stored \`auth bootstrap\` token, else
              paired \`kody login\` credentials. Static kody:@… imports are fetched via POST
              /v1/local-execute/package-graph and embedded in local workerd
@@ -269,7 +273,9 @@ ${orgBlock}
              (\`kody dev webhook\`), schedules (\`kody dev job\` — runs once,
              never schedules locally), subscriptions
              (\`kody dev emit <event> --body event.json\`). \`kody dev check\`
-             bundles + light publish validations without running. On
+             bundles + light publish validations without running; when the
+             package uses credentialed fetch and \`.kody/mocks.ts\` is
+             missing, check soft-suggests adding that file. On
              \`--target mock\`, \`kody:@\` deps resolve from this package's
              exports, \`.kody/deps.json\` / \`package.json#kody.localDeps\`
              path maps, then published package-graph when a login/API token
@@ -278,8 +284,9 @@ ${orgBlock}
              \`handlers\` for outbound fetch mocking (Node gateway; not
              published with the package) — \`createAuthenticatedFetch\`,
              \`credential().fetch\`, \`gatewayFetch\`, and
-             \`gatewayFetchStream\` all match against them. Share previews
-             are out of scope.
+             \`gatewayFetchStream\` all match against them. Unmocked
+             requests fail closed with a ready-to-paste MSW handler stub
+             pointing at \`.kody/mocks.ts\`. Share previews are out of scope.
 
 Environment:
   KODY_MCP_URL        Override the default MCP URL (${defaultMcpUrl})

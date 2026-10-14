@@ -4,10 +4,16 @@
  * against the local package), webhooks, schedules (job once), and subscriptions.
  */
 
-import { readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { access, readFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import {
+	detectCredentialedFetchInSource,
+	mocksSuggestionDetail,
+	type CredentialedFetchSignal,
+} from './credentialed-fetch-scan.js'
 import { buildLocalPackageContext, runLocalPackageModule } from './local-package-run.js'
 import { ensureMockTarget, type MockServer } from './mock/mock-server.js'
+import { packageMocksRelativePath } from './mock/load-package-mocks.js'
 import { startPackageAppDev, type PackageAppDevServer } from './package-app-dev.js'
 import {
 	loadPackageManifest,
@@ -419,6 +425,7 @@ export async function runDevEmit(input: {
 
 /**
  * Bundle the package surfaces + light publish validations without running them.
+ * Soft-suggests `.kody/mocks.ts` when credentialed fetch is detected.
  */
 export async function runDevCheck(input: {
 	target: KodyTarget
@@ -428,9 +435,20 @@ export async function runDevCheck(input: {
 }): Promise<number> {
 	const manifest = await loadPackageManifest(input.cwd)
 	const checks: Array<{ name: string; ok: boolean; detail?: string }> = []
+	const credentialSignals: Array<CredentialedFetchSignal> = []
 
 	const push = (name: string, ok: boolean, detail?: string) => {
 		checks.push({ name, ok, detail })
+	}
+
+	const bundleAndScan = async (label: string, modulePath: string): Promise<void> => {
+		try {
+			const bundled = await bundleLocalUserModule(modulePath)
+			push(label, true, label.startsWith('app.entry') ? modulePath : undefined)
+			credentialSignals.push(...(await detectCredentialedFetchInSource(bundled, label)))
+		} catch (error) {
+			push(label, false, error instanceof Error ? error.message : String(error))
+		}
 	}
 
 	push('package.json', true, manifest.name)
@@ -450,62 +468,70 @@ export async function runDevCheck(input: {
 	}
 
 	if (manifest.app?.entry) {
-		try {
-			const path = resolvePackagePath(manifest, manifest.app.entry)
-			await bundleLocalUserModule(path)
-			push('app.entry bundle', true, path)
-		} catch (error) {
-			push(
-				'app.entry bundle',
-				false,
-				error instanceof Error ? error.message : String(error),
-			)
-		}
+		await bundleAndScan(
+			'app.entry bundle',
+			resolvePackagePath(manifest, manifest.app.entry),
+		)
 	} else {
 		push('app.entry', true, 'none (ok)')
 	}
 
 	for (const [name, job] of Object.entries(manifest.jobs)) {
-		try {
-			await bundleLocalUserModule(resolvePackagePath(manifest, job.entry))
-			push(`job:${name}`, true)
-		} catch (error) {
-			push(`job:${name}`, false, error instanceof Error ? error.message : String(error))
-		}
+		await bundleAndScan(`job:${name}`, resolvePackagePath(manifest, job.entry))
 	}
 	for (const [name, webhook] of Object.entries(manifest.webhooks)) {
-		try {
-			await bundleLocalUserModule(resolveExportModulePath(manifest, webhook.export))
-			push(`webhook:${name}`, true)
-		} catch (error) {
-			push(`webhook:${name}`, false, error instanceof Error ? error.message : String(error))
-		}
+		await bundleAndScan(
+			`webhook:${name}`,
+			resolveExportModulePath(manifest, webhook.export),
+		)
 	}
 	for (const [topic, sub] of Object.entries(manifest.subscriptions)) {
-		try {
-			await bundleLocalUserModule(resolvePackagePath(manifest, sub.handler))
-			push(`subscription:${topic}`, true)
-		} catch (error) {
-			push(
-				`subscription:${topic}`,
-				false,
-				error instanceof Error ? error.message : String(error),
-			)
-		}
+		await bundleAndScan(
+			`subscription:${topic}`,
+			resolvePackagePath(manifest, sub.handler),
+		)
 	}
 	for (const [key, rel] of Object.entries(manifest.exports)) {
-		try {
-			await bundleLocalUserModule(resolvePackagePath(manifest, rel))
-			push(`export:${key}`, true)
-		} catch (error) {
-			push(`export:${key}`, false, error instanceof Error ? error.message : String(error))
-		}
+		await bundleAndScan(`export:${key}`, resolvePackagePath(manifest, rel))
+	}
+
+	let hasMocksFile = false
+	try {
+		await access(join(manifest.root, packageMocksRelativePath))
+		hasMocksFile = true
+	} catch {
+		hasMocksFile = false
+	}
+	const mocksDetail = mocksSuggestionDetail({
+		signals: credentialSignals,
+		hasMocksFile,
+	})
+	if (mocksDetail) {
+		// Soft tip — never fails the check; agents learn before unmocked_request.
+		push(packageMocksRelativePath, true, mocksDetail)
 	}
 
 	const failed = checks.filter((check) => !check.ok)
 	if (input.json) {
 		input.io.stdout(
-			`${JSON.stringify({ target: input.target, checks, ok: failed.length === 0 }, null, 2)}\n`,
+			`${JSON.stringify(
+				{
+					target: input.target,
+					checks,
+					ok: failed.length === 0,
+					...(credentialSignals.length > 0
+						? {
+								credentialedFetch: {
+									detected: true,
+									hasMocksFile,
+									signals: credentialSignals,
+								},
+							}
+						: {}),
+				},
+				null,
+				2,
+			)}\n`,
 		)
 	} else {
 		for (const check of checks) {

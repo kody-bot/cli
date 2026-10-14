@@ -316,24 +316,33 @@ async function serializeResponse(response: Response): Promise<MockGatewayFetchRe
 
 export function unmockedRequestError(method: string, url: string): StructuredCliError {
 	const stub = buildHandlerStub(method, url)
+	const handlerLine = buildHandlerLine(method, url)
 	return new StructuredCliError({
 		code: 'unmocked_request',
 		message: `Unmocked ${method} ${url} under --target mock.`,
 		target: 'mock',
 		where: `${method} ${url}`,
 		fix:
-			`Add a handler in .kody/mocks.ts (or pass --passthrough ${safeHost(url)} for real network without secrets):\n\n${stub}`,
-		details: { method, url, handlerStub: stub },
+			`Create or edit .kody/mocks.ts in the package root (next to package.json), ` +
+			`or pass --passthrough ${safeHost(url)} for real network without secrets.\n\n` +
+			`Ready-to-paste .kody/mocks.ts:\n\n${stub}\n\n` +
+			`Or append this handler to an existing handlers array:\n\n${handlerLine}`,
+		details: { method, url, handlerStub: stub, handlerLine, mocksPath: '.kody/mocks.ts' },
 	})
 }
 
-export function buildHandlerStub(method: string, url: string): string {
-	const verb = method.toLowerCase()
-	const httpMethod = ['get', 'post', 'put', 'patch', 'delete', 'options', 'head'].includes(
-		verb,
+/** Single MSW handler line for pasting into an existing `handlers` array. */
+export function buildHandlerLine(method: string, url: string): string {
+	const httpMethod = httpMethodForStub(method)
+	return (
+		`  http.${httpMethod}(${JSON.stringify(url)}, () =>\n` +
+		`    HttpResponse.json({ /* TODO */ }, { status: 200 }),\n` +
+		`  ),`
 	)
-		? verb
-		: 'all'
+}
+
+export function buildHandlerStub(method: string, url: string): string {
+	const httpMethod = httpMethodForStub(method)
 	return [
 		`import { http, HttpResponse } from 'msw'`,
 		``,
@@ -343,6 +352,13 @@ export function buildHandlerStub(method: string, url: string): string {
 		`  ),`,
 		`]`,
 	].join('\n')
+}
+
+function httpMethodForStub(method: string): string {
+	const verb = method.toLowerCase()
+	return ['get', 'post', 'put', 'patch', 'delete', 'options', 'head'].includes(verb)
+		? verb
+		: 'all'
 }
 
 function safeHost(url: string): string {

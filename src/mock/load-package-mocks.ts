@@ -1,7 +1,9 @@
 /**
  * Load optional `<packageRoot>/.kody/mocks.ts` for `--target mock` outbound
- * fetch mocking. Missing file → no handlers (packages without mocks keep
- * native workerd fetch). Never imported into published package bundles.
+ * fetch mocking. Missing file → no MSW handlers (ambient/gatewayFetch use
+ * public-network passthrough via the Node gateway; credentialed /
+ * createAuthenticatedFetch hops still fail closed). Never imported into
+ * published package bundles.
  */
 
 import * as esbuild from 'esbuild'

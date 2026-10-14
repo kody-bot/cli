@@ -799,10 +799,24 @@ async function dispatch(
 			const tokenValues = tokenFlagValues(parsed.values)
 			const localPackageInvoke =
 				invoke !== undefined ? await tryResolveLocalPackageInvoke(invoke) : null
+			/**
+			 * Published-package invoke (`kody:@scope/pkg/export`) minted as the
+			 * same thin passthrough `--code` would use, so `--local` / `--target
+			 * mock` do not need an import wrapper.
+			 */
+			let publishedInvokeCode: string | undefined
 			if (local && invoke !== undefined && !localPackageInvoke) {
-				throw new Error(
-					'--invoke runs a saved package export in Kody; --local runs a module you provide (--code, --file, or a module string). To test an unpublished package export, pass an export key from package.json#exports (e.g. `--invoke ./on-user-deleted`) from the package directory, or use --file.',
-				)
+				try {
+					const { resolveExecuteInvokeCode } = await import('./invoke-passthrough.js')
+					publishedInvokeCode = resolveExecuteInvokeCode(invoke)
+				} catch {
+					throw new Error(
+						`--invoke ${JSON.stringify(invoke)} is neither a local package export nor a published package specifier. ` +
+							`From a package directory, pass an export key from package.json#exports (e.g. \`--invoke ./greet\`). ` +
+							`To call a published export locally, use \`--invoke kody:@scope/pkg/export\` (or \`@scope/pkg#export\`) — no \`--code "import …"\` wrapper needed. ` +
+							`Or pass --code / --file / a module string.`,
+					)
+				}
 			}
 			if (executeSourcesConflict({ invoke, hasCodeFlag, hasFileFlag, positionalModule })) {
 				throw new Error(
@@ -816,17 +830,19 @@ async function dispatch(
 				localPackageInvoke?.modulePath ??
 				(!hasCodeFlag && fileArg !== undefined && fileArg !== '-' ? fileArg : undefined)
 			const code =
-				invoke !== undefined && !localPackageInvoke
-					? undefined
-					: hasCodeFlag
-						? parsed.values.code
-						: modulePath !== undefined && !localPackageInvoke
-							? await readFile(modulePath, 'utf8')
-							: localPackageInvoke
-								? await readFile(localPackageInvoke.modulePath, 'utf8')
-								: fileArg === '-'
-									? await readStdin()
-									: positionalModule || undefined
+				publishedInvokeCode !== undefined
+					? publishedInvokeCode
+					: invoke !== undefined && !localPackageInvoke
+						? undefined
+						: hasCodeFlag
+							? parsed.values.code
+							: modulePath !== undefined && !localPackageInvoke
+								? await readFile(modulePath, 'utf8')
+								: localPackageInvoke
+									? await readFile(localPackageInvoke.modulePath, 'utf8')
+									: fileArg === '-'
+										? await readStdin()
+										: positionalModule || undefined
 			const credentials = parseCredentialFlags(
 				Array.isArray(parsed.values.credential)
 					? parsed.values.credential.filter(
@@ -837,7 +853,9 @@ async function dispatch(
 						: undefined,
 			)
 			const args = buildExecuteToolArgs({
-				invoke: localPackageInvoke ? undefined : invoke,
+				// Local published invoke is already minted into `code`.
+				invoke:
+					localPackageInvoke || publishedInvokeCode !== undefined ? undefined : invoke,
 				code: typeof code === 'string' ? code : undefined,
 				paramsJson:
 					typeof parsed.values.params === 'string' ? parsed.values.params : undefined,

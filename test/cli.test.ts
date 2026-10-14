@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -873,14 +874,35 @@ test('execute token paths surface feature_disabled and insufficient_scope', asyn
 	}
 })
 
-test('execute rejects --invoke with --local', async () => {
+test('execute --local --invoke kody:@… mints passthrough (does not reject)', async () => {
+	// Without auth / package-graph the run fails later — but not with the old
+	// "--local runs a module you provide" rejection that forced a --code wrapper.
 	let stderr = ''
 	const code = await runCli(['execute', '--local', '--invoke', 'kody:@me/pkg/export'], {
 		stdout: () => {},
 		stderr: (text) => (stderr += text),
 	})
 	assert.equal(code, 1)
-	assert.match(stderr, /--local runs a module you provide/)
+	assert.doesNotMatch(stderr, /--local runs a module you provide/)
+	assert.doesNotMatch(stderr, /neither a local package export nor a published package specifier/)
+})
+
+test('execute --local --invoke rejects non-package export keys outside a package', async () => {
+	const previous = process.cwd()
+	const root = await mkdtemp(join(tmpdir(), 'kody-invoke-bad-'))
+	let stderr = ''
+	try {
+		process.chdir(root)
+		const code = await runCli(['execute', '--local', '--invoke', './not-an-export'], {
+			stdout: () => {},
+			stderr: (text) => (stderr += text),
+		})
+		assert.equal(code, 1)
+		assert.match(stderr, /neither a local package export nor a published package specifier/)
+	} finally {
+		process.chdir(previous)
+		await rm(root, { recursive: true, force: true })
+	}
 })
 
 test('buildExecuteToolArgs passes invoke without code and keeps params', () => {
