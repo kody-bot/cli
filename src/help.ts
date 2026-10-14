@@ -58,7 +58,7 @@ Usage:
   kody auth setup-git [--lifetime long|short] [--scopes <list>] [--token <token>] [--mcp-url <url>] [--api-url <url>]
   kody auth remove-git [--mcp-url <url>] [--api-url <url>]
   kody git-credential <get|store|erase>
-  kody whoami [--org <slug>] [--mcp-url <url>] [--token <token>] [--api-url <url>] [--json]
+  kody whoami [--org <slug>] [--target prod|mock] [--mcp-url <url>] [--token <token>] [--api-url <url>] [--json]
   kody search [query] [--org <slug>] [--entity <ref>] [--domain <id>] [--limit <n>] [--target prod|mock] [--token <token>] [--api-url <url>] [--json]
   kody api <operationId> [--org <slug>] [--params <json>] [--token <token>] [--api-url <url>] [--json]
   kody package publish [<@owner/leaf|package_id>] [--org <slug>] [--params <json>] [--token <token>] [--api-url <url>]
@@ -267,12 +267,15 @@ ${orgBlock}
              never schedules locally), subscriptions
              (\`kody dev emit <event> --body event.json\`). \`kody dev check\`
              bundles + light publish validations without running. On
-             \`--target mock\`, stamped \`kody:@\` dependency *source* is
-             resolved from prod package-graph when a login/API token is
-             available (storage/credentials stay on the mock). Optional
-             \`.kody/mocks.ts\` exports MSW \`handlers\` for outbound fetch
-             mocking (Node gateway; not published with the package). Share
-             previews are out of scope.
+             \`--target mock\`, \`kody:@\` deps resolve from this package's
+             exports, \`.kody/deps.json\` / \`package.json#kody.localDeps\`
+             path maps, then published package-graph when a login/API token
+             is available (storage/credentials stay on the mock; local-only
+             deps need no login). Optional \`.kody/mocks.ts\` exports MSW
+             \`handlers\` for outbound fetch mocking (Node gateway; not
+             published with the package) — \`createAuthenticatedFetch\`,
+             \`credential().fetch\`, and \`gatewayFetch\` all match against
+             them. Share previews are out of scope.
 
 Environment:
   KODY_MCP_URL        Override the default MCP URL (${defaultMcpUrl})

@@ -51,6 +51,8 @@ export async function resolveDevAuth(input: {
 	token: string
 	apiUrl: string
 	org?: string
+	/** Mock identity org slug (`--org`); defaults to mock-org. */
+	orgSlug?: string
 	resetStorage?: boolean
 	sessionId?: string
 	packageId?: string
@@ -71,6 +73,7 @@ export async function resolveDevAuth(input: {
 		sessionId: input.sessionId,
 		resetStorage: input.resetStorage,
 		packageId: input.packageId,
+		orgSlug: input.orgSlug ?? input.org,
 	})
 	let mockClosed = false
 	return {

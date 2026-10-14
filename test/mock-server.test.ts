@@ -22,8 +22,14 @@ test('mock session + search + metaGetCurrentUser work', async () => {
 					headers: { authorization: `Bearer ${token}` },
 				})
 				assert.equal(me.status, 200)
-				const meBody = (await me.json()) as { user: { username: string } }
-				assert.equal(meBody.user.username, 'mock-user')
+				const meBody = (await me.json()) as {
+					user_id: string
+					username: string
+					org: { slug: string }
+				}
+				assert.equal(meBody.username, 'mock-user')
+				assert.equal(meBody.user_id, 'user_mock')
+				assert.equal(meBody.org.slug, 'mock-org')
 
 				const search = await fetch(`${server.url}/v1/search?query=local`, {
 					headers: { authorization: `Bearer ${token}` },
@@ -57,7 +63,10 @@ test('mock CapabilityProxy call for metaGetCurrentUser', async () => {
 				body: JSON.stringify({ path: ['kody', 'metaGetCurrentUser'], args: [{}] }),
 			})
 			assert.equal(response.status, 200)
-			const body = (await response.json()) as { result: { org: { slug: string } } }
+			const body = (await response.json()) as {
+				result: { user_id: string; org: { slug: string } }
+			}
+			assert.equal(body.result.user_id, 'user_mock')
 			assert.equal(body.result.org.slug, 'mock-org')
 		} finally {
 			await server.close()
@@ -213,21 +222,30 @@ test('mock credentials OpenAll + authenticatedFetch + adminUserList fixtures', a
 				assert.equal(openAll.result.value.length, 1)
 				assert.equal(openAll.result.value[0]?.name, 'MOCK_SECRET')
 
-				const oauth = (await call(['kody', 'authenticatedFetch'], [
-					{
-						providerName: 'linkedin',
-						request: { url: 'https://api.linkedin.com/v2/userinfo', method: 'GET' },
+				const oauthResponse = await fetch(`${server.url}/v1/capability-proxy/call`, {
+					method: 'POST',
+					headers: {
+						authorization: `Bearer ${token}`,
+						'content-type': 'application/json',
 					},
-				])) as {
-					result: { status: number; bodyBase64: string }
+					body: JSON.stringify({
+						path: ['kody', 'authenticatedFetch'],
+						args: [
+							{
+								providerName: 'linkedin',
+								request: {
+									url: 'https://api.linkedin.com/v2/userinfo',
+									method: 'GET',
+								},
+							},
+						],
+					}),
+				})
+				assert.equal(oauthResponse.status, 400)
+				const oauthBody = (await oauthResponse.json()) as {
+					error: { code: string }
 				}
-				assert.equal(oauth.result.status, 200)
-				const decoded = JSON.parse(
-					Buffer.from(oauth.result.bodyBase64, 'base64').toString('utf8'),
-				) as { mock: boolean; providerName: string; sub: string }
-				assert.equal(decoded.mock, true)
-				assert.equal(decoded.providerName, 'linkedin')
-				assert.equal(decoded.sub, 'mock-linkedin-sub')
+				assert.equal(oauthBody.error.code, 'unmocked_request')
 
 				const storage = (await call(['kody', 'packageStorageSet'], [
 					{ key: 'k', value: 1 },
@@ -257,10 +275,18 @@ test('mock credentials OpenAll + authenticatedFetch + adminUserList fixtures', a
 				assert.deepEqual(selected.result.rows, [{ file_id: 'f1', name: 'a.txt' }])
 
 				const admin = (await call(['kody', 'adminUserList'], [{ page: 1 }])) as {
-					result: { users: Array<{ username: string }>; mock: boolean }
+					result: {
+						total: number
+						page: number
+						pageSize: number
+						users: Array<{ username: string; stableUserId: string }>
+					}
 				}
-				assert.equal(admin.result.mock, true)
+				assert.equal(admin.result.total, 1)
+				assert.equal(admin.result.page, 1)
+				assert.equal(admin.result.pageSize, 20)
 				assert.equal(admin.result.users[0]?.username, 'mock-user')
+				assert.equal(admin.result.users[0]?.stableUserId, 'user_mock')
 			},
 		)
 	} finally {

@@ -8,10 +8,11 @@ import {
 	targetEnvVar,
 } from '../src/target.js'
 
-test('defaultTargetFor: mock for dev, prod for execute/search', () => {
+test('defaultTargetFor: mock for dev, prod for execute/search/whoami', () => {
 	assert.equal(defaultTargetFor('dev'), 'mock')
 	assert.equal(defaultTargetFor('execute'), 'prod')
 	assert.equal(defaultTargetFor('search'), 'prod')
+	assert.equal(defaultTargetFor('whoami'), 'prod')
 })
 
 test('resolveTarget precedence: flag > env > default', () => {
@@ -53,5 +54,6 @@ test('commandAcceptsTarget', () => {
 	assert.equal(commandAcceptsTarget('dev'), true)
 	assert.equal(commandAcceptsTarget('execute'), true)
 	assert.equal(commandAcceptsTarget('search'), true)
+	assert.equal(commandAcceptsTarget('whoami'), true)
 	assert.equal(commandAcceptsTarget('login'), false)
 })

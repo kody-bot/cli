@@ -12,7 +12,7 @@ export const targetEnvVar = 'KODY_TARGET'
 
 export type KodyTarget = 'prod' | 'mock'
 
-export type TargetAwareCommand = 'dev' | 'execute' | 'search'
+export type TargetAwareCommand = 'dev' | 'execute' | 'search' | 'whoami'
 
 /** Default target when neither flag nor env is set. */
 export function defaultTargetFor(command: TargetAwareCommand): KodyTarget {
@@ -21,6 +21,7 @@ export function defaultTargetFor(command: TargetAwareCommand): KodyTarget {
 			return 'mock'
 		case 'execute':
 		case 'search':
+		case 'whoami':
 			return 'prod'
 		default: {
 			const exhaustive: never = command
@@ -57,5 +58,10 @@ export function parseTargetFlag(value: string): KodyTarget {
 
 /** True when this command accepts `--target` / `KODY_TARGET`. */
 export function commandAcceptsTarget(command: string): command is TargetAwareCommand {
-	return command === 'dev' || command === 'execute' || command === 'search'
+	return (
+		command === 'dev' ||
+		command === 'execute' ||
+		command === 'search' ||
+		command === 'whoami'
+	)
 }

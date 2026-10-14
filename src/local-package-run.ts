@@ -165,6 +165,7 @@ export async function runLocalPackageModule(
 			...client,
 			code,
 			...(input.depResolve ? { depResolve: input.depResolve } : {}),
+			...(input.packageRoot ? { packageRoot: input.packageRoot } : {}),
 			onStatus: input.onStatus,
 		})
 		bridge = await startBridge({

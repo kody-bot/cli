@@ -37,6 +37,8 @@ export type MockServerOptions = {
 	port?: number
 	/** Fixed package id for scratch packageStorage in local package runs. */
 	packageId?: string
+	/** `--org` slug reflected by metaGetCurrentUser on mock. */
+	orgSlug?: string
 	env?: NodeJS.ProcessEnv
 }
 
@@ -73,6 +75,7 @@ export async function startMockServer(options: MockServerOptions = {}): Promise<
 		reset: options.resetStorage,
 	})
 	const packageId = options.packageId ?? `local-${state.sessionId}`
+	const orgSlug = options.orgSlug?.trim() || 'mock-org'
 	const env = options.env
 
 	const server = createServer((req, res) => {
@@ -83,6 +86,7 @@ export async function startMockServer(options: MockServerOptions = {}): Promise<
 				await persistMockSession(state, env)
 			},
 			packageId,
+			orgSlug,
 			env,
 		})
 	})
@@ -113,6 +117,7 @@ export async function ensureMockTarget(input: {
 	sessionId?: string
 	resetStorage?: boolean
 	packageId?: string
+	orgSlug?: string
 	env?: NodeJS.ProcessEnv
 	/** Reuse an already-started server (e.g. long-lived `kody dev`). */
 	existing?: MockServer
@@ -129,6 +134,7 @@ export async function ensureMockTarget(input: {
 		sessionId: input.sessionId,
 		resetStorage: input.resetStorage,
 		packageId: input.packageId,
+		orgSlug: input.orgSlug,
 		env: input.env,
 	})
 	return {
@@ -143,6 +149,7 @@ type RequestCtx = {
 	getState: () => MockSessionState
 	setState: (state: MockSessionState) => Promise<void>
 	packageId: string
+	orgSlug: string
 	env?: NodeJS.ProcessEnv
 }
 
@@ -155,6 +162,9 @@ async function handleRequest(
 		const url = new URL(req.url ?? '/', 'http://127.0.0.1')
 		const method = (req.method ?? 'GET').toUpperCase()
 		const body = await readJsonBody(req)
+		const requestOrg = url.searchParams.get('org')?.trim() || undefined
+		const effectiveOrg = requestOrg || ctx.orgSlug
+		const callCtx: RequestCtx = { ...ctx, orgSlug: effectiveOrg }
 
 		if (method === 'GET' && url.pathname === '/openapi.json') {
 			return sendJson(res, 200, mockOpenApiDocument())
@@ -184,11 +194,12 @@ async function handleRequest(
 				return sendJson(res, 501, { error: err.toJSON() })
 			}
 			try {
-				const result = await dispatchCapabilityCall(pathKey, args, ctx)
+				const result = await dispatchCapabilityCall(pathKey, args, callCtx)
 				return sendJson(res, 200, { result })
 			} catch (error) {
 				if (error instanceof StructuredCliError) {
-					return sendJson(res, 501, { error: error.toJSON() })
+					const status = error.code === 'unmocked_request' ? 400 : 501
+					return sendJson(res, status, { error: error.toJSON() })
 				}
 				throw error
 			}
@@ -211,12 +222,12 @@ async function handleRequest(
 			assertMockAuth(req)
 			const query = url.searchParams.get('query') ?? ''
 			const entity = url.searchParams.get('entity') ?? undefined
-			return sendJson(res, 200, mockSearch(ctx.getState(), { query, entity }))
+			return sendJson(res, 200, mockSearch(callCtx.getState(), { query, entity }))
 		}
 
 		if (method === 'GET' && url.pathname === '/v1/me') {
 			assertMockAuth(req)
-			return sendJson(res, 200, mockCurrentUser(ctx.getState()))
+			return sendJson(res, 200, mockCurrentUser(callCtx.getState(), callCtx.orgSlug))
 		}
 
 		// Generic Open API POST /v1/... by operation is not fully routed; refuse.
@@ -271,7 +282,7 @@ async function dispatchCapabilityCall(
 	const state = ctx.getState()
 	switch (pathKey) {
 		case 'kody.metaGetCurrentUser':
-			return mockCurrentUser(state)
+			return mockCurrentUser(state, ctx.orgSlug)
 		case 'kody.search': {
 			const params = (args[0] ?? {}) as { query?: string; entity?: string; limit?: number }
 			return mockSearch(state, params)
@@ -354,46 +365,82 @@ async function dispatchCapabilityCall(
 			return { ok: true, value: { warnings: [], checked: args[0] ?? null, strict: false } }
 		case 'kody.credentialClientRefresh':
 			return { ok: true, value: { refreshed: false, mock: true } }
-		case 'kody.authenticatedFetch': {
-			const input = (args[0] ?? {}) as {
-				providerName?: string
-				request?: {
-					url?: string
-					method?: string
-					headers?: Record<string, string>
-				}
+		case 'kody.authenticatedFetch':
+		case 'kody.gatewayFetch': {
+			// Primary path is the Node MSW bridge (local-package-run / local-execute).
+			// If a call reaches the HTTP mock, fail closed — never return placeholder shapes.
+			const request = (args[0] ?? {}) as {
+				request?: { url?: string; method?: string }
+				url?: string
+				method?: string
 			}
-			const providerName = String(input.providerName ?? '').trim() || 'unknown'
-			const requestUrl = String(input.request?.url ?? '')
-			const body = JSON.stringify(
-				mockAuthenticatedFetchBody({
-					providerName,
-					url: requestUrl,
-					method: String(input.request?.method ?? 'GET'),
-				}),
-			)
-			return {
-				status: 200,
-				statusText: 'OK',
-				headers: { 'content-type': 'application/json; charset=utf-8' },
-				bodyBase64: Buffer.from(body, 'utf8').toString('base64'),
-			}
+			const nested = request.request ?? request
+			const method = String(nested.method ?? 'GET').toUpperCase()
+			const url = String(nested.url ?? '')
+			throw new StructuredCliError({
+				code: 'unmocked_request',
+				message: url
+					? `Unmocked ${method} ${url} under --target mock.`
+					: `Unmocked ${pathKey} under --target mock (missing request.url).`,
+				target: 'mock',
+				where: url ? `${method} ${url}` : pathKey,
+				fix:
+					'Add a handler in .kody/mocks.ts for this URL, or pass --passthrough <host> for real network without secrets. createAuthenticatedFetch and credential().fetch go through the same MSW gateway.',
+			})
 		}
 		case 'kody.adminUserList': {
-			const params = (args[0] ?? {}) as { page?: number; limit?: number }
+			const params = (args[0] ?? {}) as { page?: number; pageSize?: number; limit?: number }
+			const page = typeof params.page === 'number' ? params.page : 1
+			const pageSize =
+				typeof params.pageSize === 'number'
+					? params.pageSize
+					: typeof params.limit === 'number'
+						? params.limit
+						: 20
 			return {
+				total: 1,
+				page,
+				pageSize,
 				users: [
 					{
-						id: 'user_mock',
+						stableUserId: 'user_mock',
 						username: 'mock-user',
 						email: 'mock@example.com',
-						display_name: 'Mock User',
+						email_verified: true,
+						email_verified_at: '2026-01-01T00:00:00.000Z',
+						plan: 'free',
+						manualPlan: 'free',
+						stripePlan: null,
+						effectivePlan: 'free',
+						secondAgentGiftExpiresAt: null,
+						referralCreditExpiresAt: null,
+						overlayExpiresAt: null,
+						isProOverlay: false,
+						overlayType: null,
+						entitlementLadder: 'public',
+						stripeCustomerLinked: false,
+						suspended_at: null,
+						email_outbound_paused_at: null,
+						email_verification_delivery: null,
+						email_verification_delivery_detail: null,
+						utm_source: null,
+						utm_medium: null,
+						utm_campaign: null,
+						utm_content: null,
+						utm_term: null,
+						first_touch_landing_path: null,
+						first_touch_referrer: null,
+						first_mcp_connected_at: null,
+						first_execute_at: null,
+						first_search_at: null,
+						first_saved_package_at: null,
+						mcp_client_name: null,
+						last_active_at: null,
+						created_at: '2026-01-01T00:00:00.000Z',
+						updated_at: '2026-01-01T00:00:00.000Z',
+						roles: ['user'],
 					},
 				],
-				page: typeof params.page === 'number' ? params.page : 1,
-				limit: typeof params.limit === 'number' ? params.limit : 20,
-				total: 1,
-				mock: true,
 			}
 		}
 		default: {
@@ -439,45 +486,15 @@ function mockOpenedCredential(cred: MockSessionState['credentials'][string]) {
 	}
 }
 
-/** Provider-shaped fixtures so OAuth packages can smoke end-to-end on mock. */
-function mockAuthenticatedFetchBody(input: {
-	providerName: string
-	url: string
-	method: string
-}): Record<string, unknown> {
-	const provider = input.providerName.toLowerCase()
-	if (provider === 'linkedin' || /linkedin\.com/i.test(input.url)) {
-		return {
-			sub: 'mock-linkedin-sub',
-			name: 'Mock LinkedIn User',
-			email: 'mock-linkedin@example.com',
-			picture: null,
-			mock: true,
-			providerName: input.providerName,
-			url: input.url,
-			method: input.method,
-		}
-	}
+/** Prod-shaped identity (flat user_id); honors `--org` / `?org=` on mock. */
+function mockCurrentUser(state: MockSessionState, orgSlug: string) {
 	return {
-		mock: true,
-		providerName: input.providerName,
-		url: input.url,
-		method: input.method,
-		note: 'CLI mock authenticatedFetch fixture — not a real OAuth upstream response.',
-	}
-}
-
-function mockCurrentUser(state: MockSessionState) {
-	return {
-		user: {
-			id: 'user_mock',
-			username: 'mock-user',
-			email: 'mock@example.com',
-		},
+		user_id: 'user_mock',
+		username: 'mock-user',
+		email: 'mock@example.com',
+		display_name: 'Mock User',
 		org: {
-			id: 'org_mock',
-			slug: 'mock-org',
-			name: 'Mock Org',
+			slug: orgSlug || 'mock-org',
 		},
 		mockSessionId: state.sessionId,
 	}

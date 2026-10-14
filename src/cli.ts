@@ -576,13 +576,55 @@ async function dispatch(
 			return 0
 		}
 		case 'whoami': {
+			const { resolveTarget } = await import('./target.js')
+			const target = resolveTarget({
+				command: 'whoami',
+				flag:
+					typeof parsed.values.target === 'string' ? parsed.values.target : undefined,
+			})
 			const tokenValues = tokenFlagValues(parsed.values)
-			const apiUrl = apiUrlFrom({
+			let apiUrl = apiUrlFrom({
 				apiUrl:
 					typeof parsed.values['api-url'] === 'string'
 						? parsed.values['api-url']
 						: undefined,
 			})
+			if (target === 'mock') {
+				const { ensureMockTarget } = await import('./mock/mock-server.js')
+				const mock = await ensureMockTarget({
+					resetStorage: parsed.values['reset-storage'] === true,
+					...(org ? { orgSlug: org } : {}),
+				})
+				try {
+					const me = await fetch(`${mock.apiUrl}/v1/me${org ? `?org=${encodeURIComponent(org)}` : ''}`, {
+						headers: { authorization: `Bearer ${mock.token}` },
+					})
+					const body = (await me.json()) as Record<string, unknown>
+					if (json) {
+						write(`${JSON.stringify({ target: 'mock', ...body }, null, 2)}\n`)
+					} else {
+						const userId = typeof body.user_id === 'string' ? body.user_id : 'user_mock'
+						const username =
+							typeof body.username === 'string' ? body.username : 'mock-user'
+						const orgBody =
+							body.org && typeof body.org === 'object'
+								? (body.org as { slug?: string })
+								: {}
+						write(
+							[
+								`target: mock`,
+								`api: ${mock.apiUrl}`,
+								`user: ${username} (${userId})`,
+								`org: ${orgBody.slug ?? org ?? 'mock-org'}`,
+								'',
+							].join('\n'),
+						)
+					}
+					return me.ok ? 0 : 1
+				} finally {
+					if (mock.started) await mock.server.close()
+				}
+			}
 			if (
 				shouldUseApiToken({
 					tokenValues,
@@ -819,8 +861,9 @@ async function dispatch(
 					: undefined,
 			)
 			if (passthroughHosts.length > 0 && target !== 'mock') {
-				throw new Error(
-					'`--passthrough` only applies to `--target mock` (ignored on prod; outbound fetch mocking is mock-only).',
+				// Help documents --passthrough as ignored on prod (mock-only).
+				writeErr(
+					'note: `--passthrough` is ignored on `--target prod` (outbound fetch mocking is mock-only).\n',
 				)
 			}
 			let closeMock: (() => Promise<void>) | undefined
@@ -828,14 +871,36 @@ async function dispatch(
 			let mockDepResolve:
 				| { apiUrl: string; token: string; org?: string }
 				| undefined
+			/** Package context for --invoke or --file inside a package directory. */
+			let localPackageRun:
+				| {
+						modulePath: string
+						kodyId: string
+						packageRoot: string
+				  }
+				| null = localPackageInvoke
+			if (!localPackageRun && local && modulePath !== undefined) {
+				try {
+					const { loadPackageManifest } = await import('./package-manifest.js')
+					const manifest = await loadPackageManifest(process.cwd())
+					localPackageRun = {
+						modulePath,
+						kodyId: manifest.kodyId,
+						packageRoot: manifest.root,
+					}
+				} catch {
+					localPackageRun = null
+				}
+			}
 			try {
 				if (target === 'mock') {
 					const { ensureMockTarget } = await import('./mock/mock-server.js')
 					const mock = await ensureMockTarget({
 						resetStorage: parsed.values['reset-storage'] === true,
-						packageId: localPackageInvoke
-							? `local:${localPackageInvoke.kodyId}`
+						packageId: localPackageRun
+							? `local:${localPackageRun.kodyId}`
 							: undefined,
+						...(org ? { orgSlug: org } : {}),
 					})
 					apiUrl = mock.apiUrl
 					mockToken = mock.token
@@ -848,11 +913,11 @@ async function dispatch(
 						...(org ? { org } : {}),
 					})
 				}
-				if (localPackageInvoke) {
+				if (localPackageRun) {
 					const { buildLocalPackageContext, runLocalPackageModule } =
 						await import('./local-package-run.js')
 					const result = await runLocalPackageModule({
-						modulePath: localPackageInvoke.modulePath,
+						modulePath: localPackageRun.modulePath,
 						params: args.params,
 						token:
 							mockToken ??
@@ -866,13 +931,13 @@ async function dispatch(
 						apiUrl,
 						target,
 						packageContext: buildLocalPackageContext({
-							kodyId: localPackageInvoke.kodyId,
+							kodyId: localPackageRun.kodyId,
 							hostedUrl: 'http://127.0.0.1:0',
 						}),
-						packageRoot: localPackageInvoke.packageRoot,
+						packageRoot: localPackageRun.packageRoot,
 						...(org ? { org } : {}),
 						...(mockDepResolve ? { depResolve: mockDepResolve } : {}),
-						...(passthroughHosts.length > 0
+						...(passthroughHosts.length > 0 && target === 'mock'
 							? { passthroughHosts }
 							: {}),
 						allowPrivateNetwork:
@@ -1088,19 +1153,31 @@ async function dispatch(
 					: undefined,
 			)
 			if (passthroughHosts.length > 0 && target !== 'mock') {
-				throw new Error(
-					'`--passthrough` only applies to `--target mock` (outbound fetch mocking is mock-only).',
+				writeErr(
+					'note: `--passthrough` is ignored on `--target prod` (outbound fetch mocking is mock-only).\n',
 				)
 			}
 			const allowPrivateNetwork = parsed.values['allow-private-network'] === true
+			let packageId: string | undefined
+			try {
+				const { loadPackageManifest } = await import('./package-manifest.js')
+				const manifest = await loadPackageManifest(process.cwd())
+				packageId = `local:${manifest.kodyId}`
+			} catch {
+				packageId = undefined
+			}
 			const auth = await resolveDevAuth({
 				target,
 				token,
 				apiUrl: prodApiUrl,
 				...(org ? { org } : {}),
 				...(mockDepResolve ? { depResolve: mockDepResolve } : {}),
-				...(passthroughHosts.length > 0 ? { passthroughHosts } : {}),
+				...(passthroughHosts.length > 0 && target === 'mock'
+					? { passthroughHosts }
+					: {}),
 				resetStorage: parsed.values['reset-storage'] === true,
+				...(packageId ? { packageId } : {}),
+				...(org && target === 'mock' ? { orgSlug: org } : {}),
 			})
 			const port =
 				typeof parsed.values.port === 'string' ? Number(parsed.values.port) : undefined
@@ -1312,13 +1389,33 @@ async function tryResolveLocalPackageInvoke(
 ): Promise<{ modulePath: string; kodyId: string; packageRoot: string } | null> {
 	const trimmed = invoke.trim()
 	if (!trimmed || trimmed.startsWith('kody:@')) return null
+	const { loadPackageManifest, resolveExportModulePath } =
+		await import('./package-manifest.js')
+	const { StructuredCliError } = await import('./structured-error.js')
+	let manifest: Awaited<ReturnType<typeof loadPackageManifest>>
 	try {
-		const { loadPackageManifest, resolveExportModulePath } =
-			await import('./package-manifest.js')
-		const manifest = await loadPackageManifest(process.cwd())
-		const modulePath = resolveExportModulePath(manifest, trimmed)
-		return { modulePath, kodyId: manifest.kodyId, packageRoot: manifest.root }
+		manifest = await loadPackageManifest(process.cwd())
 	} catch {
+		return null
+	}
+	try {
+		const modulePath = resolveExportModulePath(manifest, trimmed, {
+			exportsOnly: true,
+		})
+		const { access } = await import('node:fs/promises')
+		try {
+			await access(modulePath)
+		} catch {
+			throw new StructuredCliError({
+				code: 'dev_surface_missing',
+				message: `No package export ${JSON.stringify(trimmed)} (path missing: ${modulePath}).`,
+				where: manifest.packageJsonPath,
+				fix: `Known exports: ${Object.keys(manifest.exports).join(', ') || '(none)'}.`,
+			})
+		}
+		return { modulePath, kodyId: manifest.kodyId, packageRoot: manifest.root }
+	} catch (error) {
+		if (error instanceof StructuredCliError) throw error
 		return null
 	}
 }

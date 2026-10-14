@@ -63,30 +63,10 @@ export async function loadPackageMocks(
 				external: ['msw', 'msw/*'],
 			})
 		} catch (error) {
-			const messages =
-				error && typeof error === 'object' && 'errors' in error
-					? (error as esbuild.BuildFailure).errors.map((item) => item.text)
-					: [error instanceof Error ? error.message : String(error)]
-			throw new StructuredCliError({
-				code: 'bundle_failed',
-				message: `Could not bundle ${packageMocksRelativePath} for --target mock.`,
-				target: 'mock',
-				where: path,
-				fix: 'Fix TypeScript/syntax errors in .kody/mocks.ts and retry. Import handlers from `msw` (provided by @kodycodes/cli).',
-				details: { errors: messages },
-			})
+			throw bundleFailedError(path, error)
 		}
 		if (result.errors.length > 0) {
-			throw new StructuredCliError({
-				code: 'bundle_failed',
-				message: `Could not bundle ${packageMocksRelativePath} for --target mock.`,
-				target: 'mock',
-				where: path,
-				fix: 'Fix TypeScript/syntax errors in .kody/mocks.ts and retry.',
-				details: {
-					errors: result.errors.map((error) => error.text),
-				},
-			})
+			throw bundleFailedError(path, { errors: result.errors })
 		}
 		const bundled = await readFile(outfile, 'utf8')
 		const rewritten = bundled.replace(
@@ -130,4 +110,47 @@ export async function loadPackageMocks(
 /** Write a tiny helper so tests can assert the relative path without importing fs. */
 export function packageMocksPathFor(packageRoot: string): string {
 	return join(packageRoot, packageMocksRelativePath)
+}
+
+function bundleFailedError(path: string, error: unknown): StructuredCliError {
+	const formatted = formatEsbuildErrors(path, error)
+	return new StructuredCliError({
+		code: 'bundle_failed',
+		message: `Could not bundle ${packageMocksRelativePath} for --target mock.${formatted.summary ? ` ${formatted.summary}` : ''}`,
+		target: 'mock',
+		where: formatted.where ?? path,
+		fix: 'Fix TypeScript/syntax errors in .kody/mocks.ts and retry. Import handlers from `msw` (provided by @kodycodes/cli).',
+		details: { errors: formatted.errors },
+	})
+}
+
+function formatEsbuildErrors(
+	mocksPath: string,
+	error: unknown,
+): { summary: string; where?: string; errors: Array<string> } {
+	const messages: Array<esbuild.Message> = []
+	if (error && typeof error === 'object' && 'errors' in error) {
+		messages.push(...(error as esbuild.BuildFailure).errors)
+	}
+	if (messages.length === 0) {
+		const text = error instanceof Error ? error.message : String(error)
+		return { summary: text, errors: [text] }
+	}
+	const errors = messages.map((item) => {
+		const loc = item.location
+		if (loc?.file && typeof loc.line === 'number') {
+			return `${loc.file}:${loc.line}:${loc.column ?? 0}: ${item.text}`
+		}
+		return item.text
+	})
+	const first = messages[0]?.location
+	const where =
+		first?.file && typeof first.line === 'number'
+			? `${first.file}:${first.line}:${first.column ?? 0}`
+			: mocksPath
+	return {
+		summary: errors[0] ?? '',
+		where,
+		errors,
+	}
 }

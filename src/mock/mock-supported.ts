@@ -39,8 +39,12 @@ export const mockCapabilityPaths = [
 	'kody.credentialClientOpenAll',
 	'kody.credentialClientCheck',
 	'kody.credentialClientRefresh',
-	// OAuth integration fetch hop used by createAuthenticatedFetch.
+	// OAuth / ambient outbound hops — intercepted by the Node MSW gateway on
+	// --target mock (see mock-fetch-gateway.ts). Listed here so CapabilityProxy
+	// session probes treat them as known; the mock HTTP server refuses with
+	// unmocked_request if a call somehow bypasses the bridge.
 	'kody.authenticatedFetch',
+	'kody.gatewayFetch',
 	// Read-only admin fixture so gift-cliff-ops-style packages can smoke locally.
 	'kody.adminUserList',
 ] as const

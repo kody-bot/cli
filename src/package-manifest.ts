@@ -346,6 +346,7 @@ export function resolvePackagePath(manifest: KodyPackageManifest, relativePath: 
 export function resolveExportModulePath(
 	manifest: KodyPackageManifest,
 	exportRef: string,
+	options: { exportsOnly?: boolean } = {},
 ): string {
 	const trimmed = exportRef.trim()
 	if (!trimmed) {
@@ -362,8 +363,9 @@ export function resolveExportModulePath(
 	if (withDot in manifest.exports) {
 		return resolvePackagePath(manifest, manifest.exports[withDot]!)
 	}
-	// Bare path into the package
-	if (trimmed.startsWith('.') || trimmed.startsWith('/')) {
+	// Bare path into the package (webhooks / jobs may pass relative files).
+	// --invoke uses exportsOnly so unknown keys list known exports instead of ENOENT.
+	if (!options.exportsOnly && (trimmed.startsWith('.') || trimmed.startsWith('/'))) {
 		return resolvePackagePath(manifest, trimmed)
 	}
 	throw new StructuredCliError({

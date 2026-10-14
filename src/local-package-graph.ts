@@ -169,9 +169,10 @@ export async function writePackageModuleFiles(
 
 /**
  * Resolve stamped `kody:@` modules for local workerd.
- * On `--target mock`, capability hops stay on the mock, but published dependency
- * *source* is fetched from the real package-graph API when `depResolve` is set
- * (login / API token). Published source is not a secret.
+ * On `--target mock`, capability hops stay on the mock. Dependencies resolve
+ * from (1) the local working tree / `.kody/deps.json` / self-package, then
+ * (2) published package-graph when `depResolve` is set (login / API token).
+ * Published source is not a secret. Fresh HOME with only local deps needs no login.
  */
 export async function resolveLocalPackageGraph(input: {
 	code: string
@@ -191,6 +192,11 @@ export async function resolveLocalPackageGraph(input: {
 		org?: string
 		fetchFn?: typeof fetch
 	}
+	/**
+	 * Package directory for local / self-package `kody:@` resolution on mock
+	 * (and optional `.kody/deps.json`).
+	 */
+	packageRoot?: string
 	onStatus?: (message: string) => void
 }): Promise<LocalPackageGraph> {
 	const imports = listSavedPackageImports(input.code)
@@ -205,9 +211,32 @@ export async function resolveLocalPackageGraph(input: {
 	) {
 		return { modules: [], imports: [] }
 	}
-	if (imports.length > 0 && !input.depResolve && isLikelyMockBearer(input.token)) {
+
+	let localModules: Array<LocalPackageModule> = []
+	let unresolved = imports
+	const { mergePackageGraphs, resolveLocalPackageModules, tryLoadSelfManifest } =
+		await import('./mock-local-deps.js')
+	if (imports.length > 0 && input.packageRoot) {
+		const selfManifest = await tryLoadSelfManifest(input.packageRoot)
+		const local = await resolveLocalPackageModules({
+			code: input.code,
+			packageRoot: input.packageRoot,
+			selfManifest,
+			onStatus: input.onStatus,
+		})
+		localModules = local.modules
+		unresolved = local.unresolved
+		if (unresolved.length === 0) {
+			return { modules: localModules, imports }
+		}
+	}
+
+	if (unresolved.length > 0 && !input.depResolve && isLikelyMockBearer(input.token)) {
 		throw new LocalPackageGraphError(
-			`kody:@ dependencies need published package-graph while --target mock keeps storage/credentials local. Log in (\`kody login\` / \`kody auth bootstrap\`) or set KODY_API_TOKEN so the CLI can fetch dependency source from prod.`,
+			`kody:@ dependencies need published package-graph while --target mock keeps storage/credentials local. ` +
+				`Map them in .kody/deps.json (or package.json#kody.localDeps), keep them in this package's exports, ` +
+				`or log in (\`kody login\` / \`kody auth bootstrap\`) / set KODY_API_TOKEN so the CLI can fetch dependency source from prod. ` +
+				`Unresolved: ${unresolved.join(', ')}`,
 			{ code: 'mock_package_deps_need_auth' },
 		)
 	}
@@ -224,16 +253,19 @@ export async function resolveLocalPackageGraph(input: {
 				fetchFn: input.fetchFn,
 				...(input.org ? { org: input.org } : {}),
 			}
-	if (input.depResolve && imports.length > 0) {
+	if (input.depResolve && unresolved.length > 0) {
 		input.onStatus?.(
-			`Resolving ${imports.length} kody:@ dependenc${imports.length === 1 ? 'y' : 'ies'} from published package-graph (mock keeps storage/credentials local)…`,
+			`Resolving ${unresolved.length} kody:@ dependenc${unresolved.length === 1 ? 'y' : 'ies'} from published package-graph (mock keeps storage/credentials local)…`,
 		)
 	}
-	return await fetchLocalPackageGraph({
+	const published = await fetchLocalPackageGraph({
 		...client,
 		code: input.code,
 		conversationId: input.conversationId,
+		...(localModules.length > 0 ? { requiredImports: unresolved } : {}),
 	})
+	if (localModules.length === 0) return published
+	return mergePackageGraphs(localModules, published)
 }
 
 function isLikelyMockBearer(token: string): boolean {
@@ -241,10 +273,19 @@ function isLikelyMockBearer(token: string): boolean {
 }
 
 export async function fetchLocalPackageGraph(
-	input: CapabilityProxyClientInput & { code: string; conversationId?: string },
+	input: CapabilityProxyClientInput & {
+		code: string
+		conversationId?: string
+		/**
+		 * When some imports were already resolved locally, only require these
+		 * remaining specifiers in the published graph response.
+		 */
+		requiredImports?: Array<string>
+	},
 ): Promise<LocalPackageGraph> {
 	assertTokenSafeApiUrl(input.apiUrl)
 	const imports = listSavedPackageImports(input.code)
+	const required = input.requiredImports ?? imports
 	if (hasLiteralDynamicSavedPackageImports(input.code)) {
 		throw new LocalPackageGraphError(
 			`Local execute cannot bind literal dynamic import("kody:@…") yet — use a static import, or wait for runtime package resolution (${localPackageGraphPlatformIssueUrl}).`,
@@ -268,7 +309,7 @@ export async function fetchLocalPackageGraph(
 			},
 			body: JSON.stringify({
 				code: input.code,
-				imports,
+				imports: required,
 				...(input.conversationId !== undefined
 					? { conversationId: input.conversationId }
 					: {}),
@@ -283,11 +324,11 @@ export async function fetchLocalPackageGraph(
 
 	const body = await readJson(response)
 	if (!response.ok) {
-		throw describePackageGraphFailure(response.status, body, url, imports, input.token)
+		throw describePackageGraphFailure(response.status, body, url, required, input.token)
 	}
 
-	const graph = parsePackageGraphBody(body, imports)
-	const missing = imports.filter(
+	const graph = parsePackageGraphBody(body, required)
+	const missing = required.filter(
 		(specifier) => !graph.modules.some((module) => module.name === specifier),
 	)
 	if (missing.length > 0) {

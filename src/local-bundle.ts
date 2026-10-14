@@ -41,7 +41,11 @@ export async function bundleLocalUserModule(modulePath: string): Promise<string>
 function formatBundleError(modulePath: string, error: unknown): string {
 	const details = bundleErrorDetails(error)
 	const header = `Could not bundle ${modulePath} for local execute.`
-	return details.length > 0 ? `${header}\n${details}` : header
+	const body = details.length > 0 ? `${header}\n${details}` : header
+	if (/Could not resolve|Cannot find module|ENOENT/i.test(body)) {
+		return `${body}\nfix: Run \`npm install\` in the package directory (and any local deps), then retry.`
+	}
+	return body
 }
 
 function bundleErrorDetails(error: unknown): string {

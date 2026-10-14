@@ -159,6 +159,7 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 		code,
 		conversationId: input.conversationId,
 		...(input.depResolve ? { depResolve: input.depResolve } : {}),
+		...(input.packageRoot ? { packageRoot: input.packageRoot } : {}),
 		onStatus: input.onStatus,
 	})
 

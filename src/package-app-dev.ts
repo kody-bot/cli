@@ -190,6 +190,7 @@ export async function startPackageAppDev(
 			workDir,
 			code,
 			packageContext,
+			packageRoot: options.manifest.root,
 			mockStorage: options.target === 'mock',
 			bridgePort: bridge!.port,
 			allowPrivateNetwork: options.allowPrivateNetwork,
@@ -369,6 +370,7 @@ async function writeWorkerFiles(input: {
 	workDir: string
 	code: string
 	packageContext: PackageLocalContext
+	packageRoot?: string
 	mockStorage: boolean
 	bridgePort: number
 	allowPrivateNetwork?: boolean
@@ -388,6 +390,7 @@ async function writeWorkerFiles(input: {
 		...(input.org ? { org: input.org } : {}),
 		fetchFn: input.fetchFn,
 		...(input.depResolve ? { depResolve: input.depResolve } : {}),
+		...(input.packageRoot ? { packageRoot: input.packageRoot } : {}),
 		onStatus: input.onStatus,
 	})
 	const files = { entry: 'entry.js', user: 'main.js', runtime: 'runtime.js' }
