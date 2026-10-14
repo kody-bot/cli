@@ -376,3 +376,52 @@ import real from 'kody:@scope/pkg/real'
 `
 	assert.deepEqual(listSavedPackageImports(code), ['kody:@scope/pkg/real'])
 })
+
+test('prod still fetches package-graph when local deps cover all imports (gateway shim)', async () => {
+	const { resolveLocalPackageGraph, localExecuteGatewayFetchShimModuleName } =
+		await import('../src/local-package-graph.js')
+	const root = await mkdtemp(join(tmpdir(), 'kody-prod-shim-'))
+	try {
+		await writeFile(
+			join(root, 'package.json'),
+			JSON.stringify({
+				name: '@local/demo',
+				type: 'module',
+				exports: { '.': './src/index.ts', './helper': './src/helper.ts' },
+				kody: { id: 'demo' },
+			}),
+		)
+		await mkdir(join(root, 'src'), { recursive: true })
+		await writeFile(join(root, 'src/helper.ts'), `export const value = 1\n`)
+		await writeFile(join(root, 'src/index.ts'), `export {}\n`)
+		let called = false
+		const result = await resolveLocalPackageGraph({
+			code: `import { value } from 'kody:@local/demo/helper'\nexport default async () => value\n`,
+			apiUrl: 'https://api.kody.codes',
+			token: 'kody_tok_prod',
+			packageRoot: root,
+			fetchFn: async () => {
+				called = true
+				return new Response(
+					JSON.stringify({
+						imports: [],
+						modules: [
+							{
+								name: localExecuteGatewayFetchShimModuleName,
+								esModule: 'export {}\n',
+							},
+						],
+					}),
+					{ status: 200, headers: { 'content-type': 'application/json' } },
+				)
+			},
+		})
+		assert.equal(called, true)
+		assert.ok(
+			result.modules.some((m) => m.name === localExecuteGatewayFetchShimModuleName),
+		)
+		assert.ok(result.modules.some((m) => m.name === 'kody:@local/demo/helper'))
+	} finally {
+		await rm(root, { recursive: true, force: true })
+	}
+})

@@ -226,7 +226,13 @@ export async function resolveLocalPackageGraph(input: {
 		})
 		localModules = local.modules
 		unresolved = local.unresolved
-		if (unresolved.length === 0) {
+		// Mock: local-only graphs need no published package-graph (and no login).
+		// Prod: still fetch package-graph for the origin gateway-fetch shim even
+		// when every kody:@ import resolved from the working tree (Bugbot).
+		if (
+			unresolved.length === 0 &&
+			(input.depResolve !== undefined || isLikelyMockBearer(input.token))
+		) {
 			return { modules: localModules, imports }
 		}
 	}
