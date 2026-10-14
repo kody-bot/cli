@@ -62,6 +62,9 @@ Usage:
   kody search [query] [--org <slug>] [--entity <ref>] [--domain <id>] [--limit <n>] [--target prod|mock] [--token <token>] [--api-url <url>] [--json]
   kody api <operationId> [--org <slug>] [--params <json>] [--token <token>] [--api-url <url>] [--json]
   kody package publish [<@owner/leaf|package_id>] [--org <slug>] [--params <json>] [--token <token>] [--api-url <url>]
+  kody package collaborators <package> [--org <slug>] [--json] [--token <token>] [--api-url <url>]
+  kody package grant <package> (--team <slug> | --user <username>) [--preset use|contribute|manage] [--org <slug>] [--json]
+  kody package revoke <package> (--team <slug> | --user <username> | --grant <grant_id>) [--org <slug>] [--json]
   kody execute [--org <slug>] [--invoke <ref> | --code <esm> | --file <path>] [--params <json>] [--conversation-id <id>] [--json]
                [--credential <key=name>]… [--target prod|mock] [--token <token>] [--api-url <url>] [--local] [--allow-private-network]
   kody dev [serve] [--org <slug>] [--target prod|mock] [--reset-storage] [--port <n>] [--app-base-path <path>] [--allow-private-network]
@@ -185,6 +188,18 @@ ${orgBlock}
              auth as \`kody api\`). Optional positional is \`package_id\` when
              UUID-shaped, otherwise \`kody_id\` (\`@owner/leaf\`). Extra fields
              via \`--params\` JSON (e.g. \`allow_force\`). Prints JSON.
+
+  package collaborators | grant | revoke
+             Who can use one package, and add or remove teams and members of
+             the org (\`--org\`). \`<package>\` is \`@owner/leaf\`, the kody id,
+             or the package id. \`grant\` adds a team or org member or changes
+             their preset (default \`use\`) via \`packageCollaboratorSet\`;
+             people outside the org are refused. \`revoke\` removes one by
+             team, user, or grant id via \`packageCollaboratorRemove\`. Needs
+             Manage on the package and a token with
+             \`package:manage_access\` (\`auth bootstrap --scopes …\`); same
+             auth as \`kody api\`. Prints a short summary, or the API JSON
+             with \`--json\`.
 
   --token / ${apiTokenEnvVar}
              Scoped API token (preferred via env). With no \`kody login\`

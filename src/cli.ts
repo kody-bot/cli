@@ -36,6 +36,12 @@ import {
 	resolveExecuteInvokeCode,
 } from './invoke-passthrough.js'
 import { assertLocalExecuteNodeEngine } from './node-engine.js'
+import {
+	isPackageCollaboratorAction,
+	packageCollaboratorUsage,
+	parsePackageCollaboratorCommand,
+	runPackageCollaboratorPlan,
+} from './package-collaborators.js'
 import { readPackageVersion } from './package-info.js'
 import { redactError } from './redact.js'
 
@@ -139,6 +145,10 @@ function parseKnown(args: Array<string>) {
 			body: { type: 'string' },
 			clients: { type: 'string' },
 			yes: { type: 'boolean', short: 'y' },
+			team: { type: 'string' },
+			user: { type: 'string' },
+			preset: { type: 'string' },
+			grant: { type: 'string' },
 		},
 	})
 }
@@ -1333,11 +1343,6 @@ async function dispatch(
 		}
 		case 'package': {
 			const action = parsed.positionals[0]
-			if (action !== 'publish') {
-				throw new Error(
-					'Usage: kody package publish [<@owner/leaf|package_id>] [--params <json>] [--token <token>] [--api-url <url>] [--org <slug>]',
-				)
-			}
 			const apiUrl = apiUrlFrom({
 				apiUrl:
 					typeof parsed.values['api-url'] === 'string'
@@ -1345,6 +1350,37 @@ async function dispatch(
 						: undefined,
 			})
 			const tokenValues = tokenFlagValues(parsed.values)
+			if (isPackageCollaboratorAction(action)) {
+				const plan = parsePackageCollaboratorCommand({
+					action,
+					positionals: parsed.positionals.slice(1),
+					values: parsed.values,
+				})
+				const token = requireApiToken(tokenValues, process.env, `package ${action}`, {
+					apiUrl,
+				})
+				const { callOpenApiOperation } = await import('./open-api-client.js')
+				write(
+					await runPackageCollaboratorPlan({
+						plan,
+						json,
+						call: (operationId, params) =>
+							callOpenApiOperation({
+								operationId,
+								params,
+								token,
+								apiUrl,
+								...(org ? { org } : {}),
+							}),
+					}),
+				)
+				return 0
+			}
+			if (action !== 'publish') {
+				throw new Error(
+					`Usage: kody package publish [<@owner/leaf|package_id>] [--params <json>] [--token <token>] [--api-url <url>] [--org <slug>]\n${packageCollaboratorUsage}`,
+				)
+			}
 			const params = packagePublishParams({
 				positional: parsed.positionals[1],
 				paramsJson:

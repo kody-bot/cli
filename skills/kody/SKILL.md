@@ -113,6 +113,11 @@ and `--scopes` replaces them, so list every scope you need.
 Publish a package after `packageGetGitRemote` clone/push with
 `kody package publish <@owner/leaf|package_id>` (thin
 `packagePublishExternalPush` wrapper; same auth as `kody api`).
+See and change who can use a package (teams and org members of the `--org`
+org) with `kody package collaborators <package>`,
+`kody package grant <package> --team <slug>|--user <username> --preset use|contribute|manage`,
+and `kody package revoke <package> --team <slug>|--user <username>|--grant <id>`.
+These need a token with `package:manage_access`.
 `feature_disabled` means the account `local-execute` flag is off. Never read MCP OAuth tokens from the host.
 
 ```bash
