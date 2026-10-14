@@ -189,20 +189,21 @@ export async function resolveLocalPackageModules(input: {
 			bundled = await bundleLocalUserModule(modulePath)
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error)
-			// Local dep failures are not fixed by npm install in this package.
-			const cleaned = message
-				.split('\n')
-				.filter((line) => !/Run `npm install`/.test(line))
-				.join('\n')
+			// Dep was already mapped; failure is usually a missing relative/npm
+			// import inside that package — not a missing .kody/deps.json entry.
+			const tip = /Could not resolve ["']kody:@/i.test(message)
+				? `Tip: Map the dependency in .kody/deps.json (or package.json#kody.localDeps), ` +
+					`keep it in this package's exports, or log in so published package-graph can supply it.`
+				: /Could not resolve|Cannot find module|ENOENT/i.test(message)
+					? `Tip: Fix the missing import inside the local dep, or run \`npm install\` in that package's directory, then retry.`
+					: `Tip: Check the local dep source at ${modulePath}.`
 			throw new LocalPackageGraphError(
-				`Could not bundle local dep ${specifier} from ${modulePath}. ${cleaned}\n` +
-					`Tip: Map the dependency in .kody/deps.json (or package.json#kody.localDeps), ` +
-					`keep it in this package's exports, or log in so published package-graph can supply it.`,
+				`Could not bundle local dep ${specifier} from ${modulePath}. ${message}\n${tip}`,
 				{ code: 'local_dep_bundle_failed' },
 			)
 		}
 		// Path-like workerd module names path-join bare kody: builtins; rewrite
-		// to absolute /kody:… (registered as aliases in createWorkerdConfig).
+		// to the flat runtime alias (re-exports the same kody:runtime instance).
 		const esModule = await rewriteBareKodyBuiltinImports(bundled)
 		modules.push({ name: specifier, esModule })
 		for (const nested of await listSavedPackageImports(esModule)) {

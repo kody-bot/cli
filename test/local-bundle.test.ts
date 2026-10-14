@@ -115,9 +115,8 @@ export default () => missing
 	)
 })
 
-test('bundleLocalUserModule tip for kody:@ failures is not npm install', async () => {
+test('bundleLocalUserModule path containing kody:@ still gets npm tip for relative misses', async () => {
 	const dir = writeFixture({
-		// Force the error body to mention kody:@ (path segment) so the tip branch runs.
 		'kody:@fake/entry.mjs': `import { missing } from './nope.js'
 export default () => missing
 `,
@@ -127,8 +126,8 @@ export default () => missing
 		(error: unknown) => {
 			assert.ok(error instanceof Error)
 			assert.match(error.message, /kody:@/)
-			assert.doesNotMatch(error.message, /Run `npm install`/)
-			assert.match(error.message, /\.kody\/deps\.json|localDeps|package-graph/)
+			assert.match(error.message, /Run `npm install`/)
+			assert.doesNotMatch(error.message, /\.kody\/deps\.json/)
 			return true
 		},
 	)

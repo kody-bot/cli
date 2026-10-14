@@ -30,7 +30,11 @@ import {
 	resolveLocalPackageGraph,
 	writePackageModuleFiles,
 } from './local-package-graph.js'
-import { createWorkerdConfig } from './local-runtime-source.js'
+import {
+	createRuntimeFlatAliasSource,
+	createWorkerdConfig,
+	localWorkerModuleNames,
+} from './local-runtime-source.js'
 import { buildLocalPackageContext } from './local-package-run.js'
 import { installMockFetchShimModules } from './mock/install-mock-fetch-shim.js'
 import {
@@ -422,6 +426,10 @@ async function writeWorkerFiles(input: {
 			packageContext: input.packageContext,
 			mockStorage: input.mockStorage,
 		}),
+	)
+	await writeFile(
+		join(input.workDir, localWorkerModuleNames.runtimeFlatAlias),
+		createRuntimeFlatAliasSource(),
 	)
 	await writeFile(
 		join(input.workDir, 'config.capnp'),

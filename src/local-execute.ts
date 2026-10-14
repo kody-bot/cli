@@ -37,7 +37,9 @@ import {
 import {
 	createLocalEntrySource,
 	createLocalRuntimeModuleSource,
+	createRuntimeFlatAliasSource,
 	createWorkerdConfig,
+	localWorkerModuleNames,
 	runSecretEnvVar,
 	runSecretHeader,
 	type WorkerdPackageModuleFile,
@@ -235,6 +237,10 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 		)
 		await writeFile(join(workDir, files.user), code)
 		await writeFile(join(workDir, files.runtime), createLocalRuntimeModuleSource())
+		await writeFile(
+			join(workDir, localWorkerModuleNames.runtimeFlatAlias),
+			createRuntimeFlatAliasSource(),
+		)
 		const configPath = join(workDir, 'config.capnp')
 		await writeFile(
 			configPath,

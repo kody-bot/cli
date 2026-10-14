@@ -469,8 +469,8 @@ test('P2: local dep bundle failure tip is not npm install', async () => {
 				assert.ok(error instanceof LocalPackageGraphError)
 				assert.equal(error.code, 'local_dep_bundle_failed')
 				assert.match(error.message, /Could not bundle local dep kody:@local\/demo\/broken/)
-				assert.doesNotMatch(error.message, /Run `npm install`/)
-				assert.match(error.message, /\.kody\/deps\.json|localDeps|package-graph/)
+				assert.doesNotMatch(error.message, /\.kody\/deps\.json/)
+				assert.match(error.message, /Fix the missing import inside the local dep|npm install/)
 				return true
 			},
 		)
@@ -545,7 +545,12 @@ const dyn = await import('kody:runtime')
 	assert.doesNotMatch(rewritten, /from '\/kody:runtime'/)
 })
 
-test('P2/#5: createWorkerdConfig registers flat kody:runtime alias', () => {
+test('P2/#5: createWorkerdConfig registers flat kody:runtime re-export alias', async () => {
+	const { createRuntimeFlatAliasSource } = await import('../src/local-runtime-source.js')
+	const aliasSource = createRuntimeFlatAliasSource()
+	assert.match(aliasSource, /export \* from ["']kody:runtime["']/)
+	assert.doesNotMatch(aliasSource, /__kodyInstallLocalBridge/)
+
 	const config = createWorkerdConfig({
 		bridgePort: 4321,
 		files: { entry: 'entry.js', user: 'main.js', runtime: 'runtime.js' },
@@ -558,6 +563,15 @@ test('P2/#5: createWorkerdConfig registers flat kody:runtime alias', () => {
 		config,
 		new RegExp(
 			`name = ${JSON.stringify(localWorkerModuleNames.runtimeFlatAlias).replace(
+				/[.*+?^${}()|[\]\\]/g,
+				'\\$&',
+			)}`,
+		),
+	)
+	assert.match(
+		config,
+		new RegExp(
+			`embed ${JSON.stringify(localWorkerModuleNames.runtimeFlatAlias).replace(
 				/[.*+?^${}()|[\]\\]/g,
 				'\\$&',
 			)}`,

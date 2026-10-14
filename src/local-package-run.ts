@@ -29,7 +29,10 @@ import {
 	resolveLocalPackageGraph,
 	writePackageModuleFiles,
 } from './local-package-graph.js'
-import { createWorkerdConfig } from './local-runtime-source.js'
+import {
+	createRuntimeFlatAliasSource,
+	createWorkerdConfig,
+} from './local-runtime-source.js'
 import { installMockFetchShimModules } from './mock/install-mock-fetch-shim.js'
 import {
 	resolveMockFetchGateway,
@@ -214,6 +217,10 @@ export async function runLocalPackageModule(
 				packageContext: input.packageContext,
 				mockStorage: input.target === 'mock',
 			}),
+		)
+		await writeFile(
+			join(workDir, localWorkerModuleNames.runtimeFlatAlias),
+			createRuntimeFlatAliasSource(),
 		)
 		const configPath = join(workDir, 'config.capnp')
 		await writeFile(

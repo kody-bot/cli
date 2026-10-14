@@ -38,6 +38,15 @@ export const runSecretEnvVar = 'KODY_RUN_SECRET'
 /** Runtime ALS symbol shared with stamped / inlined `kody:runtime` helpers. */
 export const kodyRuntimeStorageSymbolDescription = 'kody.runtimeStorage'
 
+/**
+ * Thin re-export of `kody:runtime` under {@link localWorkerModuleNames.runtimeFlatAlias}.
+ * Must not embed a second runtime copy — entry installs the bridge only on
+ * `kody:runtime`, and local deps need that same module instance.
+ */
+export function createRuntimeFlatAliasSource(): string {
+	return `export * from ${JSON.stringify(localWorkerModuleNames.runtime)};\n`
+}
+
 export function createLocalRuntimeModuleSource(): string {
 	return `
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -379,9 +388,10 @@ export function createWorkerdConfig(input: {
 		)
 		.join('\n')
 	const packageBlock = packageEntries ? `\n${packageEntries}` : ''
-	// Flat runtime alias for local deps that rewrite bare `kody:runtime` imports
-	// (path-like `kody:@…` module names otherwise path-join the builtin).
-	const runtimeFlatAlias = `    (name = ${JSON.stringify(localWorkerModuleNames.runtimeFlatAlias)}, esModule = embed ${JSON.stringify(input.files.runtime)}),`
+	// Flat re-export of kody:runtime (same module instance). Callers must write
+	// createRuntimeFlatAliasSource() to this filename before serving.
+	const runtimeFlatAliasFile = localWorkerModuleNames.runtimeFlatAlias
+	const runtimeFlatAlias = `    (name = ${JSON.stringify(localWorkerModuleNames.runtimeFlatAlias)}, esModule = embed ${JSON.stringify(runtimeFlatAliasFile)}),`
 	return `using Workerd = import "/workerd/workerd.capnp";
 
 const config :Workerd.Config = (
