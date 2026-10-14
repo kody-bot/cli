@@ -42,9 +42,11 @@ export const kodyRuntimeStorageSymbolDescription = 'kody.runtimeStorage'
  * Thin re-export of `kody:runtime` under {@link localWorkerModuleNames.runtimeFlatAlias}.
  * Must not embed a second runtime copy — entry installs the bridge only on
  * `kody:runtime`, and local deps need that same module instance.
+ * `export *` omits `default`, so re-export it explicitly.
  */
 export function createRuntimeFlatAliasSource(): string {
-	return `export * from ${JSON.stringify(localWorkerModuleNames.runtime)};\n`
+	const runtime = JSON.stringify(localWorkerModuleNames.runtime)
+	return `export * from ${runtime};\nexport { default } from ${runtime};\n`
 }
 
 export function createLocalRuntimeModuleSource(): string {

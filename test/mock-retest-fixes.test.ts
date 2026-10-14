@@ -549,6 +549,7 @@ test('P2/#5: createWorkerdConfig registers flat kody:runtime re-export alias', a
 	const { createRuntimeFlatAliasSource } = await import('../src/local-runtime-source.js')
 	const aliasSource = createRuntimeFlatAliasSource()
 	assert.match(aliasSource, /export \* from ["']kody:runtime["']/)
+	assert.match(aliasSource, /export \{ default \} from ["']kody:runtime["']/)
 	assert.doesNotMatch(aliasSource, /__kodyInstallLocalBridge/)
 
 	const config = createWorkerdConfig({
