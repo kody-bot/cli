@@ -24,7 +24,13 @@ import {
 	parseKodyPackageSpecifier,
 	resolveLocalPackageModules,
 } from '../src/mock-local-deps.js'
-import { listSavedPackageImports } from '../src/local-package-graph.js'
+import {
+	listSavedPackageImports,
+	LocalPackageGraphError,
+	rewriteBareKodyBuiltinImports,
+} from '../src/local-package-graph.js'
+import { createWorkerdConfig, localWorkerModuleNames } from '../src/local-runtime-source.js'
+import { buildUsage } from '../src/help.js'
 import { StructuredCliError } from '../src/structured-error.js'
 import { resolveExportModulePath, loadPackageManifest } from '../src/package-manifest.js'
 
@@ -79,6 +85,23 @@ test('P1: authenticatedFetch and gatewayFetch go through MSW handlers', async ()
 	})
 	assert.ok(gw)
 	assert.equal((await gw).status, 200)
+
+	// #2 follow-up: emit / streaming hops use the same MSW buffer path.
+	const stream = await tryHandleMockGatewayFetchCall({
+		gateway,
+		path: ['kody', 'gatewayFetchStream'],
+		args: [
+			{
+				request: {
+					url: 'https://api.github.com/graphql',
+					method: 'POST',
+					bodyBase64: Buffer.from('{"stream":true}', 'utf8').toString('base64'),
+				},
+			},
+		],
+	})
+	assert.ok(stream)
+	assert.equal((await stream).status, 200)
 })
 
 test('P1/P3: unmocked authenticatedFetch fails closed (no placeholder stub)', async () => {
@@ -367,14 +390,188 @@ test('P3: mocks.ts bundle_failed includes line number', async () => {
 	}
 })
 
-test('P2: comments with kody:@ do not count as imports (already fixed)', () => {
+test('P2: comments with kody:@ do not count as imports (es-module-lexer)', async () => {
 	const code = `
 // import x from 'kody:@scope/pkg/export'
 /* import y from "kody:@scope/pkg/other" */
+/**
+ * importPattern: from 'kody:@kentcdodds/linkedin/<utility-name>'
+ */
 const docs = "from 'kody:@scope/pkg/docs'"
 import real from 'kody:@scope/pkg/real'
 `
-	assert.deepEqual(listSavedPackageImports(code), ['kody:@scope/pkg/real'])
+	assert.deepEqual(await listSavedPackageImports(code), ['kody:@scope/pkg/real'])
+})
+
+test('P2: linkedin-style doc comment does not trigger local dep bundling', async () => {
+	const root = await mkdtemp(join(tmpdir(), 'kody-linkedin-doc-'))
+	try {
+		await writeFile(
+			join(root, 'package.json'),
+			JSON.stringify({
+				name: '@kentcdodds/linkedin',
+				type: 'module',
+				exports: { '.': './index.ts' },
+				kody: { id: 'linkedin' },
+			}),
+		)
+		await writeFile(
+			join(root, 'index.ts'),
+			`/**
+ * importPattern: from 'kody:@kentcdodds/linkedin/<utility-name>'
+ */
+export default async () => ({ ok: true })
+`,
+		)
+		const manifest = await loadPackageManifest(root)
+		const resolved = await resolveLocalPackageModules({
+			code: `/**
+ * importPattern: from 'kody:@kentcdodds/linkedin/<utility-name>'
+ */
+export default async () => ({ ok: true })
+`,
+			packageRoot: root,
+			selfManifest: manifest,
+		})
+		assert.deepEqual(resolved.modules, [])
+		assert.deepEqual(resolved.unresolved, [])
+	} finally {
+		await rm(root, { recursive: true, force: true })
+	}
+})
+
+test('P2: local dep bundle failure tip is not npm install', async () => {
+	const root = await mkdtemp(join(tmpdir(), 'kody-local-bundle-tip-'))
+	try {
+		await writeFile(
+			join(root, 'package.json'),
+			JSON.stringify({
+				name: '@local/demo',
+				type: 'module',
+				exports: { '.': './index.ts', './broken': './broken.ts' },
+				kody: { id: 'demo' },
+			}),
+		)
+		await writeFile(join(root, 'index.ts'), `export default 1\n`)
+		await writeFile(
+			join(root, 'broken.ts'),
+			`import { missing } from './does-not-exist.js'\nexport const x = missing\n`,
+		)
+		const manifest = await loadPackageManifest(root)
+		await assert.rejects(
+			() =>
+				resolveLocalPackageModules({
+					code: `import { x } from 'kody:@local/demo/broken'\nexport default async () => x\n`,
+					packageRoot: root,
+					selfManifest: manifest,
+				}),
+			(error: unknown) => {
+				assert.ok(error instanceof LocalPackageGraphError)
+				assert.equal(error.code, 'local_dep_bundle_failed')
+				assert.match(error.message, /Could not bundle local dep kody:@local\/demo\/broken/)
+				assert.doesNotMatch(error.message, /Run `npm install`/)
+				assert.match(error.message, /\.kody\/deps\.json|localDeps|package-graph/)
+				return true
+			},
+		)
+	} finally {
+		await rm(root, { recursive: true, force: true })
+	}
+})
+
+test('P2/#5: local dep bundles rewrite kody:runtime to flat alias', async () => {
+	const parent = await mkdtemp(join(tmpdir(), 'kody-runtime-prefix-'))
+	const app = join(parent, 'app')
+	const lib = join(parent, 'lib')
+	try {
+		await mkdir(join(lib, 'src'), { recursive: true })
+		await mkdir(app, { recursive: true })
+		await writeFile(
+			join(lib, 'package.json'),
+			JSON.stringify({
+				name: '@kentcdodds/grok-bot',
+				type: 'module',
+				exports: { './kody:runtime': './src/export.ts', './export': './src/export.ts' },
+				kody: { id: 'grok-bot' },
+			}),
+		)
+		await writeFile(
+			join(lib, 'src/export.ts'),
+			`import { kody } from 'kody:runtime'\nexport const ping = async () => kody\n`,
+		)
+		await writeFile(
+			join(app, 'package.json'),
+			JSON.stringify({
+				name: '@local/app',
+				type: 'module',
+				exports: { '.': './main.ts' },
+				kody: {
+					id: 'app',
+					localDeps: { '@kentcdodds/grok-bot': '../lib' },
+				},
+			}),
+		)
+		const manifest = await loadPackageManifest(app)
+		const resolved = await resolveLocalPackageModules({
+			code: `import { ping } from 'kody:@kentcdodds/grok-bot/export'\nexport default async () => ping\n`,
+			packageRoot: app,
+			selfManifest: manifest,
+		})
+		assert.equal(resolved.unresolved.length, 0)
+		const mod = resolved.modules.find((m) => m.name === 'kody:@kentcdodds/grok-bot/export')
+		assert.ok(mod)
+		assert.match(mod.esModule, /from ["']\.__kody_runtime__\.js["']/)
+		assert.doesNotMatch(mod.esModule, /from ["']kody:runtime["']/)
+		assert.doesNotMatch(mod.esModule, /kody:@kentcdodds\/grok-bot\/kody:runtime/)
+	} finally {
+		await rm(parent, { recursive: true, force: true })
+	}
+})
+
+test('P2/#5: rewriteBareKodyBuiltinImports uses flat alias, not path prefix', async () => {
+	const rewritten = await rewriteBareKodyBuiltinImports(`
+import { kody } from 'kody:runtime'
+import leaf from "kody:@kentcdodds/grok-bot/export"
+export { helper } from "kody:runtime"
+const dyn = await import('kody:runtime')
+`)
+	const flat = localWorkerModuleNames.runtimeFlatAlias
+	assert.match(rewritten, new RegExp(`from '${flat.replace(/\./g, '\\.')}'`))
+	assert.match(rewritten, new RegExp(`from "${flat.replace(/\./g, '\\.')}"`))
+	assert.match(rewritten, new RegExp(`import\\('${flat.replace(/\./g, '\\.')}'\\)`))
+	assert.match(rewritten, /from "kody:@kentcdodds\/grok-bot\/export"/)
+	assert.doesNotMatch(rewritten, /kody:@kentcdodds\/grok-bot\/kody:runtime/)
+	assert.doesNotMatch(rewritten, /from 'kody:runtime'/)
+	assert.doesNotMatch(rewritten, /from '\/kody:runtime'/)
+})
+
+test('P2/#5: createWorkerdConfig registers flat kody:runtime alias', () => {
+	const config = createWorkerdConfig({
+		bridgePort: 4321,
+		files: { entry: 'entry.js', user: 'main.js', runtime: 'runtime.js' },
+		packageModules: [
+			{ name: 'kody:@kentcdodds/grok-bot/export', file: 'pkg-0.js' },
+		],
+	})
+	assert.match(config, /name = "kody:runtime"/)
+	assert.match(
+		config,
+		new RegExp(
+			`name = ${JSON.stringify(localWorkerModuleNames.runtimeFlatAlias).replace(
+				/[.*+?^${}()|[\]\\]/g,
+				'\\$&',
+			)}`,
+		),
+	)
+	assert.doesNotMatch(config, /name = "\/kody:runtime"/)
+})
+
+test('docs: mock help describes fail-closed fetch, not native workerd fetch', () => {
+	const text = buildUsage({ orgs: [] })
+	assert.doesNotMatch(text, /keep native workerd fetch/)
+	assert.match(text, /unmocked_request/)
+	assert.match(text, /fail closed|fail-closed/i)
+	assert.match(text, /gatewayFetchStream/)
 })
 
 test('prod still fetches package-graph when local deps cover all imports (gateway shim)', async () => {

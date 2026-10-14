@@ -254,8 +254,11 @@ ${orgBlock}
              listed hosts to use the real network (credentials stay fake —
              never carries real secrets). Unmatched hosts fail with
              \`unmocked_request\` plus a paste-ready MSW handler stub.
-             Ignored on \`--target prod\`. Packages without \`.kody/mocks.ts\`
-             keep native workerd fetch.
+             Ignored on \`--target prod\`. On mock, outbound fetch always
+             goes through the Node gateway: with \`.kody/mocks.ts\`, unmatched
+             hosts (and all \`createAuthenticatedFetch\` / credentialed hops
+             without a handler) fail closed; without the file, public hosts
+             passthrough and private hosts need \`--allow-private-network\`.
 
   kody dev   Local testing for unpublished packages. Serves \`kody.app.entry\`
              on localhost via workerd with hot reload (mount-stripped path;
@@ -274,8 +277,9 @@ ${orgBlock}
              deps need no login). Optional \`.kody/mocks.ts\` exports MSW
              \`handlers\` for outbound fetch mocking (Node gateway; not
              published with the package) — \`createAuthenticatedFetch\`,
-             \`credential().fetch\`, and \`gatewayFetch\` all match against
-             them. Share previews are out of scope.
+             \`credential().fetch\`, \`gatewayFetch\`, and
+             \`gatewayFetchStream\` all match against them. Share previews
+             are out of scope.
 
 Environment:
   KODY_MCP_URL        Override the default MCP URL (${defaultMcpUrl})

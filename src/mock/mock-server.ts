@@ -366,7 +366,8 @@ async function dispatchCapabilityCall(
 		case 'kody.credentialClientRefresh':
 			return { ok: true, value: { refreshed: false, mock: true } }
 		case 'kody.authenticatedFetch':
-		case 'kody.gatewayFetch': {
+		case 'kody.gatewayFetch':
+		case 'kody.gatewayFetchStream': {
 			// Primary path is the Node MSW bridge (local-package-run / local-execute).
 			// If a call reaches the HTTP mock, fail closed — never return placeholder shapes.
 			const request = (args[0] ?? {}) as {
@@ -385,7 +386,7 @@ async function dispatchCapabilityCall(
 				target: 'mock',
 				where: url ? `${method} ${url}` : pathKey,
 				fix:
-					'Add a handler in .kody/mocks.ts for this URL, or pass --passthrough <host> for real network without secrets. createAuthenticatedFetch and credential().fetch go through the same MSW gateway.',
+					'Add a handler in .kody/mocks.ts for this URL, or pass --passthrough <host> for real network without secrets. createAuthenticatedFetch, credential().fetch, gatewayFetch, and gatewayFetchStream go through the same MSW gateway.',
 			})
 		}
 		case 'kody.adminUserList': {

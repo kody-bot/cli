@@ -14,16 +14,16 @@ import {
 
 const goodToken = 'kody_tok_pkg'
 
-test('listSavedPackageImports finds static and literal-dynamic kody:@ specifiers', () => {
-	assert.deepEqual(listSavedPackageImports(`import skill from 'kody:@me/skills/get'`), [
+test('listSavedPackageImports finds static and literal-dynamic kody:@ specifiers', async () => {
+	assert.deepEqual(await listSavedPackageImports(`import skill from 'kody:@me/skills/get'`), [
 		'kody:@me/skills/get',
 	])
 	assert.deepEqual(
-		listSavedPackageImports(`const m = await import("kody:@me/skills/get")`),
+		await listSavedPackageImports(`const m = await import("kody:@me/skills/get")`),
 		['kody:@me/skills/get'],
 	)
 	assert.deepEqual(
-		listSavedPackageImports(`
+		await listSavedPackageImports(`
 import { a } from 'kody:@a/pkg/one'
 import b from "kody:@b/pkg/two"
 export default async () => {
@@ -32,28 +32,31 @@ export default async () => {
 }`),
 		['kody:@a/pkg/one', 'kody:@b/pkg/two'],
 	)
-	assert.equal(hasSavedPackageImports(`import { kody } from 'kody:runtime'`), false)
-	assert.equal(hasLiteralDynamicSavedPackageImports(`import x from 'kody:@me/p/e'`), false)
+	assert.equal(await hasSavedPackageImports(`import { kody } from 'kody:runtime'`), false)
+	assert.equal(await hasLiteralDynamicSavedPackageImports(`import x from 'kody:@me/p/e'`), false)
 	assert.equal(
-		hasLiteralDynamicSavedPackageImports(`await import('kody:@me/p/e')`),
+		await hasLiteralDynamicSavedPackageImports(`await import('kody:@me/p/e')`),
 		true,
 	)
 })
 
-test('listSavedPackageImports ignores kody:@ specifiers inside strings and comments', () => {
+test('listSavedPackageImports ignores kody:@ specifiers inside strings and comments', async () => {
 	assert.deepEqual(
-		listSavedPackageImports(`
+		await listSavedPackageImports(`
 import post from 'kody:@kentcdodds/discord/post-message'
 const hint = "import scan from 'kody:@kentcdodds/gift-cliff-ops/scan'"
 const hint2 = 'from "kody:@kentcdodds/gift-cliff-ops/settings"'
 // import dead from 'kody:@dead/pkg/x'
 /* import block from 'kody:@dead/pkg/y' */
+/**
+ * importPattern: from 'kody:@kentcdodds/linkedin/<utility-name>'
+ */
 export default async () => post
 `),
 		['kody:@kentcdodds/discord/post-message'],
 	)
 	assert.equal(
-		hasLiteralDynamicSavedPackageImports(
+		await hasLiteralDynamicSavedPackageImports(
 			`const docs = "await import('kody:@me/p/e')"; export default async () => 1`,
 		),
 		false,

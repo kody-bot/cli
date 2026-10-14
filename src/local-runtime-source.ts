@@ -22,6 +22,13 @@ export const localWorkerModuleNames = {
 	entry: '__kody_local_entry.js',
 	user: 'main.js',
 	runtime: 'kody:runtime',
+	/**
+	 * Flat alias for `kody:runtime`. Path-like package module names
+	 * (`kody:@scope/pkg/export`) path-join bare `kody:runtime` into
+	 * `kody:@scope/pkg/kody:runtime`; local deps rewrite to this slash-free
+	 * name instead. workerd rejects leading-`/` absolute module names.
+	 */
+	runtimeFlatAlias: '.__kody_runtime__.js',
 } as const
 
 /** Header carrying the per-run secret on workerd → bridge and CLI → workerd hops. */
@@ -372,6 +379,9 @@ export function createWorkerdConfig(input: {
 		)
 		.join('\n')
 	const packageBlock = packageEntries ? `\n${packageEntries}` : ''
+	// Flat runtime alias for local deps that rewrite bare `kody:runtime` imports
+	// (path-like `kody:@…` module names otherwise path-join the builtin).
+	const runtimeFlatAlias = `    (name = ${JSON.stringify(localWorkerModuleNames.runtimeFlatAlias)}, esModule = embed ${JSON.stringify(input.files.runtime)}),`
 	return `using Workerd = import "/workerd/workerd.capnp";
 
 const config :Workerd.Config = (
@@ -387,7 +397,8 @@ const kodyWorker :Workerd.Worker = (
   modules = [
     (name = ${JSON.stringify(localWorkerModuleNames.entry)}, esModule = embed ${JSON.stringify(input.files.entry)}),
     (name = ${JSON.stringify(localWorkerModuleNames.user)}, esModule = embed ${JSON.stringify(input.files.user)}),
-    (name = ${JSON.stringify(localWorkerModuleNames.runtime)}, esModule = embed ${JSON.stringify(input.files.runtime)}),${packageBlock}
+    (name = ${JSON.stringify(localWorkerModuleNames.runtime)}, esModule = embed ${JSON.stringify(input.files.runtime)}),
+${runtimeFlatAlias}${packageBlock}
   ],
   compatibilityDate = ${JSON.stringify(localExecuteCompatibilityDate)},
   compatibilityFlags = [${flags}],

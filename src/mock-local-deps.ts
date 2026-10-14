@@ -16,6 +16,7 @@ import {
 	hasLiteralDynamicSavedPackageImports,
 	listSavedPackageImports,
 	LocalPackageGraphError,
+	rewriteBareKodyBuiltinImports,
 } from './local-package-graph.js'
 import {
 	loadPackageManifest,
@@ -122,11 +123,11 @@ export async function resolveLocalPackageModules(input: {
 	selfManifest?: KodyPackageManifest
 	onStatus?: (message: string) => void
 }): Promise<{ modules: Array<LocalPackageModule>; unresolved: Array<string> }> {
-	const imports = listSavedPackageImports(input.code)
+	const imports = await listSavedPackageImports(input.code)
 	if (imports.length === 0) {
 		return { modules: [], unresolved: [] }
 	}
-	if (hasLiteralDynamicSavedPackageImports(input.code)) {
+	if (await hasLiteralDynamicSavedPackageImports(input.code)) {
 		throw new LocalPackageGraphError(
 			`Local execute cannot bind literal dynamic import("kody:@…") yet — use a static import.`,
 			{ code: 'unsupported_dynamic_package_import' },
@@ -183,9 +184,28 @@ export async function resolveLocalPackageModules(input: {
 			)
 		}
 		input.onStatus?.(`Bundling local dep ${specifier} from ${modulePath}…`)
-		const esModule = await bundleLocalUserModule(modulePath)
+		let bundled: string
+		try {
+			bundled = await bundleLocalUserModule(modulePath)
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error)
+			// Local dep failures are not fixed by npm install in this package.
+			const cleaned = message
+				.split('\n')
+				.filter((line) => !/Run `npm install`/.test(line))
+				.join('\n')
+			throw new LocalPackageGraphError(
+				`Could not bundle local dep ${specifier} from ${modulePath}. ${cleaned}\n` +
+					`Tip: Map the dependency in .kody/deps.json (or package.json#kody.localDeps), ` +
+					`keep it in this package's exports, or log in so published package-graph can supply it.`,
+				{ code: 'local_dep_bundle_failed' },
+			)
+		}
+		// Path-like workerd module names path-join bare kody: builtins; rewrite
+		// to absolute /kody:… (registered as aliases in createWorkerdConfig).
+		const esModule = await rewriteBareKodyBuiltinImports(bundled)
 		modules.push({ name: specifier, esModule })
-		for (const nested of listSavedPackageImports(esModule)) {
+		for (const nested of await listSavedPackageImports(esModule)) {
 			await resolveOne(nested)
 		}
 	}

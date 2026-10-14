@@ -1,8 +1,10 @@
+import { init as initEsModuleLexer, parse as parseEsModule } from 'es-module-lexer'
 import {
 	assertTokenSafeApiUrl,
 	capabilityProxyUrl,
 	type CapabilityProxyClientInput,
 } from './capability-proxy.js'
+import { localWorkerModuleNames } from './local-runtime-source.js'
 import {
 	apiTokenMintInstructions,
 	cliBootstrapInstructions,
@@ -16,6 +18,9 @@ import {
 import { apiTokenEnvVar, cliName } from './defaults.js'
 import { describeNetworkError } from './network-error.js'
 import { readPackageVersion } from './package-info.js'
+
+/** Eager WASM init for es-module-lexer (shared across import scans). */
+const esModuleLexerReady = initEsModuleLexer()
 
 /**
  * Open API contract for downloading stamped `kody:@…` modules so
@@ -42,87 +47,101 @@ export type LocalPackageGraph = {
 	imports: Array<string>
 }
 
-const staticImportPattern =
-	/(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+)["'](kody:@[^"']+)["']/g
-
 /**
- * True when `index` sits inside a string literal or comment. Used so
- * doc/example snippets like `from 'kody:@scope/pkg/export'` inside a string
- * are not treated as real imports (gift-cliff-ops format/digest helpers;
- * kentcdodds/kody#2808).
+ * Unique `kody:@…` specifiers from real static / literal-dynamic imports.
+ * Uses es-module-lexer (not a regex) so doc comments and string literals are
+ * never treated as imports (linkedin overview / #2808).
  */
-export function isInsideStringOrComment(code: string, index: number): boolean {
-	let i = 0
-	while (i < index && i < code.length) {
-		const ch = code[i]!
-		const next = code[i + 1]
-		if (ch === '/' && next === '/') {
-			i += 2
-			while (i < code.length && code[i] !== '\n') i += 1
-			if (i >= index) return true
-			continue
-		}
-		if (ch === '/' && next === '*') {
-			i += 2
-			while (i < code.length && !(code[i] === '*' && code[i + 1] === '/')) {
-				if (i >= index) return true
-				i += 1
-			}
-			i += 2
-			if (i > index) return true
-			continue
-		}
-		if (ch === '"' || ch === "'" || ch === '`') {
-			const quote = ch
-			i += 1
-			while (i < code.length) {
-				if (i >= index) return true
-				if (code[i] === '\\') {
-					i += 2
-					continue
-				}
-				if (code[i] === quote) {
-					i += 1
-					break
-				}
-				i += 1
-			}
-			if (i > index) return true
-			continue
-		}
-		i += 1
-	}
-	return false
+function isTypeOnlyImport(im: {
+	type: string
+	typeOnly?: boolean
+	probablyTypeOnly?: boolean
+}): boolean {
+	if (im.type === 'dynamic') return im.probablyTypeOnly === true
+	return im.typeOnly === true
 }
 
-/** Unique `kody:@…` specifiers referenced by static or literal-dynamic imports. */
-export function listSavedPackageImports(code: string): Array<string> {
+function parseModuleImports(code: string): ReturnType<typeof parseEsModule>[0] {
+	try {
+		return parseEsModule(code)[0]
+	} catch {
+		// Incomplete / invalid source (workerd reports the SyntaxError later).
+		return []
+	}
+}
+
+export async function listSavedPackageImports(code: string): Promise<Array<string>> {
+	await esModuleLexerReady
+	const imports = parseModuleImports(code)
 	const found = new Set<string>()
-	for (const match of code.matchAll(staticImportPattern)) {
-		if (match.index === undefined) continue
-		if (isInsideStringOrComment(code, match.index)) continue
-		const specifier = match[1]
-		if (specifier) found.add(specifier)
+	for (const im of imports) {
+		if (isTypeOnlyImport(im)) continue
+		const specifier = im.specifier
+		if (typeof specifier === 'string' && specifier.startsWith('kody:@')) {
+			found.add(specifier)
+		}
 	}
 	return [...found]
 }
 
-export function hasSavedPackageImports(code: string): boolean {
-	return listSavedPackageImports(code).length > 0
+export async function hasSavedPackageImports(code: string): Promise<boolean> {
+	return (await listSavedPackageImports(code)).length > 0
 }
 
 /**
- * Literal `import("kody:@…")` (or `import('kody:@…')`) — static `from` imports
- * are fine; computed `import(specifier)` cannot be bound into workerd ahead of
- * time without a runtime resolver.
+ * Literal `import("kody:@…")` — static `from` imports are fine; computed
+ * `import(specifier)` cannot be bound into workerd ahead of time.
  */
-export function hasLiteralDynamicSavedPackageImports(code: string): boolean {
-	for (const match of code.matchAll(/\bimport\s*\(\s*["']kody:@[^"']+["']\s*\)/g)) {
-		if (match.index === undefined) continue
-		if (isInsideStringOrComment(code, match.index)) continue
-		return true
+export async function hasLiteralDynamicSavedPackageImports(code: string): Promise<boolean> {
+	await esModuleLexerReady
+	return parseModuleImports(code).some((im) => {
+		if (im.type !== 'dynamic' || im.probablyTypeOnly) return false
+		return typeof im.specifier === 'string' && im.specifier.startsWith('kody:@')
+	})
+}
+
+/**
+ * Flat workerd module name for a bare `kody:` builtin (not `kody:@…`).
+ * Path-like package modules path-join bare builtins; slash-free aliases do not.
+ * workerd also rejects leading-`/` absolute module names.
+ */
+export function flatAliasForBareKodyBuiltin(specifier: string): string | null {
+	if (!specifier.startsWith('kody:') || specifier.startsWith('kody:@')) return null
+	if (specifier === localWorkerModuleNames.runtime) {
+		return localWorkerModuleNames.runtimeFlatAlias
 	}
-	return false
+	// Future bare builtins: slash-free so path-like importers do not rejoin.
+	const name = specifier.slice('kody:'.length)
+	if (!name || /[/\\]/.test(name)) return null
+	return `.__kody_builtin__${name}.js`
+}
+
+/**
+ * Rewrite bare `kody:` builtins (not `kody:@…`) to flat aliases so workerd does
+ * not path-join them under path-like module names
+ * (`kody:@scope/pkg/export` → `kody:@scope/pkg/kody:runtime`).
+ */
+export async function rewriteBareKodyBuiltinImports(esModule: string): Promise<string> {
+	await esModuleLexerReady
+	const edits = parseModuleImports(esModule)
+		.filter((im) => typeof im.specifier === 'string')
+		.map((im) => {
+			const specifier = im.specifier as string
+			const alias = flatAliasForBareKodyBuiltin(specifier)
+			if (!alias) return null
+			return { start: im.start, end: im.end, alias }
+		})
+		.filter((edit): edit is { start: number; end: number; alias: string } => edit !== null)
+		.sort((a, b) => b.start - a.start)
+	let out = esModule
+	for (const edit of edits) {
+		// Dynamic imports include quotes in start/end; static imports do not.
+		const raw = esModule.slice(edit.start, edit.end)
+		const quote = raw.startsWith("'") || raw.startsWith('"') ? raw[0]! : null
+		const replacement = quote ? `${quote}${edit.alias}${quote}` : edit.alias
+		out = `${out.slice(0, edit.start)}${replacement}${out.slice(edit.end)}`
+	}
+	return out
 }
 
 export class LocalPackageGraphError extends Error {
@@ -199,7 +218,7 @@ export async function resolveLocalPackageGraph(input: {
 	packageRoot?: string
 	onStatus?: (message: string) => void
 }): Promise<LocalPackageGraph> {
-	const imports = listSavedPackageImports(input.code)
+	const imports = await listSavedPackageImports(input.code)
 	// Mock package-graph is empty by design. When deps are resolved from a
 	// separate prod client, skip the round-trip if there are no kody:@ imports.
 	// Prod CapabilityProxy still needs package-graph for the gateway-fetch shim
@@ -207,7 +226,7 @@ export async function resolveLocalPackageGraph(input: {
 	if (
 		input.depResolve &&
 		imports.length === 0 &&
-		!hasLiteralDynamicSavedPackageImports(input.code)
+		!(await hasLiteralDynamicSavedPackageImports(input.code))
 	) {
 		return { modules: [], imports: [] }
 	}
@@ -290,9 +309,9 @@ export async function fetchLocalPackageGraph(
 	},
 ): Promise<LocalPackageGraph> {
 	assertTokenSafeApiUrl(input.apiUrl)
-	const imports = listSavedPackageImports(input.code)
+	const imports = await listSavedPackageImports(input.code)
 	const required = input.requiredImports ?? imports
-	if (hasLiteralDynamicSavedPackageImports(input.code)) {
+	if (await hasLiteralDynamicSavedPackageImports(input.code)) {
 		throw new LocalPackageGraphError(
 			`Local execute cannot bind literal dynamic import("kody:@…") yet — use a static import, or wait for runtime package resolution (${localPackageGraphPlatformIssueUrl}).`,
 			{ code: 'unsupported_dynamic_package_import' },

@@ -150,7 +150,7 @@ export async function runLocalExecute(input: LocalExecuteInput): Promise<ToolCal
 	// when there are no `kody:@` imports so ambient `{{secret:…}}` fetch hops
 	// (or fails closed) instead of sending a raw placeholder (kody#3020).
 	input.onStatus?.(
-		hasSavedPackageImports(code)
+		(await hasSavedPackageImports(code))
 			? savedPackageImportLocalResolveStatus
 			: localExecutePackageGraphResolveStatus,
 	)

@@ -47,7 +47,7 @@ export default async function main(p: { a?: string }): Promise<string> {
 	assert.match(source, /from\s+["']kody:@owner\/leaf\/a\/b\/c["']/)
 	assert.doesNotMatch(source, /kody:@me\/pkg\/types/)
 	assert.doesNotMatch(source, /from\s+['"]\.\/helper\.js['"]/)
-	assert.deepEqual(new Set(listSavedPackageImports(source)), new Set([
+	assert.deepEqual(new Set(await listSavedPackageImports(source)), new Set([
 		'kody:@owner/leaf/a/b/c',
 		'kody:@test/pkg/hello',
 	]))
@@ -109,6 +109,26 @@ export default () => missing
 			assert.ok(error instanceof Error)
 			assert.match(error.message, /Could not bundle .+entry\.mjs for local execute/)
 			assert.match(error.message, /definitely-not-installed-kody-dep/)
+			assert.match(error.message, /Run `npm install`/)
+			return true
+		},
+	)
+})
+
+test('bundleLocalUserModule tip for kody:@ failures is not npm install', async () => {
+	const dir = writeFixture({
+		// Force the error body to mention kody:@ (path segment) so the tip branch runs.
+		'kody:@fake/entry.mjs': `import { missing } from './nope.js'
+export default () => missing
+`,
+	})
+	await assert.rejects(
+		() => bundleLocalUserModule(join(dir, 'kody:@fake/entry.mjs')),
+		(error: unknown) => {
+			assert.ok(error instanceof Error)
+			assert.match(error.message, /kody:@/)
+			assert.doesNotMatch(error.message, /Run `npm install`/)
+			assert.match(error.message, /\.kody\/deps\.json|localDeps|package-graph/)
 			return true
 		},
 	)

@@ -45,6 +45,7 @@ export const mockCapabilityPaths = [
 	// unmocked_request if a call somehow bypasses the bridge.
 	'kody.authenticatedFetch',
 	'kody.gatewayFetch',
+	'kody.gatewayFetchStream',
 	// Read-only admin fixture so gift-cliff-ops-style packages can smoke locally.
 	'kody.adminUserList',
 ] as const

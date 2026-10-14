@@ -42,6 +42,10 @@ function formatBundleError(modulePath: string, error: unknown): string {
 	const details = bundleErrorDetails(error)
 	const header = `Could not bundle ${modulePath} for local execute.`
 	const body = details.length > 0 ? `${header}\n${details}` : header
+	// kody:@ resolution failures are package-graph / localDeps issues — not npm.
+	if (/kody:@/.test(body)) {
+		return `${body}\nfix: Map the dependency in .kody/deps.json (or package.json#kody.localDeps), keep it in this package's exports, or log in so published package-graph can supply it.`
+	}
 	if (/Could not resolve|Cannot find module|ENOENT/i.test(body)) {
 		return `${body}\nfix: Run \`npm install\` in the package directory (and any local deps), then retry.`
 	}

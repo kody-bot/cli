@@ -41,6 +41,7 @@ test('workerd network access is public-only by default and keeps the loopback br
 	assert.match(config, /allow = \["public"\]/)
 	assert.match(config, /address = "127\.0\.0\.1:4321"/)
 	assert.doesNotMatch(config, /allow = \["public", "private", "local"\]/)
+	assert.match(config, /name = "\.__kody_runtime__\.js"/)
 
 	const privateNetworkConfig = createWorkerdConfig({
 		bridgePort: 4321,
@@ -246,10 +247,13 @@ function reset() {
 	packageGraphStatus = null
 }
 
-test('hasSavedPackageImports detects static and dynamic kody:@ imports', () => {
-	assert.equal(hasSavedPackageImports(`import skill from 'kody:@me/skills/get'`), true)
-	assert.equal(hasSavedPackageImports(`const m = await import("kody:@me/skills/get")`), true)
-	assert.equal(hasSavedPackageImports(`import { kody } from 'kody:runtime'`), false)
+test('hasSavedPackageImports detects static and dynamic kody:@ imports', async () => {
+	assert.equal(await hasSavedPackageImports(`import skill from 'kody:@me/skills/get'`), true)
+	assert.equal(
+		await hasSavedPackageImports(`const m = await import("kody:@me/skills/get")`),
+		true,
+	)
+	assert.equal(await hasSavedPackageImports(`import { kody } from 'kody:runtime'`), false)
 })
 
 test('createLocalEntrySource side-effect imports the gateway-fetch shim before user code', () => {

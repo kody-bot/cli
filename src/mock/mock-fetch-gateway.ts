@@ -4,10 +4,11 @@
  * otherwise fail closed with `unmocked_request` + a paste-ready handler stub.
  *
  * On `--target mock`, *every* outbound hop (ambient `fetch`, `credential().fetch`,
- * `createAuthenticatedFetch` / `kody.authenticatedFetch`, and `kody.gatewayFetch`)
- * goes through this gateway. Packages without `.kody/mocks.ts` use passthrough-all
- * for ambient/gatewayFetch (public hosts only); authenticatedFetch still fails
- * closed so leaky placeholder stubs never reach package code.
+ * `createAuthenticatedFetch` / `kody.authenticatedFetch`, `kody.gatewayFetch`,
+ * and `kody.gatewayFetchStream`) goes through this gateway. Packages without
+ * `.kody/mocks.ts` use public-network passthrough for ambient/gatewayFetch
+ * (authenticatedFetch still fails closed). With `.kody/mocks.ts`, unmatched
+ * hosts fail closed with `unmocked_request`.
  */
 
 import { getResponse, isPassthroughResponse, type RequestHandler } from 'msw'
@@ -353,8 +354,9 @@ function safeHost(url: string): string {
 }
 
 /**
- * Bridge interceptor: handle `kody.gatewayFetch` and `kody.authenticatedFetch`
- * when a mock gateway is active (always on `--target mock`).
+ * Bridge interceptor: handle `kody.gatewayFetch`, `kody.gatewayFetchStream`,
+ * and `kody.authenticatedFetch` when a mock gateway is active (always on
+ * `--target mock`). Stream hops buffer through the same MSW path.
  */
 export function tryHandleMockGatewayFetchCall(input: {
 	gateway: MockFetchGateway | undefined
@@ -364,7 +366,7 @@ export function tryHandleMockGatewayFetchCall(input: {
 }): Promise<MockGatewayFetchResult> | null {
 	if (!input.gateway) return null
 	const pathKey = input.path.join('.')
-	if (pathKey === 'kody.gatewayFetch') {
+	if (pathKey === 'kody.gatewayFetch' || pathKey === 'kody.gatewayFetchStream') {
 		return input.gateway.handle(input.args[0], input.signal)
 	}
 	if (pathKey === 'kody.authenticatedFetch') {
