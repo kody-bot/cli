@@ -1060,6 +1060,7 @@ async function dispatch(
 		case 'dev': {
 			const { resolveTarget } = await import('./target.js')
 			const {
+				parseDevPort,
 				parseDevSubcommand,
 				resolveDevAuth,
 				runDevCheck,
@@ -1227,7 +1228,7 @@ async function dispatch(
 				...(org && target === 'mock' ? { orgSlug: org } : {}),
 			})
 			const port =
-				typeof parsed.values.port === 'string' ? Number(parsed.values.port) : undefined
+				typeof parsed.values.port === 'string' ? parseDevPort(parsed.values.port) : undefined
 			const appBasePath =
 				typeof parsed.values['app-base-path'] === 'string'
 					? parsed.values['app-base-path']

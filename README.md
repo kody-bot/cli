@@ -269,6 +269,38 @@ kody search --target mock local
   There is no HMR. Only requests that accept `text/html` (browser page loads)
   get the script; compressed HTML, agent requests, and `kody dev fetch`
   responses are left untouched.
+- **Fast rebuilds.** File events are debounced for 30ms, and esbuild reuses
+  an incremental context, so a save usually serves the new code in about
+  60ms on a small app.
+- **Ports.** Each package gets a stable default port in 4100–4999 (derived
+  from `kody.id`), so URLs survive restarts. If it is taken, `kody dev` moves
+  to the next free port. An explicit `--port <n>` is used exactly and fails
+  with a fix when the port is busy (`--port 0` picks any free port). Starting
+  a second `kody dev` for the same package and target without `--port` fails
+  and names the running server's URL and pid.
+- **Client bundle and assets**, same URLs as a published app:
+  `kody.app.client` is bundled for the browser and served at
+  `<appBasePath>/_assets/client.<hash>.js` (inline source map;
+  `client.externals` stay bare imports). `packageContext.clientModuleUrl`
+  points at it, and `/_assets/__version.json` reports it. Files in
+  `kody.app.assets` are served under `/_assets/`. Both are `no-store` and
+  rebuild on save; editing an asset reloads open pages.
+- **Prebuild**: `kody.dev.prebuild` runs a shell command from the package
+  root before every build (with `KODY_DEV=1`), for generated CSS, icons, or
+  data files. Its output is tagged `[prebuild]`. A non-zero exit is shown as a
+  build error. File changes made while it runs do not trigger another build.
+  `kody.dev.ignore` lists root-relative path prefixes the watcher skips:
+
+  ```json
+  {
+    "kody": {
+      "app": { "entry": "./app/router.ts", "client": "./app/client.ts", "assets": "./public" },
+      "dev": { "prebuild": "node scripts/build-css.mjs", "ignore": ["public/generated"] }
+    }
+  }
+  ```
+
+  `kody.dev` only affects `kody dev`; publish ignores it.
 - **Cleanup**: Ctrl-C, `SIGTERM`, and `SIGHUP` stop workerd and remove the
   `kody-dev-*` temp dir. If the CLI is killed outright, a small reaper process
   does the same. Each start also sweeps dirs and orphaned workerd processes

@@ -31,7 +31,7 @@ export type DevEvent =
 	  }
 	| {
 			type: 'log'
-			source: 'app' | 'workerd'
+			source: 'app' | 'workerd' | 'prebuild'
 			level: DevLogLevel
 			message: string
 			request: DevRequestTag | null
@@ -105,7 +105,7 @@ export function formatDevEvent(event: DevEvent): { stream: 'stdout' | 'stderr'; 
 				text: `${formatRequestTag(event.request)} Uncaught ${event.stack || event.message}`,
 			}
 		case 'log': {
-			const tag = event.source === 'workerd' ? '[workerd]' : formatRequestTag(event.request)
+			const tag = event.source === 'app' ? formatRequestTag(event.request) : `[${event.source}]`
 			const level = event.level === 'log' || event.level === 'info' ? '' : `${event.level}: `
 			const stream = event.level === 'error' || event.level === 'warn' ? 'stderr' : 'stdout'
 			return { stream, text: `${tag} ${level}${event.message}` }

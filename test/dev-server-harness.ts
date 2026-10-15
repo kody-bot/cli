@@ -36,8 +36,12 @@ export async function withDevServer(
 		events: Array<DevEvent>
 		writeMessage: (source: string) => Promise<void>
 	}) => Promise<void>,
-	options: Partial<PackageAppDevOptions> = {},
+	options: Partial<PackageAppDevOptions> & {
+		/** Runs after the fixture is copied and before the manifest is loaded. */
+		prepare?: (root: string) => Promise<void>
+	} = {},
 ): Promise<void> {
+	const { prepare, ...devOptions } = options
 	// Resolve workerd from the real cache before KODY_CACHE_DIR is pointed at scratch.
 	const workerdPath = await ensureWorkerdBinary()
 	const root = await mkdtemp(join(tmpdir(), 'kody-dev-server-test-'))
@@ -53,6 +57,7 @@ export async function withDevServer(
 		await rename(`${messagePath}.next`, messagePath)
 	}
 	await writeMessage(`export const message = 'v0'\n`)
+	await prepare?.(root)
 	const auth = await resolveDevAuth({
 		target: 'mock',
 		token: 'mock',
@@ -69,7 +74,7 @@ export async function withDevServer(
 		debounceMs: 20,
 		workerdPath,
 		onEvent: (event) => events.push(event),
-		...options,
+		...devOptions,
 	})
 	try {
 		await run({ server, root, events, writeMessage })

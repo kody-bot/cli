@@ -26,12 +26,15 @@ import type { KodyTarget } from './target.js'
 import { formatToolResult } from './tool-result.js'
 import { bundleLocalUserModule } from './local-bundle.js'
 import { formatDevEvent, type DevEvent } from './dev/dev-events.js'
+import { defaultDevPort } from './dev/dev-port.js'
 import {
 	devStatusPath,
 	findRunningDevServer,
 	removeDevRegistration,
 	writeDevRegistration,
 } from './dev/dev-registry.js'
+
+export { parseDevPort } from './dev/dev-port.js'
 
 export type DevIo = {
 	stdout: (text: string) => void
@@ -127,6 +130,18 @@ export async function runDevServe(input: {
 	serveOnce?: boolean
 }): Promise<number> {
 	const manifest = await loadPackageManifest(input.cwd)
+	if (input.port === undefined) {
+		const running = await findRunningDevServer({ root: manifest.root, target: input.target })
+		if (running) {
+			const { registration } = running
+			throw new StructuredCliError({
+				code: 'dev_already_running',
+				target: input.target,
+				message: `kody dev is already running for ${manifest.name} at ${registration.origin}${registration.basePath || '/'} (pid ${registration.pid}).`,
+				fix: `Reuse it (\`kody dev fetch <path>\` attaches automatically), stop it with \`kill ${registration.pid}\`, or pass --port to start a second server.`,
+			})
+		}
+	}
 	const onEvent = input.json
 		? (event: DevEvent) => writeJsonEvent(input.io, event)
 		: (event: DevEvent) => writeDevEvent(input.io, event)
@@ -136,6 +151,7 @@ export async function runDevServe(input: {
 		apiUrl: input.auth.apiUrl,
 		target: input.target,
 		port: input.port,
+		defaultPort: defaultDevPort(manifest.kodyId),
 		appBasePath: input.appBasePath,
 		...(input.auth.org ? { org: input.auth.org } : {}),
 		...(input.auth.depResolve ? { depResolve: input.auth.depResolve } : {}),

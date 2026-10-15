@@ -15,6 +15,9 @@ export type StructuredErrorCode =
 	| 'dev_handler_missing'
 	| 'dev_surface_missing'
 	| 'invalid_target'
+	| 'invalid_port'
+	| 'dev_port_in_use'
+	| 'dev_already_running'
 
 export type StructuredErrorBody = {
 	code: StructuredErrorCode | string

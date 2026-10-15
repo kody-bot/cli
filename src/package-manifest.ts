@@ -8,8 +8,19 @@ import { StructuredCliError } from './structured-error.js'
 
 export type PackageAppManifest = {
 	entry: string
+	/** Browser entry (string form, or `entry` of the object form). */
 	client?: string
+	/** `client.externals` from the object form; left as bare imports for an import map. */
+	clientExternals?: Array<string>
 	assets?: string
+}
+
+/** Local-only `kody dev` settings (`package.json#kody.dev`); never published behavior. */
+export type PackageDevManifest = {
+	/** Shell command run from the package root before every `kody dev` build. */
+	prebuild?: string
+	/** Root-relative path prefixes the watcher ignores (e.g. prebuild outputs). */
+	ignore: Array<string>
 }
 
 /**
@@ -57,6 +68,7 @@ export type KodyPackageManifest = {
 	description?: string
 	exports: Record<string, string>
 	app?: PackageAppManifest
+	dev: PackageDevManifest
 	jobs: Record<string, PackageJobManifest>
 	webhooks: Record<string, PackageWebhookManifest>
 	subscriptions: Record<string, PackageSubscriptionManifest>
@@ -98,6 +110,7 @@ export async function loadPackageManifest(
 
 	const exportsField = normalizeExports(pkg.exports)
 	const app = parseApp(kody.app, packageJsonPath)
+	const dev = parseDev(kody.dev, packageJsonPath)
 	const jobs = parseJobs(kody.jobs, packageJsonPath)
 	const webhooks = parseWebhooks(kody.webhooks, packageJsonPath)
 	const subscriptions = parseSubscriptions(kody.subscriptions, packageJsonPath)
@@ -110,6 +123,7 @@ export async function loadPackageManifest(
 		description: typeof kody.description === 'string' ? kody.description : undefined,
 		exports: exportsField,
 		app,
+		dev,
 		jobs,
 		webhooks,
 		subscriptions,
@@ -174,10 +188,55 @@ function parseApp(raw: unknown, where: string): PackageAppManifest | undefined {
 			fix: 'Set `"kody": { "app": { "entry": "./app/router.ts" } }` in package.json.',
 		})
 	}
+	const clientRecord = asRecord(record.client)
+	const client =
+		typeof record.client === 'string'
+			? record.client
+			: typeof clientRecord?.entry === 'string'
+				? clientRecord.entry
+				: undefined
+	const clientExternals = Array.isArray(clientRecord?.externals)
+		? clientRecord.externals.filter((item): item is string => typeof item === 'string')
+		: undefined
 	return {
 		entry: record.entry,
-		client: typeof record.client === 'string' ? record.client : undefined,
+		client,
+		...(clientExternals?.length ? { clientExternals } : {}),
 		assets: typeof record.assets === 'string' ? record.assets : undefined,
+	}
+}
+
+function parseDev(raw: unknown, where: string): PackageDevManifest {
+	if (raw === undefined || raw === null) return { ignore: [] }
+	const record = asRecord(raw)
+	if (!record) {
+		throw new StructuredCliError({
+			code: 'package_manifest_invalid',
+			message: 'kody.dev must be an object.',
+			where,
+			fix: 'Use `"kody": { "dev": { "prebuild": "node scripts/build-assets.mjs", "ignore": ["public/generated"] } }`.',
+		})
+	}
+	if (record.prebuild !== undefined && (typeof record.prebuild !== 'string' || !record.prebuild.trim())) {
+		throw new StructuredCliError({
+			code: 'package_manifest_invalid',
+			message: 'kody.dev.prebuild must be a non-empty shell command string.',
+			where,
+		})
+	}
+	if (
+		record.ignore !== undefined &&
+		(!Array.isArray(record.ignore) || !record.ignore.every((item) => typeof item === 'string'))
+	) {
+		throw new StructuredCliError({
+			code: 'package_manifest_invalid',
+			message: 'kody.dev.ignore must be an array of root-relative path prefixes.',
+			where,
+		})
+	}
+	return {
+		...(typeof record.prebuild === 'string' ? { prebuild: record.prebuild.trim() } : {}),
+		ignore: (record.ignore as Array<string> | undefined) ?? [],
 	}
 }
 

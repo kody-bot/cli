@@ -290,6 +290,13 @@ ${orgBlock}
              console.* streams to the terminal tagged by request. HTML pages
              live-reload after each rebuild and show an error overlay
              (SSE at /__kody/dev/events; \`--no-live-reload\` disables).
+             Stable default port per package (4100-4999, next free port
+             if taken); \`--port <n>\` is exact (\`--port 0\` = any).
+             Serves \`kody.app.client\` at /_assets/client.<hash>.js
+             (packageContext.clientModuleUrl), \`kody.app.assets\` under
+             /_assets/, and /_assets/__version.json. \`kody.dev.prebuild\`
+             (shell command, run before every build) regenerates assets;
+             \`kody.dev.ignore\` lists watcher path prefixes to skip.
              Agents: \`--json\` streams NDJSON events (ready, rebuild_start,
              rebuild_ok, build_error, runtime_error, log); GET
              /__kody/dev/status returns build id + last error;

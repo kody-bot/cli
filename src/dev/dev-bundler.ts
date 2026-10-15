@@ -1,7 +1,8 @@
 /**
  * `kody dev` bundles of `kody.app.entry`: same esbuild options as one-shot
  * local bundles, plus an in-memory source map (for mapping workerd stacks back
- * to `.ts`) and the list of input files (for the watcher's stat poll).
+ * to `.ts`) and the list of input files (for the watcher's stat poll). Uses an
+ * incremental esbuild context so rebuilds only reparse changed files.
  */
 
 import * as esbuild from 'esbuild'
@@ -21,6 +22,8 @@ export type DevBundler = {
 	dispose: () => Promise<void>
 }
 
+type DevBuildContext = esbuild.BuildContext<{ write: false; metafile: true }>
+
 export function createDevBundler(input: { entryPath: string; root: string }): DevBundler {
 	const entry = resolve(input.entryPath)
 	const base = localBundleOptions(entry)
@@ -33,19 +36,31 @@ export function createDevBundler(input: { entryPath: string; root: string }): De
 		outfile: join(input.root, '__kody_dev_bundle.js'),
 	} satisfies esbuild.BuildOptions
 	const paths = { workingDir: base.absWorkingDir, displayRoot: input.root }
+	let context: Promise<DevBuildContext> | null = null
 
 	return {
 		build: async () => {
-			let result: esbuild.BuildResult<typeof options>
+			let result: esbuild.BuildResult<{ write: false; metafile: true }>
 			try {
-				result = await esbuild.build(options)
+				context ??= esbuild.context(options)
+				result = await (await context).rebuild()
 			} catch (error) {
 				throw createBundleError(input.entryPath, error, paths)
 			}
 			return readBundle(result, base.absWorkingDir, input.entryPath)
 		},
-		dispose: async () => {},
+		dispose: async () => {
+			const current = context
+			context = null
+			await (await current?.catch(() => null))?.dispose()
+		},
 	}
+}
+
+export function bundleInputs(metafile: esbuild.Metafile | undefined, workingDir: string): Array<string> {
+	return Object.keys(metafile?.inputs ?? {})
+		.filter((path) => !path.includes('node_modules') && !path.includes(':'))
+		.map((path) => resolve(workingDir, path))
 }
 
 export function readBundle(
@@ -59,12 +74,9 @@ export function readBundle(
 	if (!js) {
 		throw new BundleError(`Could not bundle ${entryPath}: esbuild produced no output.`, [])
 	}
-	const inputs = Object.keys(result.metafile?.inputs ?? {})
-		.filter((path) => !path.includes('node_modules') && !path.includes(':'))
-		.map((path) => resolve(workingDir, path))
 	return {
 		code: js.text.replace(/\n\/\/# sourceMappingURL=\S+\s*$/, '\n'),
 		sourceMap: map?.text ?? null,
-		inputs,
+		inputs: bundleInputs(result.metafile, workingDir),
 	}
 }

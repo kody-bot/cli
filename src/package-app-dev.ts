@@ -21,15 +21,23 @@ import {
 } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join, relative } from 'node:path'
+import { join, relative, resolve, sep } from 'node:path'
 import {
 	assertTokenSafeApiUrl,
 	callCapabilityProxy,
 } from './capability-proxy.js'
 import { apiTokenEnvVar } from './defaults.js'
+import {
+	createDevClientBundler,
+	parseDevAssetPath,
+	serveDevAsset,
+	type DevClientBundle,
+	type DevClientBundler,
+} from './dev/dev-assets.js'
 import { createDevBundler, type DevBundle } from './dev/dev-bundler.js'
 import { parseWorkerdStdoutLine, type DevEvent, type DevRequestTag } from './dev/dev-events.js'
 import { devErrorHeader, devRequestIdHeader } from './dev/dev-protocol.js'
+import { listenDevServer } from './dev/dev-port.js'
 import { devStatusPath, type DevServerStatus } from './dev/dev-registry.js'
 import { createDevWatcher, type DevWatcher } from './dev/dev-watcher.js'
 import { sendDevError, type DevErrorView } from './dev/error-page.js'
@@ -47,6 +55,7 @@ import {
 	startProcessReaper,
 	sweepStaleDevDirs,
 } from './dev/process-reaper.js'
+import { runPrebuild } from './dev/prebuild.js'
 import { createStackMapper, type StackMapper } from './dev/stack-trace.js'
 import {
 	cleanWorkerdStderrLine,
@@ -90,7 +99,13 @@ export type PackageAppDevOptions = {
 	apiUrl: string
 	target: KodyTarget
 	host?: string
+	/** Listen on exactly this port (0 = any free port); EADDRINUSE is an error. */
 	port?: number
+	/**
+	 * Used when `port` is unset: try this port, then the next free ones above
+	 * it. Without either, any free port.
+	 */
+	defaultPort?: number
 	/** Public mount path the Node proxy strips (default ''). */
 	appBasePath?: string
 	/** User-owned token org selection (`?org=`), same as execute --local. */
@@ -153,6 +168,7 @@ type Generation = {
 	dir: string
 	workerd: WorkerdHandle
 	code: string
+	client: DevClientBundle | null
 	mapStack: StackMapper
 	inflight: number
 	retired: boolean
@@ -164,7 +180,9 @@ type BuildFailure = {
 	diagnostics: Array<BundleDiagnostic>
 }
 
-const defaultDebounceMs = 120
+const defaultDebounceMs = 30
+/** Watcher events this soon after a prebuild finishes are its own writes, not edits. */
+const prebuildSettleMs = 150
 /** Longest a request waits for an in-progress rebuild before the old build answers. */
 const rebuildGateMs = 10_000
 /** Longest a retired generation may keep draining in-flight requests. */
@@ -250,18 +268,30 @@ export async function startPackageAppDev(
 	const proxy = createServer((req, res) => {
 		void handleRequest(req, res)
 	})
-	await new Promise<void>((resolve, reject) => {
-		proxy.once('error', reject)
-		proxy.listen(options.port ?? 0, host, () => resolve())
-	})
+	try {
+		await listenDevServer(proxy, {
+			host,
+			port: options.port ?? options.defaultPort ?? 0,
+			explicit: options.port !== undefined,
+		})
+	} catch (error) {
+		process.off('exit', killAllSync)
+		reaper.close()
+		await rm(workDir, { recursive: true, force: true })
+		throw error
+	}
 	const address = proxy.address() as AddressInfo
 	const hostedUrl = `http://${host}:${address.port}`
-	const packageContext = buildLocalPackageContext({
-		kodyId: options.manifest.kodyId,
-		packageId: `local:${options.manifest.kodyId}`,
-		hostedUrl,
-		appBasePath,
-	})
+	const contextFor = (client: DevClientBundle | null) =>
+		buildLocalPackageContext({
+			kodyId: options.manifest.kodyId,
+			packageId: `local:${options.manifest.kodyId}`,
+			hostedUrl,
+			appBasePath,
+			clientModuleUrl: client ? clientModuleUrlFor(client) : null,
+		})
+	const clientModuleUrlFor = (client: DevClientBundle) =>
+		`${hostedUrl}${appBasePath}/_assets/${client.name}`
 
 	const mockFetchGateway = await resolveMockFetchGateway({
 		target: options.target,
@@ -289,8 +319,20 @@ export async function startPackageAppDev(
 		},
 	})
 
-	const entryPath = resolvePackagePath(options.manifest, options.manifest.app.entry)
+	const app = options.manifest.app
+	const entryPath = resolvePackagePath(options.manifest, app.entry)
 	const bundler = createDevBundler({ entryPath, root })
+	const clientBundler: DevClientBundler | null = app.client
+		? createDevClientBundler({
+				entryPath: resolvePackagePath(options.manifest, app.client),
+				root,
+				externals: app.clientExternals,
+			})
+		: null
+	const assetsDir = app.assets ? resolve(root, app.assets) : null
+	const prebuild = options.manifest.dev?.prebuild
+	let prebuildRunning = false
+	let prebuildSettledAt = 0
 	const workerdEnv: NodeJS.ProcessEnv = { ...process.env, [runSecretEnvVar]: runSecret }
 	delete workerdEnv[apiTokenEnvVar]
 
@@ -316,13 +358,20 @@ export async function startPackageAppDev(
 	async function buildOnce(files: Array<string>): Promise<void> {
 		const started = performance.now()
 		emit({ type: 'rebuild_start', files: files.map((file) => relative(root, file) || file) })
-		let bundle: DevBundle
+		const assetsChanged =
+			assetsDir !== null &&
+			files.some((file) => file === assetsDir || file.startsWith(`${assetsDir}${sep}`))
 		try {
-			bundle = await bundler.build()
+			if (prebuild) await runPrebuildStep(prebuild)
+			const [bundle, client] = await Promise.all([
+				bundler.build(),
+				clientBundler ? clientBundler.build() : Promise.resolve(null),
+			])
 			const midBuildEdits =
-				(await watcher?.track([...bundle.inputs, options.manifest.packageJsonPath], {
-					ignoreChanges: files,
-				})) ?? []
+				(await watcher?.track(
+					[...bundle.inputs, ...(client?.inputs ?? []), options.manifest.packageJsonPath],
+					{ ignoreChanges: files },
+				)) ?? []
 			// Queue mid-build edits for the next loop iteration directly — do not
 			// call onChange (debounced); chokidar may already have the same paths
 			// pending and would double-schedule a rebuild after debounce.
@@ -330,7 +379,12 @@ export async function startPackageAppDev(
 				for (const path of midBuildEdits) changedFiles.add(path)
 				rebuildAgain = true
 			}
-			if (active && !buildFailure && bundle.code === active.code) {
+			if (
+				active &&
+				!buildFailure &&
+				bundle.code === active.code &&
+				client?.name === active.client?.name
+			) {
 				// Still stamp lastRebuild so agents polling lastRebuild.at see
 				// the no-op rebuild finish (status already flipped building→ready).
 				lastRebuild = { ms: elapsed(started), at: new Date().toISOString() }
@@ -340,9 +394,12 @@ export async function startPackageAppDev(
 					buildId: active.id,
 					restarted: false,
 				})
+				if (assetsChanged || prebuild) {
+					liveReloadHub.broadcast({ event: 'reload', data: { buildId: active.id } })
+				}
 				return
 			}
-			const generation = await startGeneration(bundle)
+			const generation = await startGeneration(bundle, client)
 			if (closed) {
 				await stopGeneration(generation)
 				return
@@ -372,13 +429,39 @@ export async function startPackageAppDev(
 		}
 	}
 
-	async function startGeneration(bundle: DevBundle): Promise<Generation> {
+	async function runPrebuildStep(command: string): Promise<void> {
+		prebuildRunning = true
+		try {
+			await runPrebuild({
+				command,
+				cwd: root,
+				onSpawn: (pid) => reaper.track(pid),
+				onExit: (pid) => reaper.untrack(pid),
+				onLine: (line, stream) =>
+					emit({
+						type: 'log',
+						source: 'prebuild',
+						level: stream === 'stderr' ? 'warn' : 'log',
+						message: redact(line),
+						request: null,
+					}),
+			})
+		} finally {
+			prebuildRunning = false
+			prebuildSettledAt = performance.now()
+		}
+	}
+
+	async function startGeneration(
+		bundle: DevBundle,
+		client: DevClientBundle | null,
+	): Promise<Generation> {
 		const id = ++generationCounter
 		const dir = join(workDir, `g${id}`)
 		await writeWorkerFiles({
 			workDir: dir,
 			code: bundle.code,
-			packageContext,
+			packageContext: contextFor(client),
 			packageRoot: root,
 			mockStorage: options.target === 'mock',
 			bridgePort: bridge.port,
@@ -428,6 +511,7 @@ export async function startPackageAppDev(
 			dir,
 			workerd,
 			code: bundle.code,
+			client,
 			mapStack: createStackMapper({
 				sourceMap: bundle.sourceMap,
 				userModule: localWorkerModuleNames.user,
@@ -550,6 +634,22 @@ export async function startPackageAppDev(
 		try {
 			if (handleDevRoute(req, res)) return
 			await waitForBuild()
+			const assetPath = parseDevAssetPath(
+				stripMount(new URL(req.url ?? '/', hostedUrl).pathname, appBasePath),
+			)
+			if (assetPath !== null) {
+				const client = active?.client ?? null
+				await serveDevAsset({
+					req,
+					res,
+					relativePath: assetPath,
+					assetsDir,
+					client,
+					clientModuleUrl: client ? clientModuleUrlFor(client) : null,
+					appBasePath,
+				})
+				return
+			}
 			if (buildFailure) {
 				sendDevError(req, res, 500, buildErrorView(buildFailure), {
 					htmlTail: errorPageTail,
@@ -708,12 +808,25 @@ export async function startPackageAppDev(
 					const pending = new Set<string>()
 					return createDevWatcher({
 						root,
+						ignore: options.manifest.dev?.ignore,
 						onChange: (path) => {
 							if (closed) return
+<<<<<<< HEAD
 							// Fold mid-build watcher events into the active loop
 							// (including another save of a file already building).
 							// Debouncing them instead schedules a second rebuild
 							// after buildLoop clears (often a no-op echo).
+=======
+							if (
+								prebuildRunning ||
+								performance.now() - prebuildSettledAt < prebuildSettleMs
+							) {
+								return
+							}
+							// Fold mid-build chokidar echoes into the active
+							// loop. Debouncing them instead schedules a second
+							// rebuild after buildLoop clears (often a no-op).
+>>>>>>> a65008c (feat(dev): stable per-package ports, client bundle + /_assets, kody.dev.prebuild, faster rebuilds)
 							if (buildLoop) {
 								changedFiles.add(path)
 								rebuildAgain = true
@@ -757,6 +870,7 @@ export async function startPackageAppDev(
 		await watcher?.close()
 		await buildLoop?.catch(() => {})
 		await bundler.dispose()
+		await clientBundler?.dispose()
 		await Promise.all([...generations].map((generation) => stopGeneration(generation)))
 		reaper.close()
 		await bridge.close()
@@ -803,7 +917,9 @@ export async function startPackageAppDev(
 		port: address.port,
 		hostedUrl,
 		appBasePath,
-		packageContext,
+		get packageContext() {
+			return contextFor(active?.client ?? null)
+		},
 		fetchPath,
 		status,
 		close,
