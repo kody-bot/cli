@@ -14,6 +14,13 @@ const defaultPollIntervalMs = 1000
 export type DevWatcher = {
 	ready: Promise<void>
 	/**
+	 * Refresh fingerprints for the currently tracked paths without changing the
+	 * path set or firing `onChange`. Call after intentional writers (e.g.
+	 * `kody.dev.prebuild`) so their output is absorbed before a mid-build
+	 * comparison.
+	 */
+	rebaseline: () => Promise<void>
+	/**
 	 * Replace the set of absolute paths the stat poll keeps an eye on.
 	 * Re-baselines fingerprints so post-build mtime chatter does not echo a
 	 * rebuild. Returns paths whose fingerprint changed since the previous
@@ -95,6 +102,17 @@ export function createDevWatcher(input: {
 
 	return {
 		ready,
+		rebaseline: async () => {
+			const generation = ++trackGeneration
+			const next = new Map<string, Fingerprint | null>()
+			for (const path of tracked.keys()) {
+				next.set(path, await fingerprint(path))
+				if (generation !== trackGeneration) return
+			}
+			if (generation !== trackGeneration) return
+			tracked = next
+			trackGeneration++
+		},
 		track: async (paths, options) => {
 			const ignoreChanges = new Set(options?.ignoreChanges ?? [])
 			const generation = ++trackGeneration
