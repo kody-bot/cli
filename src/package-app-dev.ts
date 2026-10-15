@@ -439,8 +439,8 @@ export async function startPackageAppDev(
 				command,
 				cwd: root,
 				signal: prebuildAbort.signal,
-				onSpawn: (pid) => reaper.track(pid),
-				onExit: (pid) => reaper.untrack(pid),
+				onSpawn: (pid) => reaper.trackGroup(pid),
+				onExit: (pid) => reaper.untrackGroup(pid),
 				onLine: (line, stream) =>
 					emit({
 						type: 'log',

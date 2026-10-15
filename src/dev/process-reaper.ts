@@ -27,13 +27,21 @@ while IFS= read -r line; do
     -*) pids="$(printf '%s' "$pids" | sed "s/ \${line#-} / /g")" ;;
   esac
 done
-for pid in $pids; do kill -9 "$pid" 2>/dev/null; done
+for entry in $pids; do
+  case "$entry" in
+    g*) kill -9 "-\${entry#g}" 2>/dev/null ;;
+    *) kill -9 "$entry" 2>/dev/null ;;
+  esac
+done
 rm -rf "$1"
 `
 
 export type ProcessReaper = {
 	track: (pid: number) => void
 	untrack: (pid: number) => void
+	/** Track a detached process-group leader; hard CLI death SIGKILLs the whole tree. */
+	trackGroup: (pid: number) => void
+	untrackGroup: (pid: number) => void
 	close: () => void
 }
 
@@ -63,6 +71,8 @@ export async function startProcessReaper(input: { workDir: string }): Promise<Pr
 	return {
 		track: (pid) => send(`+${pid}`),
 		untrack: (pid) => send(`-${pid}`),
+		trackGroup: (pid) => send(`+g${pid}`),
+		untrackGroup: (pid) => send(`-g${pid}`),
 		close: () => {
 			reaper?.stdin?.end()
 			reaper = undefined

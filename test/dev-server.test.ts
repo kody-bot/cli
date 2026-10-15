@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import psList from 'ps-list'
 import { formatDevEvent, parseWorkerdStdoutLine } from '../src/dev/dev-events.js'
 import { appLogMarker } from '../src/dev/dev-protocol.js'
 import { shouldIgnoreWatchPath } from '../src/dev/dev-watcher.js'
@@ -208,6 +209,32 @@ test('process reaper kills tracked pids and removes the work dir when its pipe c
 		new Promise<void>((resolve) => setTimeout(resolve, 5000).unref()),
 	])
 	assert.equal(isProcessAlive(sleeper.pid), false)
+	await waitFor(
+		async () => ((await readdir(tmpdir())).includes(workDir.split('/').pop()!) ? undefined : true),
+		'work dir removal',
+	)
+})
+
+test('process reaper kills a detached process group on pipe close', async () => {
+	const workDir = await mkdtemp(join(tmpdir(), 'kody-dev-reaper-group-'))
+	// Nested sleep under detached sh — killing only the shell would leave the child.
+	const shell = spawn('sh', ['-c', 'sleep 30'], { stdio: 'ignore', detached: true })
+	assert.ok(shell.pid)
+	const childPid = await waitFor(async () => {
+		const listed = await psList()
+		const child = listed.find((item) => item.ppid === shell.pid && /sleep/.test(item.name))
+		return child?.pid
+	}, 'detached sleep grandchild')
+	const shellExited = new Promise<void>((resolve) => shell.once('exit', () => resolve()))
+	const reaper = await startProcessReaper({ workDir })
+	reaper.trackGroup(shell.pid)
+	reaper.close()
+	await Promise.race([
+		shellExited,
+		new Promise<void>((resolve) => setTimeout(resolve, 5000).unref()),
+	])
+	assert.equal(isProcessAlive(shell.pid), false)
+	assert.equal(isProcessAlive(childPid), false)
 	await waitFor(
 		async () => ((await readdir(tmpdir())).includes(workDir.split('/').pop()!) ? undefined : true),
 		'work dir removal',
