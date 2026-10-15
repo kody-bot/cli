@@ -278,6 +278,71 @@ test('fetchLocalPackageGraph surfaces unresolved package errors from the API', a
 	)
 })
 
+test('fetchLocalPackageGraph surfaces oversized code limit and actual size from the API', async () => {
+	const code = `import x from 'kody:@a/pkg/one'\nexport default async () => x`
+	const sizeMessage =
+		'code is 5242881 UTF-8 bytes; the maximum is 5177344 (Open API JSON body limit minus wrapper headroom). Pass imports instead of inlining a large bundle.'
+	await assert.rejects(
+		() =>
+			fetchLocalPackageGraph({
+				apiUrl: 'https://api.kody.codes',
+				token: goodToken,
+				code,
+				fetchFn: async () =>
+					new Response(
+						JSON.stringify({
+							error: {
+								code: 'invalid_request',
+								message: sizeMessage,
+							},
+						}),
+						{ status: 400, headers: { 'content-type': 'application/json' } },
+					),
+			}),
+		(error: unknown) => {
+			assert.ok(error instanceof LocalPackageGraphError)
+			assert.match(error.message, /code is 5242881 UTF-8 bytes/)
+			assert.match(error.message, /the maximum is 5177344/)
+			assert.doesNotMatch(error.message, /^Invalid parameters\.?$/)
+			return true
+		},
+	)
+})
+
+test('fetchLocalPackageGraph lifts oversized size details buried under Invalid parameters', async () => {
+	const code = `import x from 'kody:@a/pkg/one'\nexport default async () => x`
+	const sizeMessage =
+		'code is 5242881 UTF-8 bytes; the maximum is 5177344 (Open API JSON body limit minus wrapper headroom). Pass imports instead of inlining a large bundle.'
+	await assert.rejects(
+		() =>
+			fetchLocalPackageGraph({
+				apiUrl: 'https://api.kody.codes',
+				token: goodToken,
+				code,
+				fetchFn: async () =>
+					new Response(
+						JSON.stringify({
+							error: {
+								code: 'invalid_request',
+								message: 'Invalid parameters.',
+								details: {
+									issues: [{ path: 'code', message: sizeMessage }],
+								},
+							},
+						}),
+						{ status: 400, headers: { 'content-type': 'application/json' } },
+					),
+			}),
+		(error: unknown) => {
+			assert.ok(error instanceof LocalPackageGraphError)
+			assert.match(error.message, /code is 5242881 UTF-8 bytes/)
+			assert.match(error.message, /the maximum is 5177344/)
+			assert.doesNotMatch(error.message, /^Invalid parameters\.?$/)
+			return true
+		},
+	)
+})
+
 test('fetchLocalPackageGraph rejects incomplete module lists', async () => {
 	const code = `import x from 'kody:@a/pkg/one'\nexport default async () => x`
 	await assert.rejects(
