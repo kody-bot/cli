@@ -364,7 +364,12 @@ export async function startPackageAppDev(
 			assetsDir !== null &&
 			files.some((file) => file === assetsDir || file.startsWith(`${assetsDir}${sep}`))
 		try {
-			if (prebuild) await runPrebuildStep(prebuild)
+			if (prebuild) {
+				await runPrebuildStep(prebuild)
+				// Absorb prebuild output into the baseline so track() does not
+				// treat generated inputs as mid-build edits.
+				await watcher?.rebaseline()
+			}
 			const [bundle, client] = await Promise.all([
 				bundler.build(),
 				clientBundler ? clientBundler.build() : Promise.resolve(null),
