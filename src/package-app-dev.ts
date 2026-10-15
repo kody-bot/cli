@@ -144,6 +144,16 @@ export type PackageAppDevOptions = {
 	onError?: (message: string) => void
 	/** Rebuilds, build/runtime errors, and app logs. */
 	onEvent?: (event: DevEvent) => void
+	/**
+	 * Fired as soon as the HTTP port is bound (before the first build). Used
+	 * to advertise the server in the attach registry so a second `kody dev`
+	 * cannot start during the initial build window.
+	 */
+	onListening?: (info: {
+		port: number
+		hostedUrl: string
+		appBasePath: string
+	}) => void | Promise<void>
 }
 
 export type PackageAppDevServer = {
@@ -282,6 +292,11 @@ export async function startPackageAppDev(
 	}
 	const address = proxy.address() as AddressInfo
 	const hostedUrl = `http://${host}:${address.port}`
+	await options.onListening?.({
+		port: address.port,
+		hostedUrl,
+		appBasePath,
+	})
 	const contextFor = (client: DevClientBundle | null) =>
 		buildLocalPackageContext({
 			kodyId: options.manifest.kodyId,

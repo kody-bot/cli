@@ -145,6 +145,7 @@ export async function runDevServe(input: {
 	const onEvent = input.json
 		? (event: DevEvent) => writeJsonEvent(input.io, event)
 		: (event: DevEvent) => writeDevEvent(input.io, event)
+<<<<<<< HEAD
 	const server = await startPackageAppDev({
 		manifest,
 		token: input.auth.token,
@@ -166,6 +167,85 @@ export async function runDevServe(input: {
 		onError: (message) => input.io.stderr(`${message}\n`),
 		onEvent,
 	})
+=======
+	let registered = false
+	let server: Awaited<ReturnType<typeof startPackageAppDev>>
+	try {
+		server = await startPackageAppDev({
+			manifest,
+			token: input.auth.token,
+			apiUrl: input.auth.apiUrl,
+			target: input.target,
+			port: input.port,
+			defaultPort: defaultDevPort(manifest.kodyId),
+			appBasePath: input.appBasePath,
+			...(input.auth.org ? { org: input.auth.org } : {}),
+			...(input.auth.depResolve ? { depResolve: input.auth.depResolve } : {}),
+			...(input.passthroughHosts?.length
+				? { passthroughHosts: input.passthroughHosts }
+				: input.auth.passthroughHosts?.length
+					? { passthroughHosts: input.auth.passthroughHosts }
+					: {}),
+			allowPrivateNetwork: input.allowPrivateNetwork,
+			liveReload: input.liveReload ?? true,
+			onStatus: (message) => input.io.stderr(`${message}\n`),
+			onError: (message) => input.io.stderr(`${message}\n`),
+			onEvent,
+			// Register as soon as the port is bound so a second `kody dev`
+			// during the first build hits `dev_already_running` instead of
+			// stealing the next free port and overwriting the registry.
+			onListening: async ({ port, hostedUrl, appBasePath }) => {
+				await writeDevRegistration({
+					pid: process.pid,
+					origin: hostedUrl,
+					port,
+					basePath: appBasePath,
+					target: input.target,
+					root: manifest.root,
+				})
+				registered = true
+			},
+		})
+	} catch (error) {
+		if (registered) {
+			await removeDevRegistration(manifest.root, process.pid, input.target).catch(() => {})
+		}
+		throw error
+	}
+	const status = server.status()
+	const statusUrl = `${server.hostedUrl}${devStatusPath}`
+	const ready = {
+		url: status.url,
+		port: server.port,
+		basePath: server.appBasePath,
+		pid: process.pid,
+		statusUrl,
+	}
+	if (input.readyFile) {
+		await writeFile(input.readyFile, `${JSON.stringify(ready, null, 2)}\n`)
+	}
+	if (input.json) {
+		input.io.stdout(
+			`${JSON.stringify({
+				type: 'ready',
+				ts: new Date().toISOString(),
+				...ready,
+				target: input.target,
+				package: status.package,
+				buildId: status.buildId,
+				state: status.state,
+			})}\n`,
+		)
+	} else {
+		input.io.stdout(
+			`kody dev listening on ${status.url}\n` +
+				`target: ${input.target}\n` +
+				`package: ${manifest.name} (${manifest.kodyId})\n` +
+				`status: ${statusUrl}\n` +
+				`Agents: kody dev fetch /path | job <name> | webhook <name> --body file.json | emit <event> --body file.json | check\n`,
+		)
+	}
+>>>>>>> 783cf33 (fix(dev): register the attach server as soon as the port binds)
 	const shutdown = async () => {
 		await server.close()
 		await removeDevRegistration(manifest.root, process.pid, input.target).catch(() => {})

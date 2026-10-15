@@ -75,6 +75,7 @@ test('kody dev --json emits NDJSON events and --ready-file is written before rea
 	})
 	const lines: Array<Record<string, unknown>> = []
 	let readyFileAtReady: Record<string, unknown> | null = null
+	let registeredAtRebuildStart = false
 	let registeredAtReady = false
 	try {
 		const code = await runDevServe({
@@ -89,6 +90,9 @@ test('kody dev --json emits NDJSON events and --ready-file is written before rea
 					for (const line of text.split('\n').filter(Boolean)) {
 						const event = JSON.parse(line) as Record<string, unknown>
 						lines.push(event)
+						if (event.type === 'rebuild_start') {
+							registeredAtRebuildStart = existsSync(devRegistryPath(root, 'mock', cache))
+						}
 						if (event.type === 'ready') {
 							readyFileAtReady = JSON.parse(readFileSync(readyFile, 'utf8')) as Record<
 								string,
@@ -113,6 +117,11 @@ test('kody dev --json emits NDJSON events and --ready-file is written before rea
 		assert.match(String(ready.statusUrl), /\/__kody\/dev\/status$/)
 		assert.ok(readyFileAtReady)
 		assert.equal((readyFileAtReady as Record<string, unknown>).url, ready.url)
+		assert.equal(
+			registeredAtRebuildStart,
+			true,
+			'registry is advertised as soon as the port binds, before the first build finishes',
+		)
 		assert.equal(registeredAtReady, true)
 		assert.equal(existsSync(readyFile), false, 'ready file is removed on shutdown')
 		assert.equal(
