@@ -1,0 +1,70 @@
+/**
+ * `kody dev` bundles of `kody.app.entry`: same esbuild options as one-shot
+ * local bundles, plus an in-memory source map (for mapping workerd stacks back
+ * to `.ts`) and the list of input files (for the watcher's stat poll).
+ */
+
+import * as esbuild from 'esbuild'
+import { join, resolve } from 'node:path'
+import { BundleError, createBundleError, localBundleOptions } from '../local-bundle.js'
+
+export type DevBundle = {
+	code: string
+	/** Source map JSON with sources relative to the package root. */
+	sourceMap: string | null
+	/** Absolute paths of every non-node_modules input in the graph. */
+	inputs: Array<string>
+}
+
+export type DevBundler = {
+	build: () => Promise<DevBundle>
+	dispose: () => Promise<void>
+}
+
+export function createDevBundler(input: { entryPath: string; root: string }): DevBundler {
+	const entry = resolve(input.entryPath)
+	const base = localBundleOptions(entry)
+	const options = {
+		...base,
+		sourcemap: 'external',
+		sourcesContent: false,
+		metafile: true,
+		// Never written (write: false); only anchors source map paths at the root.
+		outfile: join(input.root, '__kody_dev_bundle.js'),
+	} satisfies esbuild.BuildOptions
+	const paths = { workingDir: base.absWorkingDir, displayRoot: input.root }
+
+	return {
+		build: async () => {
+			let result: esbuild.BuildResult<typeof options>
+			try {
+				result = await esbuild.build(options)
+			} catch (error) {
+				throw createBundleError(input.entryPath, error, paths)
+			}
+			return readBundle(result, base.absWorkingDir, input.entryPath)
+		},
+		dispose: async () => {},
+	}
+}
+
+export function readBundle(
+	result: esbuild.BuildResult<{ metafile: true; write: false }>,
+	workingDir: string,
+	entryPath: string,
+): DevBundle {
+	const outputs = result.outputFiles ?? []
+	const js = outputs.find((file) => file.path.endsWith('.js'))
+	const map = outputs.find((file) => file.path.endsWith('.js.map'))
+	if (!js) {
+		throw new BundleError(`Could not bundle ${entryPath}: esbuild produced no output.`, [])
+	}
+	const inputs = Object.keys(result.metafile?.inputs ?? {})
+		.filter((path) => !path.includes('node_modules') && !path.includes(':'))
+		.map((path) => resolve(workingDir, path))
+	return {
+		code: js.text.replace(/\n\/\/# sourceMappingURL=\S+\s*$/, '\n'),
+		sourceMap: map?.text ?? null,
+		inputs,
+	}
+}

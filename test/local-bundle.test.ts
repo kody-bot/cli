@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { bundleLocalUserModule } from '../src/local-bundle.js'
+import { BundleError, bundleLocalUserModule } from '../src/local-bundle.js'
 import { listSavedPackageImports } from '../src/local-package-graph.js'
 
 function writeFixture(files: Record<string, string>): string {
@@ -90,7 +90,7 @@ export default () => missing
 		() => bundleLocalUserModule(join(dir, 'entry.mjs')),
 		(error: unknown) => {
 			assert.ok(error instanceof Error)
-			assert.match(error.message, /Could not bundle .+entry\.mjs for local execute/)
+			assert.match(error.message, /Could not bundle .+entry\.mjs\./)
 			assert.match(error.message, /Could not resolve|nope\.js/i)
 			return true
 		},
@@ -107,7 +107,7 @@ export default () => missing
 		() => bundleLocalUserModule(join(dir, 'entry.mjs')),
 		(error: unknown) => {
 			assert.ok(error instanceof Error)
-			assert.match(error.message, /Could not bundle .+entry\.mjs for local execute/)
+			assert.match(error.message, /Could not bundle .+entry\.mjs\./)
 			assert.match(error.message, /definitely-not-installed-kody-dep/)
 			assert.match(error.message, /Run `npm install`/)
 			return true
@@ -128,6 +128,31 @@ export default () => missing
 			assert.match(error.message, /kody:@/)
 			assert.match(error.message, /Run `npm install`/)
 			assert.doesNotMatch(error.message, /\.kody\/deps\.json/)
+			return true
+		},
+	)
+})
+
+test('bundleLocalUserModule syntax errors carry file:line:col and a code frame', async () => {
+	const dir = writeFixture({
+		'entry.ts': `export default function main() {
+  const x y = 1
+  return x
+}
+`,
+	})
+	await assert.rejects(
+		() => bundleLocalUserModule(join(dir, 'entry.ts')),
+		(error: unknown) => {
+			assert.ok(error instanceof BundleError)
+			assert.doesNotMatch(error.message, /for local execute/)
+			const [first] = error.diagnostics
+			assert.ok(first)
+			assert.match(first.file ?? '', /entry\.ts$/)
+			assert.equal(first.line, 2)
+			assert.equal(first.col, 11)
+			assert.match(error.message, /entry\.ts:2:11: Expected ";" but found "y"/)
+			assert.match(error.message, /  2 \|   const x y = 1\n {4}\| {11}\^/)
 			return true
 		},
 	)

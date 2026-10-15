@@ -49,9 +49,11 @@
 	},
 	"dependencies": {
 		"@inquirer/checkbox": "^5.2.2",
+		"@jridgewell/trace-mapping": "^0.3.31",
 		"@modelcontextprotocol/client": "2.0.0",
 		"@napi-rs/keyring": "^2.1.0",
 		"add-mcp": "^2.4.0",
+		"chokidar": "^4.0.3",
 		"es-module-lexer": "^3.0.3",
 		"esbuild": "^0.25.12",
 		"ps-list": "^9.0.0"

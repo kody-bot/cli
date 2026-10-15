@@ -1,67 +1,161 @@
 import * as esbuild from 'esbuild'
-import { resolve } from 'node:path'
+import { relative, resolve } from 'node:path'
+
+/** One esbuild diagnostic with a 1-based line/column and a code frame. */
+export type BundleDiagnostic = {
+	/** Path relative to the working directory, or null for location-less errors. */
+	file: string | null
+	line: number | null
+	col: number | null
+	message: string
+	/** Source line plus caret, or null when esbuild gave no location. */
+	frame: string | null
+}
+
+/** Thrown when esbuild fails; `diagnostics` keeps the structured locations. */
+export class BundleError extends Error {
+	readonly diagnostics: Array<BundleDiagnostic>
+	constructor(message: string, diagnostics: Array<BundleDiagnostic>) {
+		super(message)
+		this.name = 'BundleError'
+		this.diagnostics = diagnostics
+	}
+}
+
+/**
+ * esbuild options shared by one-shot bundles and `kody dev` rebuilds: follow
+ * relative imports and npm packages, keep `kody:*` external for package-graph
+ * + runtime binding, and leave `node:*` external for workerd `nodejs_compat`.
+ */
+export function localBundleOptions(entry: string) {
+	return {
+		absWorkingDir: process.cwd(),
+		entryPoints: [entry],
+		bundle: true,
+		write: false,
+		format: 'esm',
+		platform: 'neutral',
+		target: 'esnext',
+		logLevel: 'silent',
+		packages: 'bundle',
+		external: ['kody:*', 'node:*'],
+	} satisfies esbuild.BuildOptions
+}
 
 /**
  * Bundle a `--file` entry for local workerd the same way hosted execute /
- * publish resolves code: follow relative imports and npm packages, keep
- * `kody:*` external for package-graph + runtime binding, and leave `node:*`
- * external for workerd `nodejs_compat` (same as unbundled `--code`).
+ * publish resolves code.
  */
 export async function bundleLocalUserModule(modulePath: string): Promise<string> {
 	const entry = resolve(modulePath)
 	let result: esbuild.BuildResult
 	try {
-		result = await esbuild.build({
-			absWorkingDir: process.cwd(),
-			entryPoints: [entry],
-			bundle: true,
-			write: false,
-			format: 'esm',
-			platform: 'neutral',
-			target: 'esnext',
-			logLevel: 'silent',
-			packages: 'bundle',
-			external: ['kody:*', 'node:*'],
-		})
+		result = await esbuild.build(localBundleOptions(entry))
 	} catch (error) {
-		throw new Error(formatBundleError(modulePath, error))
+		throw createBundleError(modulePath, error)
 	}
 	const output = result.outputFiles?.[0]
 	if (output === undefined) {
-		throw new Error(
-			`Could not bundle ${modulePath} for local execute: esbuild produced no output.`,
-		)
+		throw new BundleError(`Could not bundle ${modulePath}: esbuild produced no output.`, [])
 	}
 	if (result.errors.length > 0) {
-		throw new Error(formatBundleError(modulePath, { errors: result.errors }))
+		throw createBundleError(modulePath, { errors: result.errors })
 	}
 	return output.text
 }
 
-function formatBundleError(modulePath: string, error: unknown): string {
-	const details = bundleErrorDetails(error)
-	const header = `Could not bundle ${modulePath} for local execute.`
+/**
+ * `workingDir` is esbuild's `absWorkingDir` (locations are relative to it);
+ * `displayRoot` is what reported paths are relative to.
+ */
+export function createBundleError(
+	modulePath: string,
+	error: unknown,
+	paths: { workingDir: string; displayRoot: string } = {
+		workingDir: process.cwd(),
+		displayRoot: process.cwd(),
+	},
+): BundleError {
+	const diagnostics = bundleDiagnostics(error, paths)
+	const details = diagnostics.map(formatBundleDiagnostic).join('\n')
+	const header = `Could not bundle ${modulePath}.`
 	const body = details.length > 0 ? `${header}\n${details}` : header
+	const messages = diagnostics.map((item) => item.message).join('\n')
 	// Only when the unresolved specifier itself is kody:@ (not a path that happens
 	// to contain that substring).
-	if (/Could not resolve ["']kody:@/i.test(details)) {
-		return `${body}\nfix: Map the dependency in .kody/deps.json (or package.json#kody.localDeps), keep it in this package's exports, or log in so published package-graph can supply it.`
+	if (/Could not resolve ["']kody:@/i.test(messages)) {
+		return new BundleError(
+			`${body}\nfix: Map the dependency in .kody/deps.json (or package.json#kody.localDeps), keep it in this package's exports, or log in so published package-graph can supply it.`,
+			diagnostics,
+		)
 	}
 	if (/Could not resolve|Cannot find module|ENOENT/i.test(body)) {
-		return `${body}\nfix: Run \`npm install\` in the package directory (and any local deps), then retry.`
+		return new BundleError(
+			`${body}\nfix: Run \`npm install\` in the package directory (and any local deps), then retry.`,
+			diagnostics,
+		)
 	}
-	return body
+	return new BundleError(body, diagnostics)
 }
 
-function bundleErrorDetails(error: unknown): string {
+/** `file:line:col: message` followed by an indented code frame. */
+export function formatBundleDiagnostic(item: BundleDiagnostic): string {
+	const where =
+		item.file !== null
+			? `${item.file}${item.line !== null ? `:${item.line}` : ''}${item.col !== null ? `:${item.col}` : ''}: `
+			: ''
+	return `${where}${item.message}${item.frame ? `\n${item.frame}` : ''}`
+}
+
+function bundleDiagnostics(
+	error: unknown,
+	paths: { workingDir: string; displayRoot: string },
+): Array<BundleDiagnostic> {
 	if (isEsbuildFailure(error)) {
 		return error.errors
-			.map((item) => item.text.trim())
-			.filter((text) => text.length > 0)
-			.join('\n')
+			.filter((item) => item.text.trim().length > 0)
+			.map((item) => toDiagnostic(item, paths))
 	}
-	if (error instanceof Error) return error.message
-	return String(error)
+	return [
+		{
+			file: null,
+			line: null,
+			col: null,
+			message: error instanceof Error ? error.message : String(error),
+			frame: null,
+		},
+	]
+}
+
+function toDiagnostic(
+	item: esbuild.Message,
+	paths: { workingDir: string; displayRoot: string },
+): BundleDiagnostic {
+	const location = item.location
+	if (!location) {
+		return { file: null, line: null, col: null, message: item.text.trim(), frame: null }
+	}
+	const absolute = resolve(paths.workingDir, location.file)
+	const fromRoot = relative(paths.displayRoot, absolute)
+	const file = fromRoot && !fromRoot.startsWith('..') ? fromRoot : absolute
+	return {
+		file,
+		line: location.line,
+		col: location.column + 1,
+		message: item.text.trim(),
+		frame: codeFrame(location),
+	}
+}
+
+function codeFrame(location: esbuild.Location): string | null {
+	if (!location.lineText) return null
+	const gutter = String(location.line)
+	const pad = ' '.repeat(gutter.length)
+	const caretWidth = Math.max(1, Math.min(location.length || 1, location.lineText.length))
+	return (
+		`  ${gutter} | ${location.lineText}\n` +
+		`  ${pad} | ${' '.repeat(location.column)}${'^'.repeat(caretWidth)}`
+	)
 }
 
 function isEsbuildFailure(error: unknown): error is esbuild.BuildFailure {

@@ -13,6 +13,7 @@ import {
 	runSecretEnvVar,
 	runSecretHeader,
 } from './local-runtime-source.js'
+import { appLogMarker, devErrorHeader, devRequestIdHeader } from './dev/dev-protocol.js'
 
 export type PackageLocalContext = {
 	packageId: string
@@ -390,6 +391,14 @@ export default {
  * `{ fetch }` export. Mount is already stripped by the Node proxy before this
  * request reaches workerd (pathname is the rest path).
  */
+/**
+ * workerd entry for `kody dev` apps. Beyond resolving the fetch handler it:
+ * tags every `console.*` call with the proxy's request id (written to stdout
+ * behind {@link appLogMarker} so the CLI can stream it), strips the internal
+ * run-secret / request-id headers before the app sees the request, and turns
+ * uncaught handler errors into a {@link devErrorHeader} response carrying the
+ * raw stack for the CLI to source-map.
+ */
 export function createPackageAppEntrySource(
 	input: { sideEffectModules?: ReadonlyArray<string> } = {},
 ): string {
@@ -399,12 +408,40 @@ export function createPackageAppEntrySource(
 		.join('\n')
 	const sideEffectBlock = sideEffectImports ? `${sideEffectImports}\n` : ''
 	return `
-${sideEffectBlock}import {
+${sideEffectBlock}import { AsyncLocalStorage } from 'node:async_hooks';
+import { formatWithOptions } from 'node:util';
+import {
 	__kodyInstallLocalBridge,
 	__kodyRunInLocalRuntime,
 } from ${JSON.stringify(localWorkerModuleNames.runtime)};
 
 const __kodyRunSecretHeader = ${JSON.stringify(runSecretHeader)};
+const __kodyRequestIdHeader = ${JSON.stringify(devRequestIdHeader)};
+const __kodyDevErrorHeader = ${JSON.stringify(devErrorHeader)};
+const __kodyLogMarker = ${JSON.stringify(appLogMarker)};
+const __kodyDevRequest = new AsyncLocalStorage();
+const __kodyNativeConsole = globalThis.console;
+
+function __kodyFormatArgs(args) {
+	try {
+		return formatWithOptions({ colors: false, depth: 6 }, ...args);
+	} catch {
+		return args.map((value) => String(value)).join(' ');
+	}
+}
+
+function __kodyDevLog(level, args) {
+	const request = __kodyDevRequest.getStore() ?? null;
+	__kodyNativeConsole.log(
+		__kodyLogMarker + JSON.stringify({ level, message: __kodyFormatArgs(args), request }),
+	);
+}
+
+const __kodyDevConsole = Object.create(__kodyNativeConsole);
+for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
+	__kodyDevConsole[level] = (...args) => __kodyDevLog(level, args);
+}
+globalThis.console = __kodyDevConsole;
 
 function __kodyResolveFetch(module) {
 	if (typeof module?.default === 'function') return module.default.bind(module);
@@ -414,6 +451,17 @@ function __kodyResolveFetch(module) {
 	if (typeof module?.fetch === 'function') return module.fetch.bind(module);
 	throw new Error(
 		'kody.app.entry must default-export a fetch handler, { fetch }, or a named fetch export.',
+	);
+}
+
+function __kodyErrorResponse(error) {
+	const value = error instanceof Error ? error : new Error(String(error));
+	return new Response(
+		JSON.stringify({ name: value.name, message: value.message, stack: value.stack ?? String(value) }),
+		{
+			status: 500,
+			headers: { 'content-type': 'application/json', [__kodyDevErrorHeader]: '1' },
+		},
 	);
 }
 
@@ -433,10 +481,26 @@ export default {
 			if (data.error) throw new Error(data.error);
 			return data.result;
 		});
-		return await __kodyRunInLocalRuntime(async () => {
-			const module = await import(${JSON.stringify(`./${localWorkerModuleNames.user}`)});
-			const fetchHandler = __kodyResolveFetch(module);
-			return await fetchHandler(request, env);
+		const url = new URL(request.url);
+		const tag = {
+			id: request.headers.get(__kodyRequestIdHeader) ?? '-',
+			method: request.method,
+			path: url.pathname + url.search,
+		};
+		const headers = new Headers(request.headers);
+		headers.delete(__kodyRunSecretHeader);
+		headers.delete(__kodyRequestIdHeader);
+		const appRequest = new Request(request, { headers });
+		return await __kodyDevRequest.run(tag, async () => {
+			try {
+				return await __kodyRunInLocalRuntime(async () => {
+					const module = await import(${JSON.stringify(`./${localWorkerModuleNames.user}`)});
+					const fetchHandler = __kodyResolveFetch(module);
+					return await fetchHandler(appRequest, env);
+				});
+			} catch (error) {
+				return __kodyErrorResponse(error);
+			}
 		});
 	},
 };

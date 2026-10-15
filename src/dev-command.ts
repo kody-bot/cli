@@ -25,6 +25,7 @@ import { StructuredCliError } from './structured-error.js'
 import type { KodyTarget } from './target.js'
 import { formatToolResult } from './tool-result.js'
 import { bundleLocalUserModule } from './local-bundle.js'
+import { formatDevEvent, type DevEvent } from './dev/dev-events.js'
 
 export type DevIo = {
 	stdout: (text: string) => void
@@ -131,6 +132,7 @@ export async function runDevServe(input: {
 		allowPrivateNetwork: input.allowPrivateNetwork,
 		onStatus: (message) => input.io.stderr(`${message}\n`),
 		onError: (message) => input.io.stderr(`${message}\n`),
+		onEvent: (event) => writeDevEvent(input.io, event),
 	})
 	input.io.stdout(
 		`kody dev listening on ${server.hostedUrl}${server.appBasePath || '/'}\n` +
@@ -144,9 +146,9 @@ export async function runDevServe(input: {
 		return 0
 	}
 	await new Promise<void>((resolveWait) => {
+		const signals: Array<NodeJS.Signals> = ['SIGINT', 'SIGTERM', 'SIGHUP']
 		const stop = async () => {
-			process.off('SIGINT', onSig)
-			process.off('SIGTERM', onSig)
+			for (const signal of signals) process.off(signal, onSig)
 			await server.close()
 			await input.auth.closeMock?.()
 			resolveWait()
@@ -154,8 +156,7 @@ export async function runDevServe(input: {
 		const onSig = () => {
 			void stop()
 		}
-		process.on('SIGINT', onSig)
-		process.on('SIGTERM', onSig)
+		for (const signal of signals) process.on(signal, onSig)
 	})
 	return 0
 }
@@ -190,6 +191,12 @@ export async function runDevFetch(input: {
 		watch: false,
 		onStatus: (message) => input.io.stderr(`${message}\n`),
 		onError: (message) => input.io.stderr(`${message}\n`),
+		onEvent: (event) => {
+			// stdout is reserved for the fetch result; logs and errors go to stderr.
+			if (event.type === 'log' || event.type === 'runtime_error' || event.type === 'build_error') {
+				input.io.stderr(`${formatDevEvent(event).text}\n`)
+			}
+		},
 	})
 	try {
 		const result = await server.fetchPath(input.path, {
@@ -636,6 +643,11 @@ async function printDevDryRun(input: {
 	} finally {
 		await input.closeMock?.()
 	}
+}
+
+function writeDevEvent(io: DevIo, event: DevEvent): void {
+	const { stream, text } = formatDevEvent(event)
+	io[stream](`${text}\n`)
 }
 
 /** Parse `kody dev` argv after the `dev` token. */

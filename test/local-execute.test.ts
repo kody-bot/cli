@@ -735,7 +735,7 @@ export default () => missing
 			}),
 		(error: unknown) => {
 			assert.ok(error instanceof Error)
-			assert.match(error.message, /Could not bundle .+entry\.mjs for local execute/)
+			assert.match(error.message, /Could not bundle .+entry\.mjs\./)
 			assert.match(error.message, /Could not resolve|nope\.js/i)
 			return true
 		},

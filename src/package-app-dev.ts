@@ -1,12 +1,16 @@
 /**
  * Long-running `kody dev` app server: bundles `kody.app.entry` the same way
- * local-bundle/publish does for esbuild, serves via workerd, strips the mount
- * at the Node proxy, and rebuilds on file changes.
+ * local-bundle/publish does for esbuild, serves via workerd behind a Node
+ * proxy that strips the mount, and rebuilds on file changes.
+ *
+ * Each successful rebuild starts a new workerd "generation" and only swaps the
+ * proxy over once it is listening; the previous generation drains in-flight
+ * requests and is then stopped. Requests that arrive mid-rebuild wait for it,
+ * so a save is never answered by a 503 or a stale bundle.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { watch } from 'node:fs'
+import { rmSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import {
 	createServer,
@@ -17,14 +21,29 @@ import {
 } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import type { Readable } from 'node:stream'
+import { join, relative } from 'node:path'
 import {
 	assertTokenSafeApiUrl,
 	callCapabilityProxy,
 } from './capability-proxy.js'
 import { apiTokenEnvVar } from './defaults.js'
-import { bundleLocalUserModule } from './local-bundle.js'
+import { createDevBundler, type DevBundle } from './dev/dev-bundler.js'
+import { parseWorkerdStdoutLine, type DevEvent, type DevRequestTag } from './dev/dev-events.js'
+import { devErrorHeader, devRequestIdHeader } from './dev/dev-protocol.js'
+import { createDevWatcher, type DevWatcher } from './dev/dev-watcher.js'
+import { sendDevError, type DevErrorView } from './dev/error-page.js'
+import {
+	devWorkDirPrefix,
+	startProcessReaper,
+	sweepStaleDevDirs,
+} from './dev/process-reaper.js'
+import { createStackMapper, type StackMapper } from './dev/stack-trace.js'
+import {
+	cleanWorkerdStderrLine,
+	startWorkerd,
+	type WorkerdHandle,
+} from './dev/workerd-process.js'
+import { BundleError, formatBundleDiagnostic, type BundleDiagnostic } from './local-bundle.js'
 import {
 	localExecuteGatewayFetchShimModuleName,
 	resolveLocalPackageGraph,
@@ -84,10 +103,17 @@ export type PackageAppDevOptions = {
 	passthroughHosts?: ReadonlyArray<string>
 	workerdPath?: string
 	fetchFn?: typeof fetch
-	/** Hot reload via fs.watch (default true). One-shot `dev fetch` turns this off. */
+	/**
+	 * Rebuild on file changes (default true). One-shot `dev fetch` turns this
+	 * off, which also makes an initial build failure throw.
+	 */
 	watch?: boolean
+	/** Quiet period after the last file event before rebuilding. */
+	debounceMs?: number
 	onStatus?: (message: string) => void
 	onError?: (message: string) => void
+	/** Rebuilds, build/runtime errors, and app logs. */
+	onEvent?: (event: DevEvent) => void
 }
 
 export type PackageAppDevServer = {
@@ -105,7 +131,27 @@ export type PackageAppDevServer = {
 
 type Bridge = { port: number; close: () => Promise<void> }
 
-const workerdStartTimeoutMs = 30_000
+type Generation = {
+	id: number
+	dir: string
+	workerd: WorkerdHandle
+	code: string
+	mapStack: StackMapper
+	inflight: number
+	retired: boolean
+	stopped: boolean
+}
+
+type BuildFailure = {
+	message: string
+	diagnostics: Array<BundleDiagnostic>
+}
+
+const defaultDebounceMs = 120
+/** Longest a request waits for an in-progress rebuild before the old build answers. */
+const rebuildGateMs = 10_000
+/** Longest a retired generation may keep draining in-flight requests. */
+const drainTimeoutMs = 10_000
 
 export async function startPackageAppDev(
 	options: PackageAppDevOptions,
@@ -119,8 +165,12 @@ export async function startPackageAppDev(
 
 	const host = options.host ?? '127.0.0.1'
 	const appBasePath = normalizeBasePath(options.appBasePath ?? '')
+	const root = options.manifest.root
 	const runSecret = randomBytes(32).toString('hex')
-	const workDir = await mkdtemp(join(tmpdir(), 'kody-dev-'))
+	const emit = (event: DevEvent) => options.onEvent?.(event)
+	void sweepStaleDevDirs().catch(() => {})
+	const workDir = await mkdtemp(join(tmpdir(), devWorkDirPrefix))
+	const reaper = await startProcessReaper({ workDir })
 	const workerdPath =
 		options.workerdPath ??
 		(await ensureWorkerdBinary({
@@ -134,18 +184,35 @@ export async function startPackageAppDev(
 		...(options.org ? { org: options.org } : {}),
 	}
 
-	let bridge: Bridge | undefined
-	let child: ChildProcess | undefined
-	let workerdPort: number | undefined
-	let reloadTimer: NodeJS.Timeout | undefined
+	const generations = new Set<Generation>()
+	let active: Generation | undefined
+	let buildFailure: BuildFailure | null = null
+	let generationCounter = 0
+	let requestCounter = 0
 	let closed = false
-	/** Last workerd stderr chunk(s) — surfaced when the app returns HTTP 5xx. */
-	let lastWorkerdStderr = ''
-
-	const proxy = createServer((req, res) => {
-		void proxyRequest(req, res)
+	let buildLoop: Promise<void> | null = null
+	let rebuildAgain = false
+	const changedFiles = new Set<string>()
+	let markStarted: () => void = () => {}
+	const started = new Promise<void>((resolve) => {
+		markStarted = resolve
 	})
 
+	const killAllSync = () => {
+		for (const generation of generations) {
+			try {
+				process.kill(generation.workerd.pid, 'SIGKILL')
+			} catch {}
+		}
+		try {
+			rmSync(workDir, { recursive: true, force: true })
+		} catch {}
+	}
+	process.once('exit', killAllSync)
+
+	const proxy = createServer((req, res) => {
+		void handleRequest(req, res)
+	})
 	await new Promise<void>((resolve, reject) => {
 		proxy.once('error', reject)
 		proxy.listen(options.port ?? 0, host, () => resolve())
@@ -161,13 +228,13 @@ export async function startPackageAppDev(
 
 	const mockFetchGateway = await resolveMockFetchGateway({
 		target: options.target,
-		packageRoot: options.manifest.root,
+		packageRoot: root,
 		passthroughHosts: options.passthroughHosts,
 		allowPrivateNetwork: options.allowPrivateNetwork,
 		onStatus: options.onStatus,
 	})
 
-	bridge = await startBridge({
+	const bridge: Bridge = await startBridge({
 		runSecret,
 		forward: async (call, signal) => {
 			const mocked = tryHandleMockGatewayFetchCall({
@@ -186,17 +253,80 @@ export async function startPackageAppDev(
 	})
 
 	const entryPath = resolvePackagePath(options.manifest, options.manifest.app.entry)
+	const bundler = createDevBundler({ entryPath, root })
+	const workerdEnv: NodeJS.ProcessEnv = { ...process.env, [runSecretEnvVar]: runSecret }
+	delete workerdEnv[apiTokenEnvVar]
 
-	async function rebuildAndServe(): Promise<void> {
-		options.onStatus?.(`Bundling ${entryPath}…`)
-		const code = await bundleLocalUserModule(entryPath)
+	function requestBuild(paths: Iterable<string>): Promise<void> {
+		for (const path of paths) changedFiles.add(path)
+		if (buildLoop) {
+			rebuildAgain = true
+			return buildLoop
+		}
+		buildLoop = (async () => {
+			do {
+				rebuildAgain = false
+				const files = [...changedFiles]
+				changedFiles.clear()
+				await buildOnce(files)
+			} while (rebuildAgain && !closed)
+		})().finally(() => {
+			buildLoop = null
+		})
+		return buildLoop
+	}
+
+	async function buildOnce(files: Array<string>): Promise<void> {
+		const started = performance.now()
+		emit({ type: 'rebuild_start', files: files.map((file) => relative(root, file) || file) })
+		let bundle: DevBundle
+		try {
+			bundle = await bundler.build()
+			watcher?.track([...bundle.inputs, options.manifest.packageJsonPath])
+			if (active && !buildFailure && bundle.code === active.code) {
+				emit({
+					type: 'rebuild_ok',
+					ms: elapsed(started),
+					buildId: active.id,
+					restarted: false,
+				})
+				return
+			}
+			const generation = await startGeneration(bundle)
+			if (closed) {
+				await stopGeneration(generation)
+				return
+			}
+			const previous = active
+			active = generation
+			buildFailure = null
+			if (previous) retireGeneration(previous)
+			emit({ type: 'rebuild_ok', ms: elapsed(started), buildId: generation.id, restarted: true })
+		} catch (error) {
+			buildFailure = toBuildFailure(error)
+			const [first] = buildFailure.diagnostics
+			emit({
+				type: 'build_error',
+				ms: elapsed(started),
+				message: buildFailure.message,
+				file: first?.file ?? null,
+				line: first?.line ?? null,
+				col: first?.col ?? null,
+				diagnostics: buildFailure.diagnostics,
+			})
+		}
+	}
+
+	async function startGeneration(bundle: DevBundle): Promise<Generation> {
+		const id = ++generationCounter
+		const dir = join(workDir, `g${id}`)
 		await writeWorkerFiles({
-			workDir,
-			code,
+			workDir: dir,
+			code: bundle.code,
 			packageContext,
-			packageRoot: options.manifest.root,
+			packageRoot: root,
 			mockStorage: options.target === 'mock',
-			bridgePort: bridge!.port,
+			bridgePort: bridge.port,
 			allowPrivateNetwork: options.allowPrivateNetwork,
 			apiUrl: options.apiUrl,
 			token: options.token,
@@ -206,124 +336,251 @@ export async function startPackageAppDev(
 			mockFetchGateway,
 			onStatus: options.onStatus,
 		})
-		await restartWorkerd()
-	}
-
-	async function restartWorkerd(): Promise<void> {
-		if (child) {
-			child.kill('SIGKILL')
-			child = undefined
-			workerdPort = undefined
-		}
-		const env: NodeJS.ProcessEnv = { ...process.env, [runSecretEnvVar]: runSecret }
-		delete env[apiTokenEnvVar]
-		const configPath = join(workDir, 'config.capnp')
-		lastWorkerdStderr = ''
-		child = spawn(workerdPath, ['serve', configPath, '--control-fd=3'], {
-			cwd: workDir,
-			env,
-			stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+		const workerd = await startWorkerd({
+			workerdPath,
+			configPath: join(dir, 'config.capnp'),
+			cwd: dir,
+			env: workerdEnv,
+			onSpawn: (pid) => reaper.track(pid),
+			onStdoutLine: (line) => emit(parseWorkerdStdoutLine(line)),
+			onStderrLine: (line) => {
+				const cleaned = cleanWorkerdStderrLine(line)
+				if (cleaned === null) return
+				emit({
+					type: 'log',
+					source: 'workerd',
+					level: 'error',
+					message: redact(cleaned),
+					request: null,
+				})
+			},
 		})
-		child.stderr?.on('data', (chunk: Buffer) => {
-			lastWorkerdStderr += chunk.toString('utf8')
-			if (lastWorkerdStderr.length > 32_000) {
-				lastWorkerdStderr = lastWorkerdStderr.slice(-24_000)
+		const generation: Generation = {
+			id,
+			dir,
+			workerd,
+			code: bundle.code,
+			mapStack: createStackMapper({
+				sourceMap: bundle.sourceMap,
+				userModule: localWorkerModuleNames.user,
+			}),
+			inflight: 0,
+			retired: false,
+			stopped: false,
+		}
+		generations.add(generation)
+		void workerd.exited.then((detail) => {
+			reaper.untrack(workerd.pid)
+			if (closed || generation.retired || active !== generation) return
+			active = undefined
+			buildFailure = {
+				message: `workerd stopped unexpectedly (${detail}). Save a file to restart it.`,
+				diagnostics: [],
 			}
+			options.onError?.(buildFailure.message)
 		})
-		const workerd = watchWorkerd(child)
-		const started = await workerd.listening
-		if ('exitDetail' in started) {
-			throw new Error(`workerd failed to start${started.exitDetail}`)
-		}
-		workerdPort = started.port
-		options.onStatus?.(`App ready at ${hostedUrl}${appBasePath || '/'}`)
+		return generation
 	}
 
-	async function proxyRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	function retireGeneration(generation: Generation): void {
+		generation.retired = true
+		if (generation.inflight === 0) {
+			void stopGeneration(generation)
+			return
+		}
+		setTimeout(() => void stopGeneration(generation), drainTimeoutMs).unref()
+	}
+
+	async function stopGeneration(generation: Generation): Promise<void> {
+		if (generation.stopped) return
+		generation.stopped = true
+		generation.retired = true
+		await generation.workerd.kill()
+		reaper.untrack(generation.workerd.pid)
+		generations.delete(generation)
+		await rm(generation.dir, { recursive: true, force: true })
+	}
+
+	async function waitForBuild(): Promise<void> {
+		const pending = buildLoop ?? (active || buildFailure ? null : started)
+		if (!pending) return
+		await Promise.race([
+			pending.catch(() => {}),
+			new Promise<void>((resolve) => setTimeout(resolve, rebuildGateMs).unref()),
+		])
+	}
+
+	async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
 		try {
-			if (!workerdPort) {
-				res.writeHead(503, { 'content-type': 'text/plain' })
-				res.end('Dev server is still starting.')
+			await waitForBuild()
+			if (buildFailure) {
+				sendDevError(req, res, 500, buildErrorView(buildFailure))
 				return
 			}
-			const incomingUrl = new URL(req.url ?? '/', hostedUrl)
-			const restPath = stripMount(incomingUrl.pathname, appBasePath)
-			const forwardUrl = new URL(restPath + incomingUrl.search, `http://127.0.0.1:${workerdPort}`)
-
-			const chunks: Array<Buffer> = []
-			for await (const chunk of req) {
-				chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+			const generation = active
+			if (!generation) {
+				res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' })
+				res.end(closed ? 'kody dev is shutting down.\n' : 'kody dev is still starting.\n')
+				return
 			}
-			const body = Buffer.concat(chunks)
-
-			const headers: Record<string, string | number | string[] | undefined> = {
-				...req.headers,
-				host: `127.0.0.1:${workerdPort}`,
-				[runSecretHeader]: runSecret,
+			generation.inflight += 1
+			try {
+				await forwardRequest(generation, req, res)
+			} finally {
+				generation.inflight -= 1
+				if (generation.retired && generation.inflight === 0) {
+					void stopGeneration(generation)
+				}
 			}
-			delete headers['content-length']
-
-			await new Promise<void>((resolve, reject) => {
-				const upstream = httpRequest(
-					forwardUrl,
-					{ method: req.method, headers },
-					(upstreamRes) => {
-						const status = upstreamRes.statusCode ?? 502
-						const chunks: Array<Buffer> = []
-						upstreamRes.on('data', (chunk) => {
-							chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-						})
-						upstreamRes.on('end', () => {
-							const responseBody = Buffer.concat(chunks)
-							if (status >= 500) {
-								const preview = redact(responseBody.toString('utf8').slice(0, 2000))
-								const workerdLogs = redact(lastWorkerdStderr.trim())
-								options.onError?.(
-									`App handler HTTP ${status}${workerdLogs ? `\nworkerd stderr:\n${workerdLogs}` : ''}${preview ? `\nbody:\n${preview}` : ''}`,
-								)
-							}
-							if (!res.headersSent) {
-								res.writeHead(status, upstreamRes.headers)
-							}
-							res.end(responseBody)
-							resolve()
-						})
-						upstreamRes.on('error', reject)
-					},
-				)
-				upstream.on('error', reject)
-				if (body.length > 0) upstream.write(body)
-				upstream.end()
-			})
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error)
-			const workerdLogs = redact(lastWorkerdStderr.trim())
-			options.onError?.(
-				workerdLogs ? `${message}\nworkerd stderr:\n${workerdLogs}` : message,
-			)
+			options.onError?.(`Dev proxy error: ${message}`)
 			if (!res.headersSent) {
-				res.writeHead(502, { 'content-type': 'text/plain' })
-				res.end(`Dev proxy error: ${message}`)
+				res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
 			}
+			res.end(`Dev proxy error: ${message}\n`)
 		}
 	}
 
-	await rebuildAndServe()
+	function forwardRequest(
+		generation: Generation,
+		req: IncomingMessage,
+		res: ServerResponse,
+	): Promise<void> {
+		const incomingUrl = new URL(req.url ?? '/', hostedUrl)
+		const restPath = stripMount(incomingUrl.pathname, appBasePath)
+		const forwardUrl = new URL(
+			restPath + incomingUrl.search,
+			`http://127.0.0.1:${generation.workerd.port}`,
+		)
+		const tag: DevRequestTag = {
+			id: String(++requestCounter),
+			method: req.method ?? 'GET',
+			path: restPath + incomingUrl.search,
+		}
+		const headers: Record<string, string | number | string[] | undefined> = {
+			...req.headers,
+			host: `127.0.0.1:${generation.workerd.port}`,
+			[runSecretHeader]: runSecret,
+			[devRequestIdHeader]: tag.id,
+		}
+		return new Promise<void>((resolve, reject) => {
+			const upstream = httpRequest(
+				forwardUrl,
+				{ method: req.method, headers },
+				(upstreamRes) => {
+					if (upstreamRes.headers[devErrorHeader]) {
+						void readStream(upstreamRes)
+							.then((raw) => {
+								respondWithRuntimeError(generation, req, res, tag, raw)
+								resolve()
+							})
+							.catch(reject)
+						return
+					}
+					const status = upstreamRes.statusCode ?? 502
+					if (status >= 500) {
+						emit({
+							type: 'log',
+							source: 'app',
+							level: 'warn',
+							message: `responded HTTP ${status}`,
+							request: tag,
+						})
+					}
+					res.writeHead(status, upstreamRes.headers)
+					upstreamRes.pipe(res)
+					upstreamRes.on('end', () => resolve())
+					upstreamRes.on('error', reject)
+				},
+			)
+			upstream.on('error', reject)
+			res.on('close', () => {
+				if (!res.writableFinished) upstream.destroy()
+				resolve()
+			})
+			req.pipe(upstream)
+		})
+	}
 
-	const watcher =
+	function respondWithRuntimeError(
+		generation: Generation,
+		req: IncomingMessage,
+		res: ServerResponse,
+		tag: DevRequestTag,
+		raw: string,
+	): void {
+		let message = 'Uncaught error'
+		let stack = ''
+		try {
+			const parsed = JSON.parse(raw) as { name?: string; message?: string; stack?: string }
+			message = `${parsed.name ?? 'Error'}: ${parsed.message ?? ''}`
+			stack = parsed.stack ?? message
+		} catch {
+			stack = raw
+		}
+		const mapped = redact(generation.mapStack(stack))
+		emit({ type: 'runtime_error', message: redact(message), stack: mapped, request: tag })
+		sendDevError(req, res, 500, {
+			kind: 'runtime',
+			title: redact(message),
+			detail: mapped,
+			request: `${tag.method} ${tag.path}`,
+		})
+	}
+
+	const watcher: DevWatcher | null =
 		options.watch === false
 			? null
-			: watch(options.manifest.root, { recursive: true }, (_event, filename) => {
-					if (closed) return
-					if (filename && shouldIgnoreWatchPath(filename)) return
-					clearTimeout(reloadTimer)
-					reloadTimer = setTimeout(() => {
-						void rebuildAndServe().catch((error) => {
-							const message = error instanceof Error ? error.message : String(error)
-							options.onError?.(message)
-						})
-					}, 120)
-				})
+			: (() => {
+					let timer: NodeJS.Timeout | undefined
+					const pending = new Set<string>()
+					return createDevWatcher({
+						root,
+						onChange: (path) => {
+							if (closed) return
+							pending.add(path)
+							clearTimeout(timer)
+							timer = setTimeout(() => {
+								const paths = [...pending]
+								pending.clear()
+								void requestBuild(paths)
+							}, options.debounceMs ?? defaultDebounceMs)
+						},
+					})
+				})()
+
+	const close = async () => {
+		if (closed) return
+		closed = true
+		process.off('exit', killAllSync)
+		await watcher?.close()
+		await buildLoop?.catch(() => {})
+		await bundler.dispose()
+		await Promise.all([...generations].map((generation) => stopGeneration(generation)))
+		reaper.close()
+		await bridge.close()
+		proxy.closeAllConnections()
+		await new Promise<void>((resolve) => {
+			proxy.close(() => resolve())
+		})
+		await rm(workDir, { recursive: true, force: true })
+	}
+
+	try {
+		await Promise.all([requestBuild([]), watcher?.ready])
+	} catch (error) {
+		await close()
+		throw error
+	} finally {
+		markStarted()
+	}
+	if (options.watch === false && buildFailure) {
+		const message = (buildFailure as BuildFailure).message
+		await close()
+		throw new Error(message)
+	}
+	if (active) options.onStatus?.(`App ready at ${hostedUrl}${appBasePath || '/'}`)
 
 	const fetchPath: PackageAppDevServer['fetchPath'] = async (path, init = {}) => {
 		const url = new URL(joinUrlPath(appBasePath, path), hostedUrl)
@@ -347,27 +604,44 @@ export async function startPackageAppDev(
 		appBasePath,
 		packageContext,
 		fetchPath,
-		close: async () => {
-			closed = true
-			clearTimeout(reloadTimer)
-			watcher?.close()
-			const stopping = child
-			if (stopping) {
-				const exited = new Promise<void>((resolve) => {
-					stopping.once('exit', () => resolve())
-					stopping.once('error', () => resolve())
-				})
-				stopping.kill('SIGKILL')
-				await Promise.race([exited, new Promise<void>((r) => setTimeout(r, 1000))])
-				child = undefined
-			}
-			await bridge?.close()
-			await new Promise<void>((resolve) => {
-				proxy.close(() => resolve())
-			})
-			await rm(workDir, { recursive: true, force: true })
-		},
+		close,
 	}
+}
+
+function elapsed(started: number): number {
+	return Math.round(performance.now() - started)
+}
+
+function toBuildFailure(error: unknown): BuildFailure {
+	if (error instanceof BundleError) {
+		return { message: error.message, diagnostics: error.diagnostics }
+	}
+	return {
+		message: redact(error instanceof Error ? error.message : String(error)),
+		diagnostics: [],
+	}
+}
+
+function buildErrorView(failure: BuildFailure): DevErrorView {
+	const [first] = failure.diagnostics
+	return {
+		kind: 'build',
+		title: first
+			? `${first.file ?? 'bundle'}${first.line !== null ? `:${first.line}:${first.col}` : ''} ${first.message}`
+			: (failure.message.split('\n')[0] ?? 'Build failed'),
+		detail:
+			failure.diagnostics.length > 0
+				? failure.diagnostics.map(formatBundleDiagnostic).join('\n\n')
+				: failure.message,
+	}
+}
+
+async function readStream(stream: IncomingMessage): Promise<string> {
+	const chunks: Array<Buffer> = []
+	for await (const chunk of stream) {
+		chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+	}
+	return Buffer.concat(chunks).toString('utf8')
 }
 
 async function writeWorkerFiles(input: {
@@ -462,70 +736,6 @@ function joinUrlPath(base: string, path: string): string {
 	const rest = path.startsWith('/') ? path : `/${path}`
 	if (!base) return rest
 	return `${base}${rest === '/' ? '' : rest}` || base
-}
-
-function shouldIgnoreWatchPath(filename: string): boolean {
-	return (
-		filename.includes('node_modules') ||
-		filename.includes('.git') ||
-		filename.endsWith('.map') ||
-		filename.startsWith('.')
-	)
-}
-
-function watchWorkerd(child: ChildProcess) {
-	let stderrText = ''
-	child.stderr?.on('data', (chunk: Buffer) => {
-		stderrText += chunk.toString('utf8')
-	})
-	child.stdout?.resume()
-	const stderr = () => {
-		const trimmed = redact(stderrText.trim())
-		return trimmed ? `\n${trimmed}` : ''
-	}
-	const exited = new Promise<string>((resolve) => {
-		child.once('exit', (code, signal) => {
-			resolve(` (workerd exit ${signal ?? code})${stderr()}`)
-		})
-	})
-	const listening = new Promise<{ port: number } | { exitDetail: string }>((resolve, reject) => {
-		const control = child.stdio[3] as Readable | null
-		let buffered = ''
-		const timer = setTimeout(() => {
-			reject(new Error(`workerd did not start within ${workerdStartTimeoutMs / 1000}s.${stderr()}`))
-		}, workerdStartTimeoutMs)
-		control?.on('data', (chunk: Buffer) => {
-			buffered += chunk.toString('utf8')
-			for (const line of buffered.split('\n')) {
-				const port = parseListenPort(line)
-				if (port !== null) {
-					clearTimeout(timer)
-					resolve({ port })
-				}
-			}
-		})
-		child.once('error', (error) => {
-			clearTimeout(timer)
-			reject(new Error(`Could not start workerd: ${error.message}`))
-		})
-		void exited.then((exitDetail) => {
-			clearTimeout(timer)
-			resolve({ exitDetail })
-		})
-	})
-	return { listening, exited, stderr }
-}
-
-function parseListenPort(line: string): number | null {
-	if (!line.trim()) return null
-	try {
-		const event = JSON.parse(line) as { event?: string; socket?: string; port?: number }
-		return event.event === 'listen' && event.socket === 'http' && typeof event.port === 'number'
-			? event.port
-			: null
-	} catch {
-		return null
-	}
 }
 
 async function startBridge(input: {

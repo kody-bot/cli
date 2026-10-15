@@ -240,6 +240,32 @@ kody execute --local --invoke kody:@scope/pkg/export --params '{}'
 kody search --target mock local
 ```
 
+### What `kody dev` does while it runs
+
+- **Rebuilds never drop requests.** A save starts a new workerd, and the proxy
+  switches to it only once it is listening. The old one finishes its in-flight
+  requests and then stops. Requests that arrive mid-rebuild wait for it, so you
+  never get a `503` or the previous bundle after a save.
+- **Watching survives editors and scripts.** chokidar watches the package
+  (skipping `node_modules`, dotfiles, and `*.map`). A 1s stat poll over the
+  files in the current bundle graph backs it up, so replaced files (`sed -i`,
+  `cp`, atomic saves) are always picked up.
+- **Build errors** print `file:line:col: message` with a code frame. Until the
+  next good build, every request gets a `500` error page with the same text
+  (HTML for browsers, plain text otherwise, header `x-kody-dev-error: build`).
+  The last good build does not keep answering `200`.
+- **Runtime errors**: an uncaught throw from the fetch handler returns a
+  dev-only `500` page with the stack mapped back to your `.ts` sources
+  (`x-kody-dev-error: runtime`). Runtime wrapper and native frames are
+  dropped. The terminal prints the same stack.
+- **Logs**: app `console.*` output streams to the terminal tagged with the
+  request, e.g. `[GET /scores #12] saved 3 rows`. `warn` and `error` go to
+  stderr.
+- **Cleanup**: Ctrl-C, `SIGTERM`, and `SIGHUP` stop workerd and remove the
+  `kody-dev-*` temp dir. If the CLI is killed outright, a small reaper process
+  does the same. Each start also sweeps dirs and orphaned workerd processes
+  left behind by dead CLI runs, including older CLI versions.
+
 ## Local execute
 
 `kody execute --local` runs the same execute module (default export called

@@ -282,6 +282,11 @@ ${orgBlock}
   kody dev   Local testing for unpublished packages. Serves \`kody.app.entry\`
              on localhost via workerd with hot reload (mount-stripped path;
              packageContext.hostedUrl / appBasePath point at localhost).
+             Rebuilds swap to a new workerd only once it listens (requests
+             wait; no 503 or stale bundle). Build errors (file:line:col +
+             code frame) and uncaught handler errors (stack mapped to your
+             .ts sources) are served as dev-only 500 pages until fixed. App
+             console.* streams to the terminal tagged by request.
              Bundles with the same esbuild path as publish (\`local-bundle\`).
              Four surfaces: exports (\`execute --invoke ./export\` or
              \`--file\` against the local package), webhooks
