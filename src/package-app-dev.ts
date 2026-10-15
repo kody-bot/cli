@@ -906,12 +906,16 @@ export async function startPackageAppDev(
 						onChange: (path) => {
 							if (closed) return
 							const now = performance.now()
-							if (
-								prebuildRunning ||
-								now < ignoreWatcherUntil ||
-								now - prebuildSettledAt < prebuildSettleMs
-							) {
+							// Soft absorb: fingerprint already advanced by the
+							// poller — prebuild's own writes / brief settle chatter.
+							if (prebuildRunning || now - prebuildSettledAt < prebuildSettleMs) {
 								return
+							}
+							// Hard defer after a *failed* prebuild: leave the
+							// poll fingerprint so a real save in this window is
+							// seen again after absorb (Bugbot: do not drop).
+							if (now < ignoreWatcherUntil) {
+								return false
 							}
 							// Fold mid-build watcher events into the active loop
 							// (including another save of a file already building).

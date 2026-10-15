@@ -38,7 +38,11 @@ export type DevWatcher = {
 
 export function createDevWatcher(input: {
 	root: string
-	onChange: (path: string) => void
+	/**
+	 * Return `false` to leave the poll fingerprint unadvanced so the same
+	 * change is observed again on the next tick (defer, do not drop).
+	 */
+	onChange: (path: string) => void | boolean
 	/** Extra root-relative path prefixes to ignore. */
 	ignore?: ReadonlyArray<string>
 	pollIntervalMs?: number
@@ -90,8 +94,12 @@ export function createDevWatcher(input: {
 				if (tracked !== map || generation !== trackGeneration) return
 				if (!map.has(path)) continue
 				if (previous !== null && next !== previous) {
+					if (tracked !== map || generation !== trackGeneration) return
+					// Defer (false): do not advance the fingerprint — the next
+					// poll must still see this change (e.g. failed-prebuild absorb).
+					if (input.onChange(path) === false) continue
+					if (tracked !== map || generation !== trackGeneration) return
 					map.set(path, next)
-					if (tracked === map && generation === trackGeneration) input.onChange(path)
 				} else if (previous === null) {
 					map.set(path, next)
 				}

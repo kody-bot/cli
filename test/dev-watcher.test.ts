@@ -15,7 +15,9 @@ test('track detaches the poll map so a concurrent poll cannot echo a rebuild', a
 		await writeFile(file, 'export const n = 1\n')
 		const watcher = createDevWatcher({
 			root,
-			onChange: (path) => changes.push(path),
+			onChange: (path) => {
+				changes.push(path)
+			},
 			pollIntervalMs: 15,
 		})
 		await watcher.ready
