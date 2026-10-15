@@ -40,7 +40,12 @@ import {
 	type LocalRuntimeBridge,
 } from './local-runtime-bridge.js'
 import { createDevBundler, type DevBundle } from './dev/dev-bundler.js'
-import { parseWorkerdStdoutLine, type DevEvent, type DevRequestTag } from './dev/dev-events.js'
+import {
+	parseWorkerdStdoutLine,
+	runtimeErrorFix,
+	type DevEvent,
+	type DevRequestTag,
+} from './dev/dev-events.js'
 import { devErrorHeader, devRequestIdHeader } from './dev/dev-protocol.js'
 import { listenDevServer } from './dev/dev-port.js'
 import { devStatusPath, type DevServerStatus } from './dev/dev-registry.js'
@@ -846,18 +851,26 @@ export async function startPackageAppDev(
 			stack = raw
 		}
 		const mapped = redact(generation.mapStack(stack))
+		const fix = runtimeErrorFix(message)
 		lastRuntimeError = {
 			kind: 'runtime',
 			message: redact(message),
 			stack: mapped,
 			request: tag,
+			...(fix ? { fix } : {}),
 			at: new Date().toISOString(),
 		}
-		emit({ type: 'runtime_error', message: redact(message), stack: mapped, request: tag })
+		emit({
+			type: 'runtime_error',
+			message: redact(message),
+			stack: mapped,
+			request: tag,
+			...(fix ? { fix } : {}),
+		})
 		const view: DevErrorView = {
 			kind: 'runtime',
 			title: redact(message),
-			detail: mapped,
+			detail: fix ? `${mapped}\n\nfix: ${fix}` : mapped,
 			request: `${tag.method} ${tag.path}`,
 		}
 		liveReloadHub.broadcast({ event: 'runtime_error', data: view })

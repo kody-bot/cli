@@ -50,6 +50,7 @@ export type DevServerStatus = {
 				message: string
 				stack: string
 				request: { id: string; method: string; path: string } | null
+				fix?: string
 				at: string
 		  }
 		| null

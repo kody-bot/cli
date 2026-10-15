@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import psList from 'ps-list'
-import { formatDevEvent, parseWorkerdStdoutLine } from '../src/dev/dev-events.js'
+import {
+	formatDevEvent,
+	parseWorkerdStdoutLine,
+	runtimeErrorFix,
+} from '../src/dev/dev-events.js'
 import { appLogMarker } from '../src/dev/dev-protocol.js'
 import { shouldIgnoreWatchPath } from '../src/dev/dev-watcher.js'
 import {
@@ -184,6 +188,23 @@ test('parseWorkerdStdoutLine reads tagged app logs and passes plain lines throug
 		message: 'hello',
 		request: null,
 	})
+})
+
+test('runtime errors from a CommonJS require() of a Node builtin carry a fix line', () => {
+	const message = 'Error: Dynamic require of "util" is not supported'
+	const fix = runtimeErrorFix(message)
+	assert.match(fix ?? '', /require\("util"\)/)
+	assert.match(fix ?? '', /edge/)
+	assert.equal(runtimeErrorFix('Error: boom'), undefined)
+	const text = formatDevEvent({
+		type: 'runtime_error',
+		message,
+		stack: message,
+		request: { id: '1', method: 'GET', path: '/' },
+		fix,
+	}).text
+	assert.match(text, /^\[GET \/ #1\] Uncaught Error: Dynamic require/)
+	assert.match(text, /\nfix: A CommonJS dependency/)
 })
 
 test('shouldIgnoreWatchPath skips dependencies, dotfiles, maps, and custom prefixes', () => {

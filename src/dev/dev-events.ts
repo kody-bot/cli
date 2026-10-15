@@ -28,6 +28,8 @@ export type DevEvent =
 			message: string
 			stack: string
 			request: DevRequestTag | null
+			/** Present when the error has a known, actionable cause. */
+			fix?: string
 	  }
 	| {
 			type: 'log'
@@ -75,6 +77,22 @@ function readRequestTag(value: unknown): DevRequestTag | null {
 	}
 }
 
+/**
+ * A fix line for runtime errors with a known cause, or undefined. esbuild's ESM
+ * output turns a CommonJS `require()` of an external (a Node builtin) into a
+ * shim that throws in Workers — hosted apps fail the same way.
+ */
+export function runtimeErrorFix(message: string): string | undefined {
+	const dynamicRequire = /Dynamic require of "([^"]+)" is not supported/.exec(message)
+	if (dynamicRequire) {
+		return (
+			`A CommonJS dependency calls require("${dynamicRequire[1]}"), which an ESM Worker cannot run (hosted apps fail the same way). ` +
+			'It likely resolved to its Node build: import the package’s Workers/edge entry (an exports subpath or condition like `edge`, `worker`, or `workerd`) or an ESM build instead.'
+		)
+	}
+	return undefined
+}
+
 export function formatRequestTag(request: DevRequestTag | null): string {
 	return request ? `[${request.method} ${request.path} #${request.id}]` : '[app]'
 }
@@ -102,7 +120,7 @@ export function formatDevEvent(event: DevEvent): { stream: 'stdout' | 'stderr'; 
 		case 'runtime_error':
 			return {
 				stream: 'stderr',
-				text: `${formatRequestTag(event.request)} Uncaught ${event.stack || event.message}`,
+				text: `${formatRequestTag(event.request)} Uncaught ${event.stack || event.message}${event.fix ? `\nfix: ${event.fix}` : ''}`,
 			}
 		case 'log': {
 			const tag = event.source === 'app' ? formatRequestTag(event.request) : `[${event.source}]`
