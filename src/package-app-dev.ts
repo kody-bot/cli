@@ -313,11 +313,8 @@ export async function startPackageAppDev(
 		return buildLoop
 	}
 
-	let buildingFiles: Set<string> | null = null
-
 	async function buildOnce(files: Array<string>): Promise<void> {
 		const started = performance.now()
-		buildingFiles = new Set(files)
 		emit({ type: 'rebuild_start', files: files.map((file) => relative(root, file) || file) })
 		let bundle: DevBundle
 		try {
@@ -372,8 +369,6 @@ export async function startPackageAppDev(
 				diagnostics: buildFailure.diagnostics,
 			})
 			liveReloadHub.broadcast({ event: 'build_error', data: buildErrorView(buildFailure) })
-		} finally {
-			buildingFiles = null
 		}
 	}
 
@@ -715,11 +710,11 @@ export async function startPackageAppDev(
 						root,
 						onChange: (path) => {
 							if (closed) return
-							// Fold mid-build chokidar echoes into the active
-							// loop. Debouncing them instead schedules a second
-							// rebuild after buildLoop clears (often a no-op).
+							// Fold mid-build watcher events into the active loop
+							// (including another save of a file already building).
+							// Debouncing them instead schedules a second rebuild
+							// after buildLoop clears (often a no-op echo).
 							if (buildLoop) {
-								if (buildingFiles?.has(path)) return
 								changedFiles.add(path)
 								rebuildAgain = true
 								return
