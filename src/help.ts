@@ -185,8 +185,9 @@ ${orgBlock}
 
   package publish
              Thin wrapper for Open API \`packagePublishExternalPush\` (same
-             auth as \`kody api\`). Optional positional is \`package_id\` when
-             UUID-shaped, otherwise \`kody_id\` (\`@owner/leaf\`). Extra fields
+             auth as \`kody api\`). Optional positional is a \`package_id\`, or a
+             name (\`@owner/leaf\` or bare leaf) resolved to its package_id
+             via \`packageList\` in the current org. Extra fields
              via \`--params\` JSON (e.g. \`allow_force\`). Prints JSON.
 
   package collaborators | grant | revoke

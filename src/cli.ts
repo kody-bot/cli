@@ -1387,15 +1387,21 @@ async function dispatch(
 					typeof parsed.values.params === 'string' ? parsed.values.params : undefined,
 			})
 			const { callOpenApiOperation } = await import('./open-api-client.js')
-			const result = await callOpenApiOperation({
-				operationId: 'packagePublishExternalPush',
-				params,
-				token: requireApiToken(tokenValues, process.env, 'package publish', {
-					apiUrl,
-				}),
+			const publishToken = requireApiToken(tokenValues, process.env, 'package publish', {
 				apiUrl,
-				...(org ? { org } : {}),
 			})
+			const call = (operationId: string, operationParams: Record<string, unknown>) =>
+				callOpenApiOperation({
+					operationId,
+					params: operationParams,
+					token: publishToken,
+					apiUrl,
+					...(org ? { org } : {}),
+				})
+			const result = await call(
+				'packagePublishExternalPush',
+				await resolvePackagePublishTarget(params, call),
+			)
 			write(`${JSON.stringify(result, null, 2)}\n`)
 			return 0
 		}
@@ -1749,6 +1755,44 @@ export function packagePublishParams(input: {
 		params.kody_id = ref
 	}
 	return params
+}
+
+/**
+ * The publish route is `POST /v1/packages/{package_id}/external-push`, so a
+ * package name (`@owner/leaf` or bare leaf) is resolved to its `package_id`
+ * through `packageList` first.
+ */
+export async function resolvePackagePublishTarget(
+	params: Record<string, unknown>,
+	call: (operationId: string, params: Record<string, unknown>) => Promise<unknown>,
+): Promise<Record<string, unknown>> {
+	if (params.package_id !== undefined || typeof params.kody_id !== 'string') return params
+	const ref = params.kody_id.trim()
+	const listed = (await call('packageList', {})) as {
+		packages?: Array<{ package_id: string; kody_id: string; name: string }>
+	}
+	const packages = listed.packages ?? []
+	const leaf = ref.includes('/') ? ref.slice(ref.lastIndexOf('/') + 1) : ref
+	const byName = packages.filter((pkg) => pkg.name === ref)
+	const matches =
+		byName.length > 0
+			? byName
+			: ref.startsWith('@')
+				? []
+				: packages.filter((pkg) => pkg.kody_id === leaf)
+	if (matches.length !== 1) {
+		const known = packages
+			.map((pkg) => pkg.name)
+			.slice(0, 20)
+			.join(', ')
+		throw new Error(
+			matches.length === 0
+				? `No saved package named "${ref}" in this org.${known ? ` Saved packages: ${known}.` : ''} Pass the scoped name (@owner/leaf), the package_id, or --org <slug> for another org.`
+				: `"${ref}" matches several saved packages (${matches.map((pkg) => `${pkg.name} = ${pkg.package_id}`).join(', ')}). Pass the scoped name or the package_id.`,
+		)
+	}
+	const { kody_id: _name, ...rest } = params
+	return { ...rest, package_id: matches[0]!.package_id }
 }
 
 /**

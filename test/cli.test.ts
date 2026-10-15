@@ -11,6 +11,7 @@ import {
 	buildExecuteToolArgs,
 	executeSourcesConflict,
 	packagePublishParams,
+	resolvePackagePublishTarget,
 	parseApiParamsJson,
 	resolveApiToken,
 	resolveCommand,
@@ -113,6 +114,40 @@ test('packagePublishParams maps positional UUID vs kody_id; --params wins', () =
 			paramsJson: '{"kody_id":"@other/x","allow_force":true}',
 		}),
 		{ kody_id: '@other/x', allow_force: true },
+	)
+})
+
+test('resolvePackagePublishTarget turns a package name into the package_id the route needs', async () => {
+	const packages = [
+		{ package_id: 'id-asteroids', kody_id: 'asteroids', name: '@kentcdodds/asteroids' },
+		{ package_id: 'id-kit', kody_id: 'package-app-kit', name: '@kentcdodds/package-app-kit' },
+		{ package_id: 'id-dup-a', kody_id: 'dup', name: '@a/dup' },
+		{ package_id: 'id-dup-b', kody_id: 'dup', name: '@b/dup' },
+	]
+	const calls: Array<string> = []
+	const call = async (operationId: string) => {
+		calls.push(operationId)
+		return { packages }
+	}
+	assert.deepEqual(
+		await resolvePackagePublishTarget({ kody_id: '@kentcdodds/asteroids', allow_force: true }, call),
+		{ package_id: 'id-asteroids', allow_force: true },
+	)
+	assert.deepEqual(await resolvePackagePublishTarget({ kody_id: 'package-app-kit' }, call), {
+		package_id: 'id-kit',
+	})
+	assert.deepEqual(calls, ['packageList', 'packageList'])
+	assert.deepEqual(await resolvePackagePublishTarget({ package_id: 'given' }, call), {
+		package_id: 'given',
+	})
+	assert.equal(calls.length, 2, 'a package_id needs no lookup')
+	await assert.rejects(
+		resolvePackagePublishTarget({ kody_id: '@someone/asteroids' }, call),
+		/No saved package named "@someone\/asteroids".*@kentcdodds\/asteroids/,
+	)
+	await assert.rejects(
+		resolvePackagePublishTarget({ kody_id: 'dup' }, call),
+		/matches several saved packages \(@a\/dup = id-dup-a, @b\/dup = id-dup-b\)/,
 	)
 })
 
