@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { test } from 'node:test'
-import { runDevServe } from '../src/dev-command.js'
+import { fileURLToPath } from 'node:url'
+import { resolveDevAuth, runDevServe } from '../src/dev-command.js'
 import {
 	inferDevAssetContentType,
 	parseDevAssetPath,
@@ -17,11 +18,15 @@ import {
 	listenDevServer,
 	parseDevPort,
 } from '../src/dev/dev-port.js'
-import { writeDevRegistration } from '../src/dev/dev-registry.js'
+import { devRegistryPath, writeDevRegistration } from '../src/dev/dev-registry.js'
 import { PrebuildError, runPrebuild } from '../src/dev/prebuild.js'
+import { startPackageAppDev } from '../src/package-app-dev.js'
 import { loadPackageManifest } from '../src/package-manifest.js'
 import { StructuredCliError } from '../src/structured-error.js'
-import { waitFor, withDevServer } from './dev-server-harness.js'
+import { ensureWorkerdBinary } from '../src/workerd-binary.js'
+import { appEntry, waitFor, withDevServer } from './dev-server-harness.js'
+
+const fixtureRoot = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/sample-package')
 
 const clientEntryApp = `import { packageContext } from 'kody:runtime'
 
@@ -354,4 +359,86 @@ test('kody dev refuses to start a second server for the same package unless --po
 			},
 		)
 	})
+})
+
+test('kody dev --port leaves the primary attach registry alone', async () => {
+	await withDevServer(async ({ server, root }) => {
+		// Own the registry under a different live pid so shutdown of the
+		// second server cannot delete it via removeDevRegistration's pid check.
+		await writeDevRegistration({
+			pid: process.ppid,
+			origin: server.hostedUrl,
+			port: server.port,
+			basePath: server.appBasePath,
+			target: 'mock',
+			root,
+		})
+		const registryPath = devRegistryPath(root, 'mock')
+		const before = await readFile(registryPath, 'utf8')
+		const code = await runDevServe({
+			target: 'mock',
+			auth: { token: 'mock', apiUrl: 'https://api.kody.codes' },
+			port: 0,
+			cwd: root,
+			io: { stdout: () => {}, stderr: () => {} },
+			serveOnce: true,
+		})
+		assert.equal(code, 0)
+		assert.equal(await readFile(registryPath, 'utf8'), before)
+	})
+})
+
+test('onListening failure closes the bound HTTP server', async () => {
+	const workerdPath = await ensureWorkerdBinary()
+	const root = await mkdtemp(join(tmpdir(), 'kody-dev-onlistening-'))
+	const cache = await mkdtemp(join(tmpdir(), 'kody-dev-onlistening-cache-'))
+	const previousCache = process.env.KODY_CACHE_DIR
+	process.env.KODY_CACHE_DIR = cache
+	let boundPort: number | undefined
+	try {
+		await cp(fixtureRoot, root, { recursive: true })
+		await writeFile(join(root, 'app/entry.ts'), appEntry)
+		await writeFile(join(root, 'app/message.ts'), `export const message = 'v0'\n`)
+		const auth = await resolveDevAuth({
+			target: 'mock',
+			token: 'mock',
+			apiUrl: 'https://api.kody.codes',
+			resetStorage: true,
+			packageId: 'local:sample-dev-package',
+		})
+		try {
+			await assert.rejects(
+				startPackageAppDev({
+					manifest: await loadPackageManifest(root),
+					token: auth.token,
+					apiUrl: auth.apiUrl,
+					target: 'mock',
+					workerdPath,
+					onListening: ({ port }) => {
+						boundPort = port
+						throw new Error('registry boom')
+					},
+				}),
+				/registry boom/,
+			)
+			assert.ok(boundPort !== undefined)
+			const probe = createServer()
+			try {
+				await listenDevServer(probe, {
+					host: '127.0.0.1',
+					port: boundPort!,
+					explicit: true,
+				})
+			} finally {
+				await closeServer(probe)
+			}
+		} finally {
+			await auth.closeMock?.()
+		}
+	} finally {
+		if (previousCache === undefined) delete process.env.KODY_CACHE_DIR
+		else process.env.KODY_CACHE_DIR = previousCache
+		await rm(root, { recursive: true, force: true })
+		await rm(cache, { recursive: true, force: true })
+	}
 })

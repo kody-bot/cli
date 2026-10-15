@@ -171,7 +171,10 @@ export async function runDevServe(input: {
 			// Register as soon as the port is bound so a second `kody dev`
 			// during the first build hits `dev_already_running` instead of
 			// stealing the next free port and overwriting the registry.
+			// Explicit `--port` starts a second server on purpose — leave the
+			// primary attach registry alone so fetch keeps talking to it.
 			onListening: async ({ port, hostedUrl, appBasePath }) => {
+				if (input.port !== undefined) return
 				await writeDevRegistration({
 					pid: process.pid,
 					origin: hostedUrl,

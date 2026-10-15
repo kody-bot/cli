@@ -292,11 +292,24 @@ export async function startPackageAppDev(
 	}
 	const address = proxy.address() as AddressInfo
 	const hostedUrl = `http://${host}:${address.port}`
-	await options.onListening?.({
-		port: address.port,
-		hostedUrl,
-		appBasePath,
-	})
+	try {
+		await options.onListening?.({
+			port: address.port,
+			hostedUrl,
+			appBasePath,
+		})
+	} catch (error) {
+		// Port is bound but startPackageAppDev has not returned yet — close the
+		// listen handle now or the process stays alive after the throw.
+		process.off('exit', killAllSync)
+		reaper.close()
+		proxy.closeAllConnections()
+		await new Promise<void>((resolve) => {
+			proxy.close(() => resolve())
+		})
+		await rm(workDir, { recursive: true, force: true })
+		throw error
+	}
 	const contextFor = (client: DevClientBundle | null) =>
 		buildLocalPackageContext({
 			kodyId: options.manifest.kodyId,
