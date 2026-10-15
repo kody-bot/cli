@@ -313,9 +313,17 @@ export async function startPackageAppDev(
 		let bundle: DevBundle
 		try {
 			bundle = await bundler.build()
-			await watcher?.track([...bundle.inputs, options.manifest.packageJsonPath], {
-				ignoreChanges: files,
-			})
+			const midBuildEdits =
+				(await watcher?.track([...bundle.inputs, options.manifest.packageJsonPath], {
+					ignoreChanges: files,
+				})) ?? []
+			// Queue mid-build edits for the next loop iteration directly — do not
+			// call onChange (debounced); chokidar may already have the same paths
+			// pending and would double-schedule a rebuild after debounce.
+			if (midBuildEdits.length > 0) {
+				for (const path of midBuildEdits) changedFiles.add(path)
+				rebuildAgain = true
+			}
 			if (active && !buildFailure && bundle.code === active.code) {
 				emit({
 					type: 'rebuild_ok',
