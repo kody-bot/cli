@@ -36,12 +36,15 @@ export function createDevBundler(input: { entryPath: string; root: string }): De
 		outfile: join(input.root, '__kody_dev_bundle.js'),
 	} satisfies esbuild.BuildOptions
 	const paths = { workingDir: base.absWorkingDir, displayRoot: input.root }
+	let disposed = false
 	let context: Promise<DevBuildContext> | null = null
 
 	return {
 		build: async () => {
 			let result: esbuild.BuildResult<{ write: false; metafile: true }>
 			try {
+				// A context created after dispose would never be released and keeps Node alive.
+				if (disposed) throw new Error('kody dev bundler was already disposed.')
 				context ??= esbuild.context(options)
 				result = await (await context).rebuild()
 			} catch (error) {
@@ -50,6 +53,7 @@ export function createDevBundler(input: { entryPath: string; root: string }): De
 			return readBundle(result, base.absWorkingDir, input.entryPath)
 		},
 		dispose: async () => {
+			disposed = true
 			const current = context
 			context = null
 			await (await current?.catch(() => null))?.dispose()

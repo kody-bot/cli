@@ -71,6 +71,20 @@ test('kody dev swaps workerd without a 503 and recovers from build errors', asyn
 	})
 })
 
+test('a save just before close never starts a rebuild after close', async () => {
+	await withDevServer(
+		async ({ server, events, writeMessage }) => {
+			await writeMessage(`export const message = 'late'\n`)
+			await sleep(120)
+			await server.close()
+			const seen = events.length
+			await sleep(500)
+			assert.deepEqual(events.slice(seen), [], 'the pending debounce must not rebuild')
+		},
+		{ debounceMs: 300 },
+	)
+})
+
 test('kody dev streams tagged console logs and source-maps runtime errors', async () => {
 	await withDevServer(async ({ server, events }) => {
 		const html = await server.fetchPath('/boom', { headers: { accept: 'text/html' } })

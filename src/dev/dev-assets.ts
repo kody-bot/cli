@@ -37,6 +37,7 @@ export function createDevClientBundler(input: {
 }): DevClientBundler {
 	const externals = input.externals ?? []
 	const workingDir = process.cwd()
+	let disposed = false
 	let context: Promise<esbuild.BuildContext<{ write: false; metafile: true }>> | null = null
 	const createContext = () =>
 		esbuild.context({
@@ -56,6 +57,8 @@ export function createDevClientBundler(input: {
 	return {
 		build: async () => {
 			try {
+				// A context created after dispose would never be released and keeps Node alive.
+				if (disposed) throw new Error('kody dev bundler was already disposed.')
 				context ??= createContext()
 				const result = await (await context).rebuild()
 				const code = result.outputFiles.find((file) => file.path.endsWith('.js'))?.text ?? ''
@@ -76,6 +79,7 @@ export function createDevClientBundler(input: {
 			}
 		},
 		dispose: async () => {
+			disposed = true
 			const current = context
 			context = null
 			await (await current?.catch(() => null))?.dispose()

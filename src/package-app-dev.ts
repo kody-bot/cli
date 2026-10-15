@@ -337,6 +337,7 @@ export async function startPackageAppDev(
 	delete workerdEnv[apiTokenEnvVar]
 
 	function requestBuild(paths: Iterable<string>): Promise<void> {
+		if (closed) return Promise.resolve()
 		for (const path of paths) changedFiles.add(path)
 		if (buildLoop) {
 			rebuildAgain = true
