@@ -276,7 +276,9 @@ test('kody.dev.prebuild runs before every build, without retriggering itself', a
 			assert.match(failed.body, /kody\.dev\.prebuild failed \(exit 3\): sh gen\.sh/)
 			assert.match(failed.body, /boom from prebuild/)
 			const rebuildStartsAfterFailure = events.filter((event) => event.type === 'rebuild_start').length
-			await new Promise((resolve) => setTimeout(resolve, 1200))
+			// Longer than failedPrebuildAbsorbMs so late chokidar/poll echoes are
+			// covered on slow CI (lts/* runners have shown +1 rebuild_start at ~1s).
+			await new Promise((resolve) => setTimeout(resolve, 2000))
 			assert.equal(
 				events.filter((event) => event.type === 'rebuild_start').length,
 				rebuildStartsAfterFailure,

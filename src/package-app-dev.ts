@@ -201,6 +201,12 @@ type BuildFailure = {
 const defaultDebounceMs = 30
 /** Watcher events this soon after a prebuild finishes are its own writes, not edits. */
 const prebuildSettleMs = 150
+/**
+ * After a *failed* prebuild, ignore watcher events this long. Chokidar/poll
+ * echoes of partial output can arrive well after {@link prebuildSettleMs} on
+ * slower CI and would otherwise restart the rebuild loop.
+ */
+const failedPrebuildAbsorbMs = 1500
 /** Longest a request waits for an in-progress rebuild before the old build answers. */
 const rebuildGateMs = 10_000
 /** Longest a retired generation may keep draining in-flight requests. */
@@ -378,6 +384,8 @@ export async function startPackageAppDev(
 	const prebuild = options.manifest.dev?.prebuild
 	let prebuildRunning = false
 	let prebuildSettledAt = 0
+	/** `performance.now()` until which onChange ignores events (failed-prebuild absorb). */
+	let ignoreWatcherUntil = 0
 	let prebuildAbort: AbortController | undefined
 	const workerdEnv: NodeJS.ProcessEnv = { ...process.env, [runSecretEnvVar]: runSecret }
 	delete workerdEnv[apiTokenEnvVar]
@@ -516,6 +524,7 @@ export async function startPackageAppDev(
 				changedFiles.clear()
 				rebuildAgain = false
 				clearWatcherPending?.()
+				ignoreWatcherUntil = performance.now() + failedPrebuildAbsorbMs
 			}
 		}
 	}
@@ -896,9 +905,11 @@ export async function startPackageAppDev(
 						ignore: options.manifest.dev?.ignore,
 						onChange: (path) => {
 							if (closed) return
+							const now = performance.now()
 							if (
 								prebuildRunning ||
-								performance.now() - prebuildSettledAt < prebuildSettleMs
+								now < ignoreWatcherUntil ||
+								now - prebuildSettledAt < prebuildSettleMs
 							) {
 								return
 							}
