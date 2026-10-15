@@ -270,6 +270,14 @@ test('kody.dev.prebuild runs before every build, without retriggering itself', a
 			}, 'prebuild failure becomes a build error')
 			assert.match(failed.body, /kody\.dev\.prebuild failed \(exit 3\): sh gen\.sh/)
 			assert.match(failed.body, /boom from prebuild/)
+			const rebuildStartsAfterFailure = events.filter((event) => event.type === 'rebuild_start').length
+			await new Promise((resolve) => setTimeout(resolve, 1200))
+			assert.equal(
+				events.filter((event) => event.type === 'rebuild_start').length,
+				rebuildStartsAfterFailure,
+				'failed prebuild output must not retrigger the rebuild loop',
+			)
+			assert.equal(server.status().state, 'build_error')
 		},
 		{
 			prepare: async (root) => {

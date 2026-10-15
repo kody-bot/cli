@@ -381,9 +381,6 @@ export async function startPackageAppDev(
 		try {
 			if (prebuild) {
 				await runPrebuildStep(prebuild)
-				// Absorb prebuild output into the baseline so track() does not
-				// treat generated inputs as mid-build edits.
-				await watcher?.rebaseline()
 			}
 			const [bundle, client] = await Promise.all([
 				bundler.build(),
@@ -474,6 +471,9 @@ export async function startPackageAppDev(
 			prebuildAbort = undefined
 			prebuildRunning = false
 			prebuildSettledAt = performance.now()
+			// Absorb writes even when prebuild fails — otherwise the 1s poll
+			// treats partial/failed output as new edits and loops rebuilds.
+			await watcher?.rebaseline()
 		}
 	}
 
