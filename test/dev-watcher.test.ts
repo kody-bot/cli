@@ -7,29 +7,6 @@ import { createDevWatcher } from '../src/dev/dev-watcher.js'
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-test('allMatchBaseline is true only while fingerprints still match', async () => {
-	const root = await mkdtemp(join(tmpdir(), 'kody-watcher-base-'))
-	try {
-		const file = join(root, 'app.ts')
-		await writeFile(file, 'export const n = 1\n')
-		const watcher = createDevWatcher({
-			root,
-			onChange: () => {},
-			pollIntervalMs: 60_000,
-		})
-		await watcher.ready
-		await watcher.track([file])
-		assert.equal(await watcher.allMatchBaseline([file]), true)
-		await writeFile(file, 'export const n = 2\n')
-		assert.equal(await watcher.allMatchBaseline([file]), false)
-		await watcher.track([file])
-		assert.equal(await watcher.allMatchBaseline([file]), true)
-		await watcher.close()
-	} finally {
-		await rm(root, { recursive: true, force: true })
-	}
-})
-
 test('track detaches the poll map so a concurrent poll cannot echo a rebuild', async () => {
 	const root = await mkdtemp(join(tmpdir(), 'kody-watcher-'))
 	const changes: Array<string> = []

@@ -316,17 +316,6 @@ export async function startPackageAppDev(
 	let buildingFiles: Set<string> | null = null
 
 	async function buildOnce(files: Array<string>): Promise<void> {
-		// Drop chokidar/poll echoes whose fingerprints still match the baseline
-		// so a single save does not emit rebuild_start → "No bundle changes".
-		if (
-			active &&
-			!buildFailure &&
-			files.length > 0 &&
-			watcher &&
-			(await watcher.allMatchBaseline(files))
-		) {
-			return
-		}
 		const started = performance.now()
 		buildingFiles = new Set(files)
 		emit({ type: 'rebuild_start', files: files.map((file) => relative(root, file) || file) })

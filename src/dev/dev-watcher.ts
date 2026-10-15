@@ -33,11 +33,6 @@ export type DevWatcher = {
 		paths: ReadonlyArray<string>,
 		options?: { ignoreChanges?: ReadonlyArray<string> },
 	) => Promise<ReadonlyArray<string>>
-	/**
-	 * True when every path is in the current baseline and still fingerprints
-	 * the same — used to drop chokidar/poll echoes that would only no-op rebuild.
-	 */
-	allMatchBaseline: (paths: ReadonlyArray<string>) => Promise<boolean>
 	close: () => Promise<void>
 }
 
@@ -151,17 +146,6 @@ export function createDevWatcher(input: {
 			tracked = next
 			trackGeneration++
 			return changedDuringBuild
-		},
-		allMatchBaseline: async (paths) => {
-			if (paths.length === 0) return false
-			const map = tracked
-			for (const path of paths) {
-				const previous = map.get(path)
-				if (previous === undefined || previous === null) return false
-				if ((await fingerprint(path)) !== previous) return false
-				if (tracked !== map) return false
-			}
-			return true
 		},
 		close: async () => {
 			clearInterval(timer)
