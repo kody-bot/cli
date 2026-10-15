@@ -33,6 +33,11 @@ export type DevWatcher = {
 		paths: ReadonlyArray<string>,
 		options?: { ignoreChanges?: ReadonlyArray<string> },
 	) => Promise<ReadonlyArray<string>>
+	/**
+	 * True when every path is in the current baseline and still fingerprints
+	 * the same — used to drop chokidar/poll echoes that would only no-op rebuild.
+	 */
+	allMatchBaseline: (paths: ReadonlyArray<string>) => Promise<boolean>
 	close: () => Promise<void>
 }
 
@@ -77,9 +82,10 @@ export function createDevWatcher(input: {
 	const poll = async () => {
 		if (polling) return
 		polling = true
-		// Hold map + generation: track() bumps generation before it finishes
-		// building the next baseline, so we abandon instead of comparing
-		// post-build fingerprints against the pre-track map and echoing onChange.
+		// Hold map + generation. track()/rebaseline() replace `tracked` with a
+		// fresh Map at the start so an in-flight poll fails `tracked !== map`
+		// immediately — otherwise it can fingerprint post-build bytes against
+		// the pre-build baseline and echo a no-op rebuild.
 		const map = tracked
 		const generation = trackGeneration
 		try {
@@ -106,8 +112,10 @@ export function createDevWatcher(input: {
 		ready,
 		rebaseline: async () => {
 			const generation = ++trackGeneration
+			const previousTracked = tracked
+			tracked = new Map()
 			const next = new Map<string, Fingerprint | null>()
-			for (const path of tracked.keys()) {
+			for (const path of previousTracked.keys()) {
 				next.set(path, await fingerprint(path))
 				if (generation !== trackGeneration) return
 			}
@@ -118,13 +126,17 @@ export function createDevWatcher(input: {
 		track: async (paths, options) => {
 			const ignoreChanges = new Set(options?.ignoreChanges ?? [])
 			const generation = ++trackGeneration
+			const previousTracked = tracked
+			// Detach before fingerprinting so concurrent polls cannot treat the
+			// just-written files as fresh edits against the pre-build baseline.
+			tracked = new Map()
 			const changedDuringBuild: Array<string> = []
 			const next = new Map<string, Fingerprint | null>()
 			for (const path of paths) {
 				if (ignored(path)) continue
 				const current = await fingerprint(path)
 				if (generation !== trackGeneration) return []
-				const previous = tracked.get(path)
+				const previous = previousTracked.get(path)
 				if (
 					previous !== undefined &&
 					previous !== null &&
@@ -137,10 +149,19 @@ export function createDevWatcher(input: {
 			}
 			if (generation !== trackGeneration) return []
 			tracked = next
-			// Invalidate any poll that snapped the post-bump generation while
-			// still iterating the pre-swap map (map-identity handles the rest).
 			trackGeneration++
 			return changedDuringBuild
+		},
+		allMatchBaseline: async (paths) => {
+			if (paths.length === 0) return false
+			const map = tracked
+			for (const path of paths) {
+				const previous = map.get(path)
+				if (previous === undefined || previous === null) return false
+				if ((await fingerprint(path)) !== previous) return false
+				if (tracked !== map) return false
+			}
+			return true
 		},
 		close: async () => {
 			clearInterval(timer)

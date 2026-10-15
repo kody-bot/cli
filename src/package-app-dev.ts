@@ -313,8 +313,22 @@ export async function startPackageAppDev(
 		return buildLoop
 	}
 
+	let buildingFiles: Set<string> | null = null
+
 	async function buildOnce(files: Array<string>): Promise<void> {
+		// Drop chokidar/poll echoes whose fingerprints still match the baseline
+		// so a single save does not emit rebuild_start → "No bundle changes".
+		if (
+			active &&
+			!buildFailure &&
+			files.length > 0 &&
+			watcher &&
+			(await watcher.allMatchBaseline(files))
+		) {
+			return
+		}
 		const started = performance.now()
+		buildingFiles = new Set(files)
 		emit({ type: 'rebuild_start', files: files.map((file) => relative(root, file) || file) })
 		let bundle: DevBundle
 		try {
@@ -369,6 +383,8 @@ export async function startPackageAppDev(
 				diagnostics: buildFailure.diagnostics,
 			})
 			liveReloadHub.broadcast({ event: 'build_error', data: buildErrorView(buildFailure) })
+		} finally {
+			buildingFiles = null
 		}
 	}
 
@@ -710,6 +726,15 @@ export async function startPackageAppDev(
 						root,
 						onChange: (path) => {
 							if (closed) return
+							// Fold mid-build chokidar echoes into the active
+							// loop. Debouncing them instead schedules a second
+							// rebuild after buildLoop clears (often a no-op).
+							if (buildLoop) {
+								if (buildingFiles?.has(path)) return
+								changedFiles.add(path)
+								rebuildAgain = true
+								return
+							}
 							pending.add(path)
 							debouncePending = true
 							if (!debounceFlush) {
