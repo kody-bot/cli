@@ -14,6 +14,7 @@ import {
 import {
 	devRegistryPath,
 	findRunningDevServer,
+	removeDevRegistration,
 	writeDevRegistration,
 	type DevServerStatus,
 } from '../src/dev/dev-registry.js'
@@ -93,7 +94,7 @@ test('kody dev --json emits NDJSON events and --ready-file is written before rea
 								string,
 								unknown
 							>
-							registeredAtReady = existsSync(devRegistryPath(root, cache))
+							registeredAtReady = existsSync(devRegistryPath(root, 'mock', cache))
 						}
 					}
 				},
@@ -114,7 +115,11 @@ test('kody dev --json emits NDJSON events and --ready-file is written before rea
 		assert.equal((readyFileAtReady as Record<string, unknown>).url, ready.url)
 		assert.equal(registeredAtReady, true)
 		assert.equal(existsSync(readyFile), false, 'ready file is removed on shutdown')
-		assert.equal(existsSync(devRegistryPath(root, cache)), false, 'registry is removed on shutdown')
+		assert.equal(
+			existsSync(devRegistryPath(root, 'mock', cache)),
+			false,
+			'registry is removed on shutdown',
+		)
 	} finally {
 		await auth.closeMock?.()
 		if (previousCache === undefined) delete process.env.KODY_CACHE_DIR
@@ -207,4 +212,65 @@ test('findRunningDevServer drops registrations whose process is gone', async () 
 	} finally {
 		await rm(cache, { recursive: true, force: true })
 	}
+})
+
+test('dev registry keys by target and removeDevRegistration refuses successor/unreadable files', async () => {
+	const cache = await mkdtemp(join(tmpdir(), 'kody-dev-registry-target-'))
+	try {
+		const mockPath = await writeDevRegistration(
+			{
+				pid: 111,
+				origin: 'http://127.0.0.1:1',
+				port: 1,
+				basePath: '',
+				target: 'mock',
+				root: '/pkg',
+			},
+			cache,
+		)
+		const prodPath = await writeDevRegistration(
+			{
+				pid: 222,
+				origin: 'http://127.0.0.1:2',
+				port: 2,
+				basePath: '',
+				target: 'prod',
+				root: '/pkg',
+			},
+			cache,
+		)
+		assert.notEqual(mockPath, prodPath)
+		assert.equal(existsSync(mockPath), true)
+		assert.equal(existsSync(prodPath), true)
+
+		await removeDevRegistration('/pkg', 999, 'mock', cache)
+		assert.equal(existsSync(mockPath), true, 'wrong pid leaves the registration alone')
+		await removeDevRegistration('/pkg', 111, 'mock', cache)
+		assert.equal(existsSync(mockPath), false, 'matching pid removes this target only')
+		assert.equal(existsSync(prodPath), true, 'other target registration survives')
+
+		await writeFile(prodPath, 'not json')
+		await removeDevRegistration('/pkg', 222, 'prod', cache)
+		assert.equal(existsSync(prodPath), true, 'unreadable successor file is not deleted')
+	} finally {
+		await rm(cache, { recursive: true, force: true })
+	}
+})
+
+test('status reports building during watcher debounce and fetch waits for the new build', async () => {
+	await withDevServer(
+		async ({ server, writeMessage }) => {
+			await writeMessage(`export const message = 'after-debounce'\n`)
+			await waitFor(async () => {
+				return server.status().state === 'building' ? true : undefined
+			}, 'building state while debounce is open')
+			const response = await server.fetchPath('/')
+			assert.equal(response.status, 200)
+			assert.match(response.body, /after-debounce/)
+			await waitFor(async () => {
+				return server.status().state === 'ready' ? true : undefined
+			}, 'ready after the debounced rebuild settles')
+		},
+		{ debounceMs: 80 },
+	)
 })

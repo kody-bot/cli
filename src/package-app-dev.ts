@@ -214,6 +214,12 @@ export async function startPackageAppDev(
 	let buildLoop: Promise<void> | null = null
 	let rebuildAgain = false
 	const changedFiles = new Set<string>()
+	/** True while the watcher debounce timer has paths waiting to rebuild. */
+	let debouncePending = false
+	/** Resolves when the current debounce window flushes into `requestBuild`. */
+	let debounceFlush: Promise<void> | null = null
+	let resolveDebounceFlush: (() => void) | null = null
+	let debounceTimer: NodeJS.Timeout | undefined
 	const liveReloadHub = createLiveReloadHub({
 		state: () => ({
 			buildId: active?.id ?? null,
@@ -461,6 +467,10 @@ export async function startPackageAppDev(
 	}
 
 	async function waitForBuild(): Promise<void> {
+		// Flush any watcher debounce first so a save → immediate fetch cannot
+		// slip through on the previous generation while the timer is still open.
+		const flush = debounceFlush
+		if (flush) await flush
 		const pending = buildLoop ?? (active || buildFailure ? null : started)
 		if (!pending) return
 		await Promise.race([
@@ -473,13 +483,14 @@ export async function startPackageAppDev(
 		const [first] = buildFailure?.diagnostics ?? []
 		return {
 			ok: buildFailure === null && active !== undefined,
-			state: buildLoop
-				? 'building'
-				: buildFailure
-					? 'build_error'
-					: active
-						? 'ready'
-						: 'starting',
+			state:
+				buildLoop || debouncePending
+					? 'building'
+					: buildFailure
+						? 'build_error'
+						: active
+							? 'ready'
+							: 'starting',
 			buildId: active?.id ?? null,
 			url: `${hostedUrl}${appBasePath || '/'}`,
 			port: address.port,
@@ -691,18 +702,31 @@ export async function startPackageAppDev(
 		options.watch === false
 			? null
 			: (() => {
-					let timer: NodeJS.Timeout | undefined
 					const pending = new Set<string>()
 					return createDevWatcher({
 						root,
 						onChange: (path) => {
 							if (closed) return
 							pending.add(path)
-							clearTimeout(timer)
-							timer = setTimeout(() => {
+							debouncePending = true
+							if (!debounceFlush) {
+								debounceFlush = new Promise<void>((resolve) => {
+									resolveDebounceFlush = resolve
+								})
+							}
+							clearTimeout(debounceTimer)
+							debounceTimer = setTimeout(() => {
 								const paths = [...pending]
 								pending.clear()
-								void requestBuild(paths)
+								debouncePending = false
+								// Start the build before releasing waiters so
+								// waitForBuild sees buildLoop, not a ready gap.
+								const build = requestBuild(paths)
+								const resolve = resolveDebounceFlush
+								resolveDebounceFlush = null
+								debounceFlush = null
+								resolve?.()
+								void build
 							}, options.debounceMs ?? defaultDebounceMs)
 						},
 					})
@@ -712,6 +736,12 @@ export async function startPackageAppDev(
 		if (closed) return
 		closed = true
 		process.off('exit', killAllSync)
+		clearTimeout(debounceTimer)
+		debouncePending = false
+		const resolve = resolveDebounceFlush
+		resolveDebounceFlush = null
+		debounceFlush = null
+		resolve?.()
 		await watcher?.close()
 		await buildLoop?.catch(() => {})
 		await bundler.dispose()

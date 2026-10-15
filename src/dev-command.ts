@@ -193,7 +193,7 @@ export async function runDevServe(input: {
 	}
 	const shutdown = async () => {
 		await server.close()
-		await removeDevRegistration(manifest.root, process.pid).catch(() => {})
+		await removeDevRegistration(manifest.root, process.pid, input.target).catch(() => {})
 		if (input.readyFile) await removeOwnedReadyFile(input.readyFile, process.pid)
 		await input.auth.closeMock?.()
 	}

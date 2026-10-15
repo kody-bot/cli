@@ -1,7 +1,8 @@
 /**
  * Where a running `kody dev` server advertises itself so `kody dev fetch` can
  * reuse it instead of booting a second workerd. One JSON file per package root
- * under the user cache dir; stale entries (dead pid, wrong package) are ignored.
+ * + target under the user cache dir; stale entries (dead pid, wrong package)
+ * are ignored.
  */
 
 import { createHash } from 'node:crypto'
@@ -54,8 +55,12 @@ export type DevServerStatus = {
 		| null
 }
 
-export function devRegistryPath(root: string, cacheDir: string = userCacheDir()): string {
-	const key = createHash('sha256').update(root).digest('hex').slice(0, 16)
+export function devRegistryPath(
+	root: string,
+	target: KodyTarget,
+	cacheDir: string = userCacheDir(),
+): string {
+	const key = createHash('sha256').update(`${root}\0${target}`).digest('hex').slice(0, 16)
 	return join(cacheDir, 'dev-servers', `${key}.json`)
 }
 
@@ -63,22 +68,31 @@ export async function writeDevRegistration(
 	registration: DevRegistration,
 	cacheDir?: string,
 ): Promise<string> {
-	const path = devRegistryPath(registration.root, cacheDir)
+	const path = devRegistryPath(registration.root, registration.target, cacheDir)
 	await mkdir(join(path, '..'), { recursive: true })
 	await writeFile(path, `${JSON.stringify(registration, null, 2)}\n`)
 	return path
 }
 
-/** Remove the entry only if it still belongs to `pid` (a newer server may own it). */
+/**
+ * Remove the entry only if it still belongs to `pid`. Missing or unreadable
+ * files are left alone — a successor may have truncated or rewritten the path
+ * before our shutdown finishes (same rule as `--ready-file` cleanup).
+ */
 export async function removeDevRegistration(
 	root: string,
 	pid: number,
+	target: KodyTarget,
 	cacheDir?: string,
 ): Promise<void> {
-	const path = devRegistryPath(root, cacheDir)
-	const current = await readRegistration(path)
-	if (current && current.pid !== pid) return
-	await rm(path, { force: true })
+	const path = devRegistryPath(root, target, cacheDir)
+	try {
+		const current = await readRegistration(path)
+		if (!current || current.pid !== pid) return
+		await rm(path, { force: true })
+	} catch {
+		// Missing or unreadable — nothing to clean up.
+	}
 }
 
 /**
@@ -92,7 +106,7 @@ export async function findRunningDevServer(input: {
 	fetchFn?: typeof fetch
 	timeoutMs?: number
 }): Promise<{ registration: DevRegistration; status: DevServerStatus } | null> {
-	const path = devRegistryPath(input.root, input.cacheDir)
+	const path = devRegistryPath(input.root, input.target, input.cacheDir)
 	const registration = await readRegistration(path)
 	if (!registration || registration.root !== input.root) return null
 	if (!isProcessAlive(registration.pid)) {
