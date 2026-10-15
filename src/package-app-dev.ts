@@ -313,7 +313,9 @@ export async function startPackageAppDev(
 		let bundle: DevBundle
 		try {
 			bundle = await bundler.build()
-			await watcher?.track([...bundle.inputs, options.manifest.packageJsonPath])
+			await watcher?.track([...bundle.inputs, options.manifest.packageJsonPath], {
+				ignoreChanges: files,
+			})
 			if (active && !buildFailure && bundle.code === active.code) {
 				emit({
 					type: 'rebuild_ok',

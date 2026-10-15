@@ -13,8 +13,18 @@ const defaultPollIntervalMs = 1000
 
 export type DevWatcher = {
 	ready: Promise<void>
-	/** Replace the set of absolute paths the stat poll keeps an eye on. */
-	track: (paths: ReadonlyArray<string>) => Promise<void>
+	/**
+	 * Replace the set of absolute paths the stat poll keeps an eye on.
+	 * Re-baselines fingerprints so post-build mtime chatter does not echo a
+	 * rebuild. Paths whose fingerprint changed since the previous baseline and
+	 * are not listed in `ignoreChanges` (the files that triggered this build)
+	 * still fire `onChange` — that is how a mid-build edit is not lost when
+	 * chokidar also missed it.
+	 */
+	track: (
+		paths: ReadonlyArray<string>,
+		options?: { ignoreChanges?: ReadonlyArray<string> },
+	) => Promise<void>
 	close: () => Promise<void>
 }
 
@@ -54,13 +64,20 @@ export function createDevWatcher(input: {
 
 	type Fingerprint = string
 	let tracked = new Map<string, Fingerprint | null>()
+	let trackGeneration = 0
 	let polling = false
 	const poll = async () => {
 		if (polling) return
 		polling = true
+		const generation = trackGeneration
 		try {
-			for (const [path, previous] of tracked) {
+			// Snapshot entries so a concurrent track() replacing `tracked` cannot
+			// pair old `previous` values with the new map (and undo the baseline).
+			const entries = [...tracked]
+			for (const [path, previous] of entries) {
+				if (generation !== trackGeneration) return
 				const next = await fingerprint(path)
+				if (generation !== trackGeneration) return
 				if (!tracked.has(path)) continue
 				if (previous !== null && next !== previous) {
 					tracked.set(path, next)
@@ -78,17 +95,33 @@ export function createDevWatcher(input: {
 
 	return {
 		ready,
-		track: async (paths) => {
-			// Re-baseline right after a build so the poll only reports later edits.
+		track: async (paths, options) => {
+			const ignoreChanges = new Set(options?.ignoreChanges ?? [])
+			const generation = ++trackGeneration
+			const changedDuringBuild: Array<string> = []
 			const next = new Map<string, Fingerprint | null>()
 			for (const path of paths) {
 				if (ignored(path)) continue
-				next.set(path, await fingerprint(path))
+				const current = await fingerprint(path)
+				if (generation !== trackGeneration) return
+				const previous = tracked.get(path)
+				if (
+					previous !== undefined &&
+					previous !== null &&
+					current !== previous &&
+					!ignoreChanges.has(path)
+				) {
+					changedDuringBuild.push(path)
+				}
+				next.set(path, current)
 			}
+			if (generation !== trackGeneration) return
 			tracked = next
+			for (const path of changedDuringBuild) input.onChange(path)
 		},
 		close: async () => {
 			clearInterval(timer)
+			trackGeneration++
 			tracked = new Map()
 			await watcher.close()
 		},
