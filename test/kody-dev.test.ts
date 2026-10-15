@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -193,6 +193,58 @@ test('kody dev job / webhook / emit / fetch against mock', async () => {
 		if (previous === undefined) delete process.env.KODY_CACHE_DIR
 		else process.env.KODY_CACHE_DIR = previous
 		await rm(cache, { recursive: true, force: true })
+	}
+})
+
+test('kody dev fetch rejects on a bundle error, prints it once, and closes the mock', async () => {
+	const root = await mkdtemp(join(tmpdir(), 'kody-dev-broken-'))
+	try {
+		await writeFile(
+			join(root, 'package.json'),
+			JSON.stringify({
+				name: '@local/broken-dev-package',
+				type: 'module',
+				kody: { id: 'broken-dev-package', app: { entry: './app/entry.ts' } },
+			}),
+		)
+		await mkdir(join(root, 'app'))
+		await writeFile(
+			join(root, 'app/entry.ts'),
+			'export default { fetch() { return new Response("x" }\n',
+		)
+		let stderr = ''
+		let stdout = ''
+		let mockClosed = 0
+		const started = Date.now()
+		await assert.rejects(
+			runDevFetch({
+				target: 'mock',
+				auth: {
+					token: 'mock',
+					apiUrl: 'http://127.0.0.1:9',
+					closeMock: async () => {
+						mockClosed += 1
+					},
+				},
+				path: '/',
+				cwd: root,
+				io: {
+					stdout: (text) => {
+						stdout += text
+					},
+					stderr: (text) => {
+						stderr += text
+					},
+				},
+			}),
+			/app\/entry\.ts:1:52/,
+		)
+		assert.ok(Date.now() - started < 10_000)
+		assert.equal(mockClosed, 1)
+		assert.equal(stdout, '')
+		assert.doesNotMatch(stderr, /entry\.ts:1:52/)
+	} finally {
+		await rm(root, { recursive: true, force: true })
 	}
 })
 

@@ -319,30 +319,37 @@ export async function runDevFetch(input: {
 	json?: boolean
 	io: DevIo
 }): Promise<number> {
-	const manifest = await loadPackageManifest(input.cwd)
-	const server = await startPackageAppDev({
-		manifest,
-		token: input.auth.token,
-		apiUrl: input.auth.apiUrl,
-		target: input.target,
-		port: input.port,
-		appBasePath: input.appBasePath,
-		...(input.auth.org ? { org: input.auth.org } : {}),
-		...(input.auth.depResolve ? { depResolve: input.auth.depResolve } : {}),
-		...(input.auth.passthroughHosts?.length
-			? { passthroughHosts: input.auth.passthroughHosts }
-			: {}),
-		allowPrivateNetwork: input.allowPrivateNetwork,
-		watch: false,
-		onStatus: (message) => input.io.stderr(`${message}\n`),
-		onError: (message) => input.io.stderr(`${message}\n`),
-		onEvent: (event) => {
-			// stdout is reserved for the fetch result; logs and errors go to stderr.
-			if (event.type === 'log' || event.type === 'runtime_error' || event.type === 'build_error') {
-				input.io.stderr(`${formatDevEvent(event).text}\n`)
-			}
-		},
-	})
+	let server: PackageAppDevServer
+	try {
+		const manifest = await loadPackageManifest(input.cwd)
+		server = await startPackageAppDev({
+			manifest,
+			token: input.auth.token,
+			apiUrl: input.auth.apiUrl,
+			target: input.target,
+			port: input.port,
+			appBasePath: input.appBasePath,
+			...(input.auth.org ? { org: input.auth.org } : {}),
+			...(input.auth.depResolve ? { depResolve: input.auth.depResolve } : {}),
+			...(input.auth.passthroughHosts?.length
+				? { passthroughHosts: input.auth.passthroughHosts }
+				: {}),
+			allowPrivateNetwork: input.allowPrivateNetwork,
+			watch: false,
+			onStatus: (message) => input.io.stderr(`${message}\n`),
+			onError: (message) => input.io.stderr(`${message}\n`),
+			onEvent: (event) => {
+				// stdout is reserved for the fetch result; logs and errors go to stderr.
+				// Without a watcher a build error rejects startup, and the CLI prints that.
+				if (event.type === 'log' || event.type === 'runtime_error') {
+					input.io.stderr(`${formatDevEvent(event).text}\n`)
+				}
+			},
+		})
+	} catch (error) {
+		await input.auth.closeMock?.()
+		throw error
+	}
 	try {
 		const result = await server.fetchPath(input.path, {
 			method: input.method,
