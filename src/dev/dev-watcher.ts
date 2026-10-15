@@ -37,15 +37,19 @@ export function createDevWatcher(input: {
 	watcher.on('all', (_event, path) => {
 		if (!ignored(path)) input.onChange(path)
 	})
+	// Init errors reject `ready` (awaited by start). Later errors are swallowed
+	// so a transient watch glitch cannot crash the process.
+	let readySettled = false
 	const ready = new Promise<void>((resolve, reject) => {
-		watcher.once('ready', () => resolve())
-		watcher.once('error', (error) => {
+		watcher.once('ready', () => {
+			readySettled = true
+			resolve()
+		})
+		watcher.on('error', (error) => {
+			if (readySettled) return
+			readySettled = true
 			reject(error instanceof Error ? error : new Error(String(error)))
 		})
-	})
-	// After ready, keep the process from crashing on transient watch errors.
-	void ready.then(() => {
-		watcher.on('error', () => {})
 	})
 
 	type Fingerprint = string
