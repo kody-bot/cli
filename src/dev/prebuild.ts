@@ -31,10 +31,12 @@ export async function runPrebuild(input: {
 	}
 	const env: NodeJS.ProcessEnv = { ...process.env, KODY_DEV: '1' }
 	delete env[apiTokenEnvVar]
+	// New process group so abort can SIGKILL the whole tree (sh + npm/node/…).
 	const child = spawn('sh', ['-c', input.command], {
 		cwd: input.cwd,
 		env,
 		stdio: ['ignore', 'pipe', 'pipe'],
+		detached: true,
 	})
 	if (child.pid) input.onSpawn?.(child.pid)
 	const tail: Array<string> = []
@@ -48,7 +50,17 @@ export async function runPrebuild(input: {
 
 	const killChild = () => {
 		if (child.exitCode !== null || child.signalCode !== null) return
-		child.kill('SIGKILL')
+		const pid = child.pid
+		if (pid === undefined) return
+		try {
+			process.kill(-pid, 'SIGKILL')
+		} catch {
+			try {
+				child.kill('SIGKILL')
+			} catch {
+				// already gone
+			}
+		}
 	}
 	if (input.signal) {
 		if (input.signal.aborted) killChild()
