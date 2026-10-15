@@ -220,21 +220,19 @@ test('process reaper kills a detached process group on pipe close', async () => 
 	// Nested sleep under detached sh — killing only the shell would leave the child.
 	const shell = spawn('sh', ['-c', 'sleep 30'], { stdio: 'ignore', detached: true })
 	assert.ok(shell.pid)
+	shell.unref()
 	const childPid = await waitFor(async () => {
 		const listed = await psList()
 		const child = listed.find((item) => item.ppid === shell.pid && /sleep/.test(item.name))
 		return child?.pid
 	}, 'detached sleep grandchild')
-	const shellExited = new Promise<void>((resolve) => shell.once('exit', () => resolve()))
 	const reaper = await startProcessReaper({ workDir })
 	reaper.trackGroup(shell.pid)
 	reaper.close()
-	await Promise.race([
-		shellExited,
-		new Promise<void>((resolve) => setTimeout(resolve, 5000).unref()),
-	])
-	assert.equal(isProcessAlive(shell.pid), false)
-	assert.equal(isProcessAlive(childPid), false)
+	await waitFor(async () => {
+		if (isProcessAlive(shell.pid!) || isProcessAlive(childPid)) return undefined
+		return true
+	}, 'detached process group death')
 	await waitFor(
 		async () => ((await readdir(tmpdir())).includes(workDir.split('/').pop()!) ? undefined : true),
 		'work dir removal',

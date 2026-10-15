@@ -29,8 +29,8 @@ while IFS= read -r line; do
 done
 for entry in $pids; do
   case "$entry" in
-    g*) kill -9 "-\${entry#g}" 2>/dev/null ;;
-    *) kill -9 "$entry" 2>/dev/null ;;
+    g*) /bin/kill -s KILL -- -\${entry#g} 2>/dev/null ;;
+    *) /bin/kill -s KILL -- \$entry 2>/dev/null ;;
   esac
 done
 rm -rf "$1"
