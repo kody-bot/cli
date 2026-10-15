@@ -3,10 +3,19 @@ import { request } from 'node:http'
 import { test } from 'node:test'
 import {
 	injectLiveReloadScript,
+	liveReloadClientSource,
 	liveReloadScriptTag,
 	shouldInjectLiveReload,
 } from '../src/dev/live-reload.js'
 import { waitFor, withDevServer } from './dev-server-harness.js'
+
+test('error overlay CSS uses adoptedStyleSheets, not a light-DOM <style> text node', () => {
+	assert.match(liveReloadClientSource, /adoptedStyleSheets/)
+	assert.match(liveReloadClientSource, /CSSStyleSheet/)
+	assert.match(liveReloadClientSource, /replaceSync/)
+	assert.doesNotMatch(liveReloadClientSource, /<style>/)
+	assert.doesNotMatch(liveReloadClientSource, /<\/style>/)
+})
 
 test('injectLiveReloadScript prefers </head>, then </body>, then appends once', () => {
 	assert.equal(

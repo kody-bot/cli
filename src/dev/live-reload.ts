@@ -111,8 +111,9 @@ function showOverlay(view) {
 	const host = document.createElement('kody-dev-overlay');
 	const root = host.attachShadow({ mode: 'open' });
 	const label = view.kind === 'build' ? 'Build error' : 'Runtime error';
-	root.innerHTML = \`
-<style>
+	// Keep CSS out of the text tree (page-text readers / textContent walkers).
+	const sheet = new CSSStyleSheet();
+	sheet.replaceSync(\`
 	.backdrop { position: fixed; inset: 0; z-index: 2147483647; background: rgba(10, 4, 7, .82); display: flex; align-items: flex-start; justify-content: center; overflow: auto; font: 14px/1.5 ui-sans-serif, system-ui, sans-serif; }
 	.panel { margin: 48px 16px; max-width: 960px; width: 100%; background: #1a1015; color: #f5e9ee; border: 1px solid #3a2530; border-radius: 10px; padding: 20px 24px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
 	.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
@@ -123,7 +124,9 @@ function showOverlay(view) {
 	.request { color: #bfa9b3; font-size: 13px; margin: 0 0 12px; }
 	pre { margin: 12px 0 0; padding: 14px; overflow: auto; background: #0e080b; border: 1px solid #3a2530; border-radius: 8px; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
 	.hint { color: #bfa9b3; font-size: 12px; margin-top: 12px; }
-</style>
+\`);
+	root.adoptedStyleSheets = [sheet];
+	root.innerHTML = \`
 <div class="backdrop" role="alertdialog" aria-modal="true" aria-labelledby="kody-dev-title">
 	<div class="panel">
 		<div class="top"><span class="label"></span><button type="button" aria-label="Dismiss">×</button></div>
