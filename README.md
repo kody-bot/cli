@@ -266,12 +266,43 @@ kody search --target mock local
   `/__kody/dev/events` (server-sent events). The page reloads after each swap
   to a new build. Build errors, and runtime errors from the page's own
   `fetch` calls, show an overlay; the page reloads on the next good build.
-  There is no HMR. Compressed HTML and `kody dev fetch` responses are left
-  untouched.
+  There is no HMR. Only requests that accept `text/html` (browser page loads)
+  get the script; compressed HTML, agent requests, and `kody dev fetch`
+  responses are left untouched.
 - **Cleanup**: Ctrl-C, `SIGTERM`, and `SIGHUP` stop workerd and remove the
   `kody-dev-*` temp dir. If the CLI is killed outright, a small reaper process
   does the same. Each start also sweeps dirs and orphaned workerd processes
   left behind by dead CLI runs, including older CLI versions.
+
+### Driving `kody dev` from an agent
+
+```bash
+kody dev --json --ready-file .kody-dev.json &   # NDJSON events on stdout
+curl -s http://127.0.0.1:<port>/__kody/dev/status
+kody dev fetch /scores                          # reuses the running server
+```
+
+- `--json` prints one JSON object per line on stdout, each with a `type` and
+  an ISO `ts`:
+  - `ready`: `url`, `port`, `basePath`, `pid`, `statusUrl`, `buildId`
+  - `rebuild_start`: `files`
+  - `rebuild_ok`: `ms`, `buildId`, `restarted`
+  - `build_error`: `file`, `line`, `col`, `message`, `diagnostics`
+  - `runtime_error`: `message`, `stack`, `request`
+  - `log`: `source`, `level`, `message`, `request`
+
+  Status lines stay on stderr.
+- `GET /__kody/dev/status` returns `{ ok, state, buildId, url, port,
+  basePath, target, package, pid, lastRebuild, lastError }`. `state` is one of
+  `starting`, `building`, `ready`, or `build_error`. `lastError` holds the
+  current build error or the most recent runtime error.
+- `--ready-file <path>` writes `{ url, port, basePath, pid, statusUrl }` once
+  the first build settles, and deletes the file on exit.
+- `kody dev fetch` attaches to a running `kody dev` for the same package and
+  `--target` (found through the user cache dir and confirmed via the status
+  endpoint) instead of booting a second workerd. The request waits for any
+  in-progress rebuild, so fetching right after a save sees the new code. Pass
+  `--no-attach` to force a one-shot server.
 
 ## Local execute
 

@@ -76,12 +76,18 @@ export function injectLiveReloadScript(html: string): string {
 	return `${html}${liveReloadScriptTag}`
 }
 
+/**
+ * Only page loads that ask for HTML (browsers send `Accept: text/html`); agent
+ * and `kody dev fetch` requests get the app's bytes untouched.
+ */
 export function shouldInjectLiveReload(input: {
 	method: string | undefined
+	accept: string | undefined
 	status: number
 	headers: Record<string, string | Array<string> | number | undefined>
 }): boolean {
 	if (input.method === 'HEAD') return false
+	if (!/\btext\/html\b/i.test(input.accept ?? '')) return false
 	if (input.status === 204 || input.status === 304 || input.status < 200) return false
 	const contentType = String(input.headers['content-type'] ?? '')
 	if (!/^\s*text\/html\b/i.test(contentType)) return false

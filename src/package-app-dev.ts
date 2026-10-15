@@ -30,6 +30,7 @@ import { apiTokenEnvVar } from './defaults.js'
 import { createDevBundler, type DevBundle } from './dev/dev-bundler.js'
 import { parseWorkerdStdoutLine, type DevEvent, type DevRequestTag } from './dev/dev-events.js'
 import { devErrorHeader, devRequestIdHeader } from './dev/dev-protocol.js'
+import { devStatusPath, type DevServerStatus } from './dev/dev-registry.js'
 import { createDevWatcher, type DevWatcher } from './dev/dev-watcher.js'
 import { sendDevError, type DevErrorView } from './dev/error-page.js'
 import {
@@ -140,6 +141,8 @@ export type PackageAppDevServer = {
 		path: string,
 		init?: { method?: string; headers?: Record<string, string>; body?: string },
 	) => Promise<{ status: number; headers: Record<string, string>; body: string }>
+	/** Same JSON as `GET /__kody/dev/status`. */
+	status: () => DevServerStatus
 	close: () => Promise<void>
 }
 
@@ -217,6 +220,10 @@ export async function startPackageAppDev(
 			error: buildFailure ? buildErrorView(buildFailure) : null,
 		}),
 	})
+	const startedAt = new Date().toISOString()
+	let lastRebuild: DevServerStatus['lastRebuild'] = null
+	let lastRuntimeError: DevServerStatus['lastError'] = null
+	let buildFailureAt = startedAt
 	let markStarted: () => void = () => {}
 	const started = new Promise<void>((resolve) => {
 		markStarted = resolve
@@ -306,7 +313,7 @@ export async function startPackageAppDev(
 		let bundle: DevBundle
 		try {
 			bundle = await bundler.build()
-			watcher?.track([...bundle.inputs, options.manifest.packageJsonPath])
+			await watcher?.track([...bundle.inputs, options.manifest.packageJsonPath])
 			if (active && !buildFailure && bundle.code === active.code) {
 				emit({
 					type: 'rebuild_ok',
@@ -325,10 +332,13 @@ export async function startPackageAppDev(
 			active = generation
 			buildFailure = null
 			if (previous) retireGeneration(previous)
-			emit({ type: 'rebuild_ok', ms: elapsed(started), buildId: generation.id, restarted: true })
+			lastRuntimeError = null
+			lastRebuild = { ms: elapsed(started), at: new Date().toISOString() }
+			emit({ type: 'rebuild_ok', ms: lastRebuild.ms, buildId: generation.id, restarted: true })
 			liveReloadHub.broadcast({ event: 'reload', data: { buildId: generation.id } })
 		} catch (error) {
 			buildFailure = toBuildFailure(error)
+			buildFailureAt = new Date().toISOString()
 			const [first] = buildFailure.diagnostics
 			emit({
 				type: 'build_error',
@@ -449,8 +459,53 @@ export async function startPackageAppDev(
 		])
 	}
 
+	function status(): DevServerStatus {
+		const [first] = buildFailure?.diagnostics ?? []
+		return {
+			ok: buildFailure === null && active !== undefined,
+			state: buildLoop
+				? 'building'
+				: buildFailure
+					? 'build_error'
+					: active
+						? 'ready'
+						: 'starting',
+			buildId: active?.id ?? null,
+			url: `${hostedUrl}${appBasePath || '/'}`,
+			port: address.port,
+			basePath: appBasePath,
+			target: options.target,
+			package: {
+				name: options.manifest.name,
+				kodyId: options.manifest.kodyId,
+				root,
+			},
+			pid: process.pid,
+			startedAt,
+			lastRebuild,
+			lastError: buildFailure
+				? {
+						kind: 'build',
+						message: buildFailure.message,
+						file: first?.file ?? null,
+						line: first?.line ?? null,
+						col: first?.col ?? null,
+						at: buildFailureAt,
+					}
+				: lastRuntimeError,
+		}
+	}
+
 	function handleDevRoute(req: IncomingMessage, res: ServerResponse): boolean {
 		const pathname = stripMount(new URL(req.url ?? '/', hostedUrl).pathname, appBasePath)
+		if (pathname === devStatusPath) {
+			res.writeHead(200, {
+				'content-type': 'application/json; charset=utf-8',
+				'cache-control': 'no-store',
+			})
+			res.end(`${JSON.stringify(status(), null, 2)}\n`)
+			return true
+		}
 		if (!liveReload) return false
 		if (pathname === liveReloadEventsPath) {
 			liveReloadHub.handleEvents(req, res)
@@ -554,6 +609,7 @@ export async function startPackageAppDev(
 						liveReload &&
 						shouldInjectLiveReload({
 							method: req.method,
+							accept: req.headers.accept,
 							status,
 							headers: upstreamRes.headers,
 						})
@@ -603,6 +659,13 @@ export async function startPackageAppDev(
 			stack = raw
 		}
 		const mapped = redact(generation.mapStack(stack))
+		lastRuntimeError = {
+			kind: 'runtime',
+			message: redact(message),
+			stack: mapped,
+			request: tag,
+			at: new Date().toISOString(),
+		}
 		emit({ type: 'runtime_error', message: redact(message), stack: mapped, request: tag })
 		const view: DevErrorView = {
 			kind: 'runtime',
@@ -690,6 +753,7 @@ export async function startPackageAppDev(
 		appBasePath,
 		packageContext,
 		fetchPath,
+		status,
 		close,
 	}
 }

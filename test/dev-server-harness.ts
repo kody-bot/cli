@@ -10,6 +10,7 @@ import {
 	type PackageAppDevServer,
 } from '../src/package-app-dev.js'
 import { loadPackageManifest } from '../src/package-manifest.js'
+import { ensureWorkerdBinary } from '../src/workerd-binary.js'
 
 const fixtureRoot = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/sample-package')
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -37,6 +38,8 @@ export async function withDevServer(
 	}) => Promise<void>,
 	options: Partial<PackageAppDevOptions> = {},
 ): Promise<void> {
+	// Resolve workerd from the real cache before KODY_CACHE_DIR is pointed at scratch.
+	const workerdPath = await ensureWorkerdBinary()
 	const root = await mkdtemp(join(tmpdir(), 'kody-dev-server-test-'))
 	const cache = await mkdtemp(join(tmpdir(), 'kody-dev-server-cache-'))
 	const previousCache = process.env.KODY_CACHE_DIR
@@ -64,6 +67,7 @@ export async function withDevServer(
 		apiUrl: auth.apiUrl,
 		target: 'mock',
 		debounceMs: 20,
+		workerdPath,
 		onEvent: (event) => events.push(event),
 		...options,
 	})

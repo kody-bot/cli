@@ -67,8 +67,8 @@ Usage:
   kody package revoke <package> (--team <slug> | --user <username> | --grant <grant_id>) [--org <slug>] [--json]
   kody execute [--org <slug>] [--invoke <ref> | --code <esm> | --file <path>] [--params <json>] [--conversation-id <id>] [--json]
                [--credential <key=name>]… [--target prod|mock] [--token <token>] [--api-url <url>] [--local] [--allow-private-network]
-  kody dev [serve] [--org <slug>] [--target prod|mock] [--reset-storage] [--port <n>] [--app-base-path <path>] [--allow-private-network] [--no-live-reload]
-  kody dev fetch <path> [--method <verb>] [--body <file>] [--target prod|mock] [--json]
+  kody dev [serve] [--org <slug>] [--target prod|mock] [--reset-storage] [--port <n>] [--app-base-path <path>] [--allow-private-network] [--no-live-reload] [--json] [--ready-file <path>]
+  kody dev fetch <path> [--method <verb>] [--body <file>] [--target prod|mock] [--json] [--no-attach]
   kody dev job <name> [--target prod|mock] [--dry-run] [--json]
   kody dev webhook <name> --body <file.json> [--target prod|mock] [--dry-run] [--json]
   kody dev emit <event> --body <event.json> [--target prod|mock] [--dry-run] [--json]
@@ -290,6 +290,13 @@ ${orgBlock}
              console.* streams to the terminal tagged by request. HTML pages
              live-reload after each rebuild and show an error overlay
              (SSE at /__kody/dev/events; \`--no-live-reload\` disables).
+             Agents: \`--json\` streams NDJSON events (ready, rebuild_start,
+             rebuild_ok, build_error, runtime_error, log); GET
+             /__kody/dev/status returns build id + last error;
+             \`--ready-file <path>\` writes { url, port, basePath, pid } once
+             ready. \`kody dev fetch\` attaches to a running \`kody dev\` for
+             the same package and target (\`--no-attach\` boots a one-shot
+             server).
              Bundles with the same esbuild path as publish (\`local-bundle\`).
              Four surfaces: exports (\`execute --invoke ./export\` or
              \`--file\` against the local package), webhooks

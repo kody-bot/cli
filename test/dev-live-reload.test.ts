@@ -24,12 +24,18 @@ test('injectLiveReloadScript prefers </head>, then </body>, then appends once', 
 
 test('shouldInjectLiveReload only touches uncompressed HTML bodies', () => {
 	const html = { 'content-type': 'text/html; charset=utf-8' }
-	assert.equal(shouldInjectLiveReload({ method: 'GET', status: 200, headers: html }), true)
-	assert.equal(shouldInjectLiveReload({ method: 'HEAD', status: 200, headers: html }), false)
-	assert.equal(shouldInjectLiveReload({ method: 'GET', status: 304, headers: html }), false)
+	const accept = 'text/html,application/xhtml+xml,*/*;q=0.8'
+	assert.equal(shouldInjectLiveReload({ method: 'GET', accept, status: 200, headers: html }), true)
+	assert.equal(
+		shouldInjectLiveReload({ method: 'GET', accept: '*/*', status: 200, headers: html }),
+		false,
+	)
+	assert.equal(shouldInjectLiveReload({ method: 'HEAD', accept, status: 200, headers: html }), false)
+	assert.equal(shouldInjectLiveReload({ method: 'GET', accept, status: 304, headers: html }), false)
 	assert.equal(
 		shouldInjectLiveReload({
 			method: 'GET',
+			accept,
 			status: 200,
 			headers: { ...html, 'content-encoding': 'gzip' },
 		}),
@@ -38,6 +44,7 @@ test('shouldInjectLiveReload only touches uncompressed HTML bodies', () => {
 	assert.equal(
 		shouldInjectLiveReload({
 			method: 'GET',
+			accept,
 			status: 200,
 			headers: { 'content-type': 'application/json' },
 		}),
@@ -78,9 +85,11 @@ function openEventStream(url: string): {
 
 test('kody dev injects the live-reload client and pushes reload / build_error over SSE', async () => {
 	await withDevServer(async ({ server, writeMessage }) => {
-		const page = await server.fetchPath('/')
+		const page = await server.fetchPath('/', { headers: { accept: 'text/html' } })
 		assert.equal(page.status, 200)
 		assert.match(page.body, /<script type="module" src="\/__kody\/dev\/client\.js"><\/script><\/head>/)
+		const agentPage = await server.fetchPath('/')
+		assert.doesNotMatch(agentPage.body, /__kody\/dev/)
 		assert.equal(page.headers['content-length'], String(Buffer.byteLength(page.body)))
 
 		const client = await server.fetchPath('/__kody/dev/client.js')
@@ -126,7 +135,7 @@ test('kody dev injects the live-reload client and pushes reload / build_error ov
 test('liveReload: false leaves HTML untouched and serves no dev routes', async () => {
 	await withDevServer(
 		async ({ server }) => {
-			const page = await server.fetchPath('/')
+			const page = await server.fetchPath('/', { headers: { accept: 'text/html' } })
 			assert.equal(page.status, 200)
 			assert.doesNotMatch(page.body, /__kody\/dev/)
 		},

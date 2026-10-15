@@ -4,7 +4,7 @@
  * against the local package), webhooks, schedules (job once), and subscriptions.
  */
 
-import { access, readFile } from 'node:fs/promises'
+import { access, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import {
 	detectCredentialedFetchInSource,
@@ -26,6 +26,12 @@ import type { KodyTarget } from './target.js'
 import { formatToolResult } from './tool-result.js'
 import { bundleLocalUserModule } from './local-bundle.js'
 import { formatDevEvent, type DevEvent } from './dev/dev-events.js'
+import {
+	devStatusPath,
+	findRunningDevServer,
+	removeDevRegistration,
+	writeDevRegistration,
+} from './dev/dev-registry.js'
 
 export type DevIo = {
 	stdout: (text: string) => void
@@ -111,12 +117,19 @@ export async function runDevServe(input: {
 	passthroughHosts?: ReadonlyArray<string>
 	/** Inject the live-reload client into HTML responses (default true). */
 	liveReload?: boolean
+	/** NDJSON events on stdout instead of human output. */
+	json?: boolean
+	/** Write `{ url, port, basePath, pid, statusUrl }` here once the first build settles. */
+	readyFile?: string
 	cwd?: string
 	io: DevIo
 	/** Injected for tests — when set, serve returns immediately after start. */
 	serveOnce?: boolean
 }): Promise<number> {
 	const manifest = await loadPackageManifest(input.cwd)
+	const onEvent = input.json
+		? (event: DevEvent) => writeJsonEvent(input.io, event)
+		: (event: DevEvent) => writeDevEvent(input.io, event)
 	const server = await startPackageAppDev({
 		manifest,
 		token: input.auth.token,
@@ -135,25 +148,64 @@ export async function runDevServe(input: {
 		liveReload: input.liveReload ?? true,
 		onStatus: (message) => input.io.stderr(`${message}\n`),
 		onError: (message) => input.io.stderr(`${message}\n`),
-		onEvent: (event) => writeDevEvent(input.io, event),
+		onEvent,
 	})
-	input.io.stdout(
-		`kody dev listening on ${server.hostedUrl}${server.appBasePath || '/'}\n` +
-			`target: ${input.target}\n` +
-			`package: ${manifest.name} (${manifest.kodyId})\n` +
-			`Agents: kody dev fetch /path | job <name> | webhook <name> --body file.json | emit <event> --body file.json | check\n`,
-	)
-	if (input.serveOnce) {
+	const status = server.status()
+	const statusUrl = `${server.hostedUrl}${devStatusPath}`
+	const ready = {
+		url: status.url,
+		port: server.port,
+		basePath: server.appBasePath,
+		pid: process.pid,
+		statusUrl,
+	}
+	await writeDevRegistration({
+		pid: process.pid,
+		origin: server.hostedUrl,
+		port: server.port,
+		basePath: server.appBasePath,
+		target: input.target,
+		root: manifest.root,
+	}).catch(() => {})
+	if (input.readyFile) {
+		await writeFile(input.readyFile, `${JSON.stringify(ready, null, 2)}\n`)
+	}
+	if (input.json) {
+		input.io.stdout(
+			`${JSON.stringify({
+				type: 'ready',
+				ts: new Date().toISOString(),
+				...ready,
+				target: input.target,
+				package: status.package,
+				buildId: status.buildId,
+				state: status.state,
+			})}\n`,
+		)
+	} else {
+		input.io.stdout(
+			`kody dev listening on ${status.url}\n` +
+				`target: ${input.target}\n` +
+				`package: ${manifest.name} (${manifest.kodyId})\n` +
+				`status: ${statusUrl}\n` +
+				`Agents: kody dev fetch /path | job <name> | webhook <name> --body file.json | emit <event> --body file.json | check\n`,
+		)
+	}
+	const shutdown = async () => {
 		await server.close()
+		await removeDevRegistration(manifest.root, process.pid).catch(() => {})
+		if (input.readyFile) await rm(input.readyFile, { force: true }).catch(() => {})
 		await input.auth.closeMock?.()
+	}
+	if (input.serveOnce) {
+		await shutdown()
 		return 0
 	}
 	await new Promise<void>((resolveWait) => {
 		const signals: Array<NodeJS.Signals> = ['SIGINT', 'SIGTERM', 'SIGHUP']
 		const stop = async () => {
 			for (const signal of signals) process.off(signal, onSig)
-			await server.close()
-			await input.auth.closeMock?.()
+			await shutdown()
 			resolveWait()
 		}
 		const onSig = () => {
@@ -162,6 +214,54 @@ export async function runDevServe(input: {
 		for (const signal of signals) process.on(signal, onSig)
 	})
 	return 0
+}
+
+/**
+ * `kody dev fetch` against an already running `kody dev` for this package and
+ * target, if there is one. Returns null when nothing is running so the caller
+ * can boot a one-shot server.
+ */
+export async function tryAttachedDevFetch(input: {
+	target: KodyTarget
+	path: string
+	method?: string
+	body?: string
+	cwd?: string
+	json?: boolean
+	io: DevIo
+}): Promise<number | null> {
+	let root: string
+	try {
+		root = (await loadPackageManifest(input.cwd)).root
+	} catch {
+		return null
+	}
+	const running = await findRunningDevServer({ root, target: input.target })
+	if (!running) return null
+	const { registration } = running
+	const rest = input.path.startsWith('/') ? input.path : `/${input.path}`
+	const url = new URL(
+		`${registration.basePath}${rest === '/' && registration.basePath ? '' : rest}` || '/',
+		registration.origin,
+	)
+	input.io.stderr(`Attached to running kody dev (pid ${registration.pid}) at ${registration.origin}\n`)
+	const response = await fetch(url, {
+		method: input.method ?? 'GET',
+		headers: input.body ? { 'content-type': 'application/json' } : undefined,
+		body: input.body,
+	})
+	const body = await response.text()
+	const headers: Record<string, string> = {}
+	response.headers.forEach((value, key) => {
+		headers[key] = value
+	})
+	const result = { status: response.status, headers, body }
+	if (input.json) {
+		input.io.stdout(`${JSON.stringify(result, null, 2)}\n`)
+	} else {
+		input.io.stdout(`HTTP ${result.status}\n${result.body}\n`)
+	}
+	return result.status >= 400 ? 1 : 0
 }
 
 export async function runDevFetch(input: {
@@ -646,6 +746,10 @@ async function printDevDryRun(input: {
 	} finally {
 		await input.closeMock?.()
 	}
+}
+
+function writeJsonEvent(io: DevIo, event: DevEvent): void {
+	io.stdout(`${JSON.stringify({ ...event, ts: new Date().toISOString() })}\n`)
 }
 
 function writeDevEvent(io: DevIo, event: DevEvent): void {

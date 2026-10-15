@@ -142,6 +142,8 @@ function parseKnown(args: Array<string>) {
 			port: { type: 'string' },
 			'app-base-path': { type: 'string' },
 			'no-live-reload': { type: 'boolean' },
+			'ready-file': { type: 'string' },
+			'no-attach': { type: 'boolean' },
 			method: { type: 'string' },
 			body: { type: 'string' },
 			clients: { type: 'string' },
@@ -1066,6 +1068,7 @@ async function dispatch(
 				runDevJob,
 				runDevServe,
 				runDevWebhook,
+				tryAttachedDevFetch,
 			} = await import('./dev-command.js')
 			const target = resolveTarget({
 				command: 'dev',
@@ -1157,6 +1160,18 @@ async function dispatch(
 					}
 				}
 			}
+			if (subcommand === 'fetch' && parsed.values['no-attach'] !== true && rest[0]) {
+				const attached = await tryAttachedDevFetch({
+					target,
+					path: rest[0],
+					method:
+						typeof parsed.values.method === 'string' ? parsed.values.method : undefined,
+					body: bodyPath ? await readFile(bodyPath, 'utf8') : undefined,
+					json,
+					io,
+				})
+				if (attached !== null) return attached
+			}
 			const token =
 				target === 'prod'
 					? await resolveLocalExecuteBearer({
@@ -1227,6 +1242,10 @@ async function dispatch(
 							appBasePath,
 							allowPrivateNetwork,
 							liveReload: parsed.values['no-live-reload'] !== true,
+							json,
+							...(typeof parsed.values['ready-file'] === 'string'
+								? { readyFile: parsed.values['ready-file'] }
+								: {}),
 							io,
 						})
 					case 'fetch': {

@@ -14,7 +14,7 @@ const defaultPollIntervalMs = 1000
 export type DevWatcher = {
 	ready: Promise<void>
 	/** Replace the set of absolute paths the stat poll keeps an eye on. */
-	track: (paths: ReadonlyArray<string>) => void
+	track: (paths: ReadonlyArray<string>) => Promise<void>
 	close: () => Promise<void>
 }
 
@@ -78,14 +78,14 @@ export function createDevWatcher(input: {
 
 	return {
 		ready,
-		track: (paths) => {
+		track: async (paths) => {
+			// Re-baseline right after a build so the poll only reports later edits.
 			const next = new Map<string, Fingerprint | null>()
 			for (const path of paths) {
 				if (ignored(path)) continue
-				next.set(path, tracked.get(path) ?? null)
+				next.set(path, await fingerprint(path))
 			}
 			tracked = next
-			void poll()
 		},
 		close: async () => {
 			clearInterval(timer)
