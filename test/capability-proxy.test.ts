@@ -120,6 +120,7 @@ test('openCapabilityProxySession explains a refused token in one line plus a fix
 			)
 			assert.match(lines[1] ?? '', /^Fix: run `npx @kodycodes\/cli login`/)
 			assert.match(lines[1] ?? '', /cliCredentialBootstrap/)
+			assert.match(lines[1] ?? '', /auth bootstrap --code <kody_bc_…> --lifetime short/)
 			assert.match(lines[1] ?? '', /KODY_API_TOKEN/)
 			return true
 		},
