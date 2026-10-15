@@ -139,7 +139,7 @@ export function capabilityProxyForbiddenMessage(input: {
 	const reason = input.serverMessage ? `: ${input.serverMessage}` : ''
 	return (
 		`The API token is not allowed to use CapabilityProxy (${input.code ?? 'forbidden'})${reason}.\n` +
-		`Fix: run \`npx @kodycodes/cli login\` (agents on Kody MCP: \`cliCredentialBootstrap\`, then \`npx @kodycodes/cli auth bootstrap --code <kody_bc_…>\`; CI: tokenCreate with \`org:execute\`, passed via --token or ${apiTokenEnvVar}).`
+		`Fix: run \`npx @kodycodes/cli login\` (agents on Kody MCP: ${cliBootstrapInstructions()}; CI: tokenCreate with \`org:execute\`, passed via --token or ${apiTokenEnvVar}).`
 	)
 }
 
