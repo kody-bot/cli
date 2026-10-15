@@ -37,8 +37,16 @@ export function createDevWatcher(input: {
 	watcher.on('all', (_event, path) => {
 		if (!ignored(path)) input.onChange(path)
 	})
-	watcher.on('error', () => {})
-	const ready = new Promise<void>((resolve) => watcher.once('ready', () => resolve()))
+	const ready = new Promise<void>((resolve, reject) => {
+		watcher.once('ready', () => resolve())
+		watcher.once('error', (error) => {
+			reject(error instanceof Error ? error : new Error(String(error)))
+		})
+	})
+	// After ready, keep the process from crashing on transient watch errors.
+	void ready.then(() => {
+		watcher.on('error', () => {})
+	})
 
 	type Fingerprint = string
 	let tracked = new Map<string, Fingerprint | null>()

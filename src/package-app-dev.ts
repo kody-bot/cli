@@ -336,25 +336,38 @@ export async function startPackageAppDev(
 			mockFetchGateway,
 			onStatus: options.onStatus,
 		})
-		const workerd = await startWorkerd({
-			workerdPath,
-			configPath: join(dir, 'config.capnp'),
-			cwd: dir,
-			env: workerdEnv,
-			onSpawn: (pid) => reaper.track(pid),
-			onStdoutLine: (line) => emit(parseWorkerdStdoutLine(line)),
-			onStderrLine: (line) => {
-				const cleaned = cleanWorkerdStderrLine(line)
-				if (cleaned === null) return
-				emit({
-					type: 'log',
-					source: 'workerd',
-					level: 'error',
-					message: redact(cleaned),
-					request: null,
-				})
-			},
-		})
+		let trackedPid: number | undefined
+		let workerd: Awaited<ReturnType<typeof startWorkerd>>
+		try {
+			workerd = await startWorkerd({
+				workerdPath,
+				configPath: join(dir, 'config.capnp'),
+				cwd: dir,
+				env: workerdEnv,
+				onSpawn: (pid) => {
+					trackedPid = pid
+					reaper.track(pid)
+				},
+				onStdoutLine: (line) => emit(parseWorkerdStdoutLine(line)),
+				onStderrLine: (line) => {
+					const cleaned = cleanWorkerdStderrLine(line)
+					if (cleaned === null) return
+					emit({
+						type: 'log',
+						source: 'workerd',
+						level: 'error',
+						message: redact(cleaned),
+						request: null,
+					})
+				},
+			})
+		} catch (error) {
+			// onSpawn tracks before listen; a failed start never reaches the
+			// exited/untrack path, so drop the pid here before pid reuse.
+			if (trackedPid !== undefined) reaper.untrack(trackedPid)
+			await rm(dir, { recursive: true, force: true }).catch(() => {})
+			throw error
+		}
 		const generation: Generation = {
 			id,
 			dir,
@@ -437,8 +450,10 @@ export async function startPackageAppDev(
 			options.onError?.(`Dev proxy error: ${message}`)
 			if (!res.headersSent) {
 				res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+				res.end(`Dev proxy error: ${message}\n`)
+			} else if (!res.writableEnded) {
+				res.destroy()
 			}
-			res.end(`Dev proxy error: ${message}\n`)
 		}
 	}
 
