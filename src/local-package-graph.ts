@@ -35,6 +35,30 @@ export const localPackageGraphPath = 'v1/local-execute/package-graph'
 export const localPackageGraphPlatformIssueUrl =
 	'https://github.com/kentcdodds/kody/issues/2808'
 
+/**
+ * When `code` is larger than this, package-graph POSTs a tiny synthetic entry
+ * built from the already-scanned `kody:@` import list instead of the full
+ * module. Origin only needs those imports (plus the gateway-fetch shim) —
+ * shipping a 1.2–1.7 MiB TanStack / React `kody dev` worker bundle on every
+ * rebuild trips older 512k Zod caps and wastes bandwidth under live reload.
+ * Origin's inline `code` ceiling is the Open API JSON body limit (5 MiB);
+ * callers that need the full source scanned can still send it under that cap.
+ */
+export const packageGraphInlineCodePreferImportsChars = 400_000
+
+/**
+ * Tiny entry for package-graph when the full module is too large to POST.
+ * Side-effect imports only — enough for origin's static scanner.
+ */
+export function synthesizePackageGraphEntry(imports: ReadonlyArray<string>): string {
+	const unique = [...new Set(imports)].sort((left, right) => left.localeCompare(right))
+	if (unique.length === 0) {
+		return 'export default async function main() {}\n'
+	}
+	const lines = unique.map((specifier) => `import ${JSON.stringify(specifier)}`)
+	return `${lines.join('\n')}\nexport default async function main() {}\n`
+}
+
 export type LocalPackageModule = {
 	/** Exact workerd / Worker Loader module name (often a `kody:@…` specifier). */
 	name: string
@@ -321,6 +345,14 @@ export async function fetchLocalPackageGraph(
 	const url = capabilityProxyUrl(input.apiUrl, localPackageGraphPath)
 	if (input.org) url.searchParams.set('org', input.org)
 	const fetchFn = input.fetchFn ?? fetch
+	// Large bundles (kody dev worker apps): only the kody:@ import list matters
+	// for stamped-module download. Keep a small synthetic `code` so older
+	// origins that still require the field keep working; new origins also
+	// accept imports-only.
+	const requestCode =
+		input.code.length > packageGraphInlineCodePreferImportsChars
+			? synthesizePackageGraphEntry(required)
+			: input.code
 	let response: Response
 	try {
 		response = await fetchFn(url, {
@@ -333,7 +365,7 @@ export async function fetchLocalPackageGraph(
 				'user-agent': `${cliName}/${readPackageVersion()}`,
 			},
 			body: JSON.stringify({
-				code: input.code,
+				code: requestCode,
 				imports: required,
 				...(input.conversationId !== undefined
 					? { conversationId: input.conversationId }
