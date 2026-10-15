@@ -145,29 +145,6 @@ export async function runDevServe(input: {
 	const onEvent = input.json
 		? (event: DevEvent) => writeJsonEvent(input.io, event)
 		: (event: DevEvent) => writeDevEvent(input.io, event)
-<<<<<<< HEAD
-	const server = await startPackageAppDev({
-		manifest,
-		token: input.auth.token,
-		apiUrl: input.auth.apiUrl,
-		target: input.target,
-		port: input.port,
-		defaultPort: defaultDevPort(manifest.kodyId),
-		appBasePath: input.appBasePath,
-		...(input.auth.org ? { org: input.auth.org } : {}),
-		...(input.auth.depResolve ? { depResolve: input.auth.depResolve } : {}),
-		...(input.passthroughHosts?.length
-			? { passthroughHosts: input.passthroughHosts }
-			: input.auth.passthroughHosts?.length
-				? { passthroughHosts: input.auth.passthroughHosts }
-				: {}),
-		allowPrivateNetwork: input.allowPrivateNetwork,
-		liveReload: input.liveReload ?? true,
-		onStatus: (message) => input.io.stderr(`${message}\n`),
-		onError: (message) => input.io.stderr(`${message}\n`),
-		onEvent,
-	})
-=======
 	let registered = false
 	let server: Awaited<ReturnType<typeof startPackageAppDev>>
 	try {
@@ -210,42 +187,9 @@ export async function runDevServe(input: {
 		if (registered) {
 			await removeDevRegistration(manifest.root, process.pid, input.target).catch(() => {})
 		}
+		await input.auth.closeMock?.()
 		throw error
 	}
-	const status = server.status()
-	const statusUrl = `${server.hostedUrl}${devStatusPath}`
-	const ready = {
-		url: status.url,
-		port: server.port,
-		basePath: server.appBasePath,
-		pid: process.pid,
-		statusUrl,
-	}
-	if (input.readyFile) {
-		await writeFile(input.readyFile, `${JSON.stringify(ready, null, 2)}\n`)
-	}
-	if (input.json) {
-		input.io.stdout(
-			`${JSON.stringify({
-				type: 'ready',
-				ts: new Date().toISOString(),
-				...ready,
-				target: input.target,
-				package: status.package,
-				buildId: status.buildId,
-				state: status.state,
-			})}\n`,
-		)
-	} else {
-		input.io.stdout(
-			`kody dev listening on ${status.url}\n` +
-				`target: ${input.target}\n` +
-				`package: ${manifest.name} (${manifest.kodyId})\n` +
-				`status: ${statusUrl}\n` +
-				`Agents: kody dev fetch /path | job <name> | webhook <name> --body file.json | emit <event> --body file.json | check\n`,
-		)
-	}
->>>>>>> 783cf33 (fix(dev): register the attach server as soon as the port binds)
 	const shutdown = async () => {
 		await server.close()
 		await removeDevRegistration(manifest.root, process.pid, input.target).catch(() => {})
@@ -262,14 +206,6 @@ export async function runDevServe(input: {
 			pid: process.pid,
 			statusUrl,
 		}
-		await writeDevRegistration({
-			pid: process.pid,
-			origin: server.hostedUrl,
-			port: server.port,
-			basePath: server.appBasePath,
-			target: input.target,
-			root: manifest.root,
-		}).catch(() => {})
 		if (input.readyFile) {
 			await mkdir(dirname(input.readyFile), { recursive: true })
 			await writeFile(input.readyFile, `${JSON.stringify(ready, null, 2)}\n`)
@@ -296,7 +232,7 @@ export async function runDevServe(input: {
 			)
 		}
 	} catch (error) {
-		// Ready-file / registration failures must not leave the listen handles up.
+		// Ready-file failures must not leave the listen handles up.
 		await shutdown().catch(() => {})
 		throw error
 	}
