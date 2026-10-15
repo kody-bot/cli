@@ -128,6 +128,21 @@ export function apiTokenMintInstructions(): string {
 	return `For CI/headless only: mint with the Kody MCP \`api\` tool \`tokenCreate\` (include \`org:execute\` plus the capability scopes this command needs, e.g. \`package:execute\` / \`integration:read\`) and pass --token or set ${apiTokenEnvVar}.`
 }
 
+/**
+ * CapabilityProxy refused the token outright (not a missing scope): one line
+ * saying so, then one line with the command that fixes it.
+ */
+export function capabilityProxyForbiddenMessage(input: {
+	code: string | null
+	serverMessage?: string | null
+}): string {
+	const reason = input.serverMessage ? `: ${input.serverMessage}` : ''
+	return (
+		`The API token is not allowed to use CapabilityProxy (${input.code ?? 'forbidden'})${reason}.\n` +
+		`Fix: run \`npx @kodycodes/cli login\` (agents on Kody MCP: \`cliCredentialBootstrap\`, then \`npx @kodycodes/cli auth bootstrap --code <kody_bc_…>\`; CI: tokenCreate with \`org:execute\`, passed via --token or ${apiTokenEnvVar}).`
+	)
+}
+
 /** Preferred interactive path for agents already on Kody MCP (ADR 0056). */
 export function cliBootstrapInstructions(
 	lifetime: CliTokenLifetimeAlias = 'short',

@@ -105,6 +105,27 @@ test('openCapabilityProxySession names the local-execute flag when it is off', a
 	)
 })
 
+test('openCapabilityProxySession explains a refused token in one line plus a fix command', async () => {
+	const { fetchFn } = respondWith(403, {
+		error: { code: 'forbidden', message: 'token cannot execute' },
+	})
+	await assert.rejects(
+		() => openCapabilityProxySession({ apiUrl: 'https://api.kody.codes', token, fetchFn }),
+		(error: Error) => {
+			const lines = error.message.split('\n')
+			assert.equal(lines.length, 2)
+			assert.equal(
+				lines[0],
+				'The API token is not allowed to use CapabilityProxy (forbidden): token cannot execute.',
+			)
+			assert.match(lines[1] ?? '', /^Fix: run `npx @kodycodes\/cli login`/)
+			assert.match(lines[1] ?? '', /cliCredentialBootstrap/)
+			assert.match(lines[1] ?? '', /KODY_API_TOKEN/)
+			return true
+		},
+	)
+})
+
 test('openCapabilityProxySession names insufficient_scope and the required scope', async () => {
 	const { fetchFn } = respondWith(403, {
 		error: {

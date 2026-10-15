@@ -317,7 +317,7 @@ export default {
 	async fetch(request, env) {
 		const secret = env.${runSecretEnvVar};
 		if (__kodyClaimed || !secret || request.headers.get(__kodyRunSecretHeader) !== secret) {
-			return new Response('Forbidden', { status: 403 });
+			return new Response('Forbidden: missing run secret, or this one-shot run was already claimed. Only the kody process that started this workerd may call it.', { status: 403 });
 		}
 		__kodyClaimed = true;
 		const { params } = await request.json();
@@ -457,7 +457,10 @@ export default {
 	async fetch(request, env) {
 		const secret = env.${runSecretEnvVar};
 		if (!secret || request.headers.get(__kodyRunSecretHeader) !== secret) {
-			return new Response('Forbidden', { status: 403 });
+			return new Response(
+				'Forbidden: missing dev run secret. Open the URL kody dev printed; this internal workerd port only answers its proxy.',
+				{ status: 403, headers: { 'content-type': 'text/plain; charset=utf-8' } },
+			);
 		}
 		__kodyInstallLocalBridge({
 			call: async (path, args) => {

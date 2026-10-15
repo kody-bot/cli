@@ -2,8 +2,7 @@ import type { Agent as HttpAgent, IncomingMessage, request as httpRequest } from
 import type { Socket } from 'node:net'
 import { Readable } from 'node:stream'
 import {
-	apiTokenMintInstructions,
-	cliBootstrapInstructions,
+	capabilityProxyForbiddenMessage,
 	currentStoredTokenLifetimeAlias,
 	featureDisabledMessage,
 	insufficientScopeMessage,
@@ -678,7 +677,7 @@ function describeFailure(
 	}
 	if (status === 403 && stage === 'session') {
 		return new CapabilityProxyError(
-			`The API token is not allowed to use CapabilityProxy${code ? ` (${code})` : ''}. ${cliBootstrapInstructions()} (lifetime short|long). ${apiTokenMintInstructions()}${detail}`,
+			capabilityProxyForbiddenMessage({ code, serverMessage: failure?.message }),
 			{ status, code },
 		)
 	}

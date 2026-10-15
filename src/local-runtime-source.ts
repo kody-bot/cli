@@ -445,7 +445,7 @@ export default {
 	async fetch(request, env) {
 		const secret = env.${runSecretEnvVar};
 		if (__kodyClaimed || !secret || request.headers.get(__kodyRunSecretHeader) !== secret) {
-			return new Response('Forbidden', { status: 403 });
+			return new Response('Forbidden: missing run secret, or this one-shot run was already claimed. Only the kody process that started this workerd may call it.', { status: 403 });
 		}
 		__kodyClaimed = true;
 		const { params } = await request.json();

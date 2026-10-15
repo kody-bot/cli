@@ -71,7 +71,10 @@ export async function startLocalRuntimeBridge(
 			)
 		}
 		if (request.headers[runSecretHeader] !== input.runSecret) {
-			replyJson(403, { error: 'Forbidden' })
+			replyJson(403, {
+				error:
+					'Forbidden: missing run secret. Only the workerd started by this kody process may call its bridge.',
+			})
 			return
 		}
 		if (request.method === 'POST' && request.url === localBridgeCallPath) {
@@ -108,7 +111,9 @@ export async function startLocalRuntimeBridge(
 			}
 			return
 		}
-		replyJson(403, { error: 'Forbidden' })
+		replyJson(404, {
+			error: 'Not found: the kody bridge only accepts POST /call and POST /gateway-fetch.',
+		})
 	})
 	await new Promise<void>((resolve, reject) => {
 		server.once('error', reject)

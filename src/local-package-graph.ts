@@ -6,8 +6,7 @@ import {
 } from './capability-proxy.js'
 import { localWorkerModuleNames } from './local-runtime-source.js'
 import {
-	apiTokenMintInstructions,
-	cliBootstrapInstructions,
+	capabilityProxyForbiddenMessage,
 	currentStoredTokenLifetimeAlias,
 	featureDisabledMessage,
 	insufficientScopeMessage,
@@ -478,7 +477,7 @@ function describePackageGraphFailure(
 	}
 	if (status === 403) {
 		return new LocalPackageGraphError(
-			`The API token is not allowed to use CapabilityProxy${code ? ` (${code})` : ''}. ${cliBootstrapInstructions()} (lifetime short|long). ${apiTokenMintInstructions()}${detail}`,
+			capabilityProxyForbiddenMessage({ code, serverMessage: failure?.message }),
 			{ status, code },
 		)
 	}
