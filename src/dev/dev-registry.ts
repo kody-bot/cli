@@ -110,7 +110,12 @@ export async function findRunningDevServer(input: {
 	const registration = await readRegistration(path)
 	if (!registration || registration.root !== input.root) return null
 	if (!isProcessAlive(registration.pid)) {
-		await rm(path, { force: true })
+		// Re-read before deleting: a successor may have rewritten the same path
+		// after we snapped `registration` but before we noticed the pid was dead.
+		const current = await readRegistration(path)
+		if (current && current.pid === registration.pid) {
+			await rm(path, { force: true })
+		}
 		return null
 	}
 	if (registration.target !== input.target) return null

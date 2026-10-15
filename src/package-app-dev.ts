@@ -331,9 +331,12 @@ export async function startPackageAppDev(
 				rebuildAgain = true
 			}
 			if (active && !buildFailure && bundle.code === active.code) {
+				// Still stamp lastRebuild so agents polling lastRebuild.at see
+				// the no-op rebuild finish (status already flipped building→ready).
+				lastRebuild = { ms: elapsed(started), at: new Date().toISOString() }
 				emit({
 					type: 'rebuild_ok',
-					ms: elapsed(started),
+					ms: lastRebuild.ms,
 					buildId: active.id,
 					restarted: false,
 				})
