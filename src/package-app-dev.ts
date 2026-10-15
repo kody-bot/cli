@@ -33,6 +33,15 @@ import { devErrorHeader, devRequestIdHeader } from './dev/dev-protocol.js'
 import { createDevWatcher, type DevWatcher } from './dev/dev-watcher.js'
 import { sendDevError, type DevErrorView } from './dev/error-page.js'
 import {
+	createLiveReloadHub,
+	injectLiveReloadScript,
+	liveReloadClientPath,
+	liveReloadClientSource,
+	liveReloadEventsPath,
+	liveReloadScriptTag,
+	shouldInjectLiveReload,
+} from './dev/live-reload.js'
+import {
 	devWorkDirPrefix,
 	startProcessReaper,
 	sweepStaleDevDirs,
@@ -110,6 +119,11 @@ export type PackageAppDevOptions = {
 	watch?: boolean
 	/** Quiet period after the last file event before rebuilding. */
 	debounceMs?: number
+	/**
+	 * Inject the live-reload client into HTML responses and serve its SSE
+	 * stream (default: on whenever `watch` is on).
+	 */
+	liveReload?: boolean
 	onStatus?: (message: string) => void
 	onError?: (message: string) => void
 	/** Rebuilds, build/runtime errors, and app logs. */
@@ -168,6 +182,10 @@ export async function startPackageAppDev(
 	const root = options.manifest.root
 	const runSecret = randomBytes(32).toString('hex')
 	const emit = (event: DevEvent) => options.onEvent?.(event)
+	const liveReload = options.liveReload ?? options.watch !== false
+	const errorPageTail = liveReload
+		? `<script>globalThis.__kodyDevErrorPage = true</script>${liveReloadScriptTag}`
+		: ''
 	void sweepStaleDevDirs().catch(() => {})
 	const workDir = await mkdtemp(join(tmpdir(), devWorkDirPrefix))
 	const reaper = await startProcessReaper({ workDir })
@@ -193,6 +211,12 @@ export async function startPackageAppDev(
 	let buildLoop: Promise<void> | null = null
 	let rebuildAgain = false
 	const changedFiles = new Set<string>()
+	const liveReloadHub = createLiveReloadHub({
+		state: () => ({
+			buildId: active?.id ?? null,
+			error: buildFailure ? buildErrorView(buildFailure) : null,
+		}),
+	})
 	let markStarted: () => void = () => {}
 	const started = new Promise<void>((resolve) => {
 		markStarted = resolve
@@ -302,6 +326,7 @@ export async function startPackageAppDev(
 			buildFailure = null
 			if (previous) retireGeneration(previous)
 			emit({ type: 'rebuild_ok', ms: elapsed(started), buildId: generation.id, restarted: true })
+			liveReloadHub.broadcast({ event: 'reload', data: { buildId: generation.id } })
 		} catch (error) {
 			buildFailure = toBuildFailure(error)
 			const [first] = buildFailure.diagnostics
@@ -314,6 +339,7 @@ export async function startPackageAppDev(
 				col: first?.col ?? null,
 				diagnostics: buildFailure.diagnostics,
 			})
+			liveReloadHub.broadcast({ event: 'build_error', data: buildErrorView(buildFailure) })
 		}
 	}
 
@@ -423,11 +449,32 @@ export async function startPackageAppDev(
 		])
 	}
 
+	function handleDevRoute(req: IncomingMessage, res: ServerResponse): boolean {
+		const pathname = stripMount(new URL(req.url ?? '/', hostedUrl).pathname, appBasePath)
+		if (!liveReload) return false
+		if (pathname === liveReloadEventsPath) {
+			liveReloadHub.handleEvents(req, res)
+			return true
+		}
+		if (pathname === liveReloadClientPath) {
+			res.writeHead(200, {
+				'content-type': 'text/javascript; charset=utf-8',
+				'cache-control': 'no-store',
+			})
+			res.end(liveReloadClientSource)
+			return true
+		}
+		return false
+	}
+
 	async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
 		try {
+			if (handleDevRoute(req, res)) return
 			await waitForBuild()
 			if (buildFailure) {
-				sendDevError(req, res, 500, buildErrorView(buildFailure))
+				sendDevError(req, res, 500, buildErrorView(buildFailure), {
+					htmlTail: errorPageTail,
+				})
 				return
 			}
 			const generation = active
@@ -503,6 +550,27 @@ export async function startPackageAppDev(
 							request: tag,
 						})
 					}
+					if (
+						liveReload &&
+						shouldInjectLiveReload({
+							method: req.method,
+							status,
+							headers: upstreamRes.headers,
+						})
+					) {
+						void readStream(upstreamRes)
+							.then((html) => {
+								const body = Buffer.from(injectLiveReloadScript(html), 'utf8')
+								const headers = { ...upstreamRes.headers }
+								delete headers['transfer-encoding']
+								headers['content-length'] = String(body.length)
+								res.writeHead(status, headers)
+								res.end(body)
+								resolve()
+							})
+							.catch(reject)
+						return
+					}
 					res.writeHead(status, upstreamRes.headers)
 					upstreamRes.pipe(res)
 					upstreamRes.on('end', () => resolve())
@@ -536,12 +604,14 @@ export async function startPackageAppDev(
 		}
 		const mapped = redact(generation.mapStack(stack))
 		emit({ type: 'runtime_error', message: redact(message), stack: mapped, request: tag })
-		sendDevError(req, res, 500, {
+		const view: DevErrorView = {
 			kind: 'runtime',
 			title: redact(message),
 			detail: mapped,
 			request: `${tag.method} ${tag.path}`,
-		})
+		}
+		liveReloadHub.broadcast({ event: 'runtime_error', data: view })
+		sendDevError(req, res, 500, view, { htmlTail: errorPageTail })
 	}
 
 	const watcher: DevWatcher | null =
@@ -575,6 +645,7 @@ export async function startPackageAppDev(
 		await Promise.all([...generations].map((generation) => stopGeneration(generation)))
 		reaper.close()
 		await bridge.close()
+		liveReloadHub.close()
 		proxy.closeAllConnections()
 		await new Promise<void>((resolve) => {
 			proxy.close(() => resolve())

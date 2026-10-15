@@ -67,7 +67,7 @@ Usage:
   kody package revoke <package> (--team <slug> | --user <username> | --grant <grant_id>) [--org <slug>] [--json]
   kody execute [--org <slug>] [--invoke <ref> | --code <esm> | --file <path>] [--params <json>] [--conversation-id <id>] [--json]
                [--credential <key=name>]… [--target prod|mock] [--token <token>] [--api-url <url>] [--local] [--allow-private-network]
-  kody dev [serve] [--org <slug>] [--target prod|mock] [--reset-storage] [--port <n>] [--app-base-path <path>] [--allow-private-network]
+  kody dev [serve] [--org <slug>] [--target prod|mock] [--reset-storage] [--port <n>] [--app-base-path <path>] [--allow-private-network] [--no-live-reload]
   kody dev fetch <path> [--method <verb>] [--body <file>] [--target prod|mock] [--json]
   kody dev job <name> [--target prod|mock] [--dry-run] [--json]
   kody dev webhook <name> --body <file.json> [--target prod|mock] [--dry-run] [--json]
@@ -287,7 +287,9 @@ ${orgBlock}
              wait; no 503 or stale bundle). Build errors (file:line:col +
              code frame) and uncaught handler errors (stack mapped to your
              .ts sources) are served as dev-only 500 pages until fixed. App
-             console.* streams to the terminal tagged by request.
+             console.* streams to the terminal tagged by request. HTML pages
+             live-reload after each rebuild and show an error overlay
+             (SSE at /__kody/dev/events; \`--no-live-reload\` disables).
              Bundles with the same esbuild path as publish (\`local-bundle\`).
              Four surfaces: exports (\`execute --invoke ./export\` or
              \`--file\` against the local package), webhooks

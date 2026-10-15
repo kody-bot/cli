@@ -225,7 +225,7 @@ wipes the mock session's scratch store. Share previews are out of scope;
 
 ```bash
 cd ./my-package
-kody dev                         # serve kody.app.entry; hot reload; --target mock
+kody dev                         # serve kody.app.entry; live reload; --target mock
 kody dev fetch /health           # agent-friendly HTTP probe
 kody dev job heartbeat           # run a declared job once (never schedules locally)
 kody dev webhook ping --body ./fixture.json
@@ -261,6 +261,13 @@ kody search --target mock local
 - **Logs**: app `console.*` output streams to the terminal tagged with the
   request, e.g. `[GET /scores #12] saved 3 rows`. `warn` and `error` go to
   stderr.
+- **Live reload** (on by default; `--no-live-reload` turns it off): HTML
+  responses get a small `<script>` that listens on
+  `/__kody/dev/events` (server-sent events). The page reloads after each swap
+  to a new build. Build errors, and runtime errors from the page's own
+  `fetch` calls, show an overlay; the page reloads on the next good build.
+  There is no HMR. Compressed HTML and `kody dev fetch` responses are left
+  untouched.
 - **Cleanup**: Ctrl-C, `SIGTERM`, and `SIGHUP` stop workerd and remove the
   `kody-dev-*` temp dir. If the CLI is killed outright, a small reaper process
   does the same. Each start also sweeps dirs and orphaned workerd processes

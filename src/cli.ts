@@ -141,6 +141,7 @@ function parseKnown(args: Array<string>) {
 			passthrough: { type: 'string' },
 			port: { type: 'string' },
 			'app-base-path': { type: 'string' },
+			'no-live-reload': { type: 'boolean' },
 			method: { type: 'string' },
 			body: { type: 'string' },
 			clients: { type: 'string' },
@@ -1225,6 +1226,7 @@ async function dispatch(
 							port,
 							appBasePath,
 							allowPrivateNetwork,
+							liveReload: parsed.values['no-live-reload'] !== true,
 							io,
 						})
 					case 'fetch': {

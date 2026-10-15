@@ -109,6 +109,8 @@ export async function runDevServe(input: {
 	appBasePath?: string
 	allowPrivateNetwork?: boolean
 	passthroughHosts?: ReadonlyArray<string>
+	/** Inject the live-reload client into HTML responses (default true). */
+	liveReload?: boolean
 	cwd?: string
 	io: DevIo
 	/** Injected for tests — when set, serve returns immediately after start. */
@@ -130,6 +132,7 @@ export async function runDevServe(input: {
 				? { passthroughHosts: input.auth.passthroughHosts }
 				: {}),
 		allowPrivateNetwork: input.allowPrivateNetwork,
+		liveReload: input.liveReload ?? true,
 		onStatus: (message) => input.io.stderr(`${message}\n`),
 		onError: (message) => input.io.stderr(`${message}\n`),
 		onEvent: (event) => writeDevEvent(input.io, event),
