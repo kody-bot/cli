@@ -337,7 +337,7 @@ export async function startPackageAppDev(
 			onStatus: options.onStatus,
 		})
 		let trackedPid: number | undefined
-		let workerd: Awaited<ReturnType<typeof startWorkerd>>
+		let workerd: WorkerdHandle
 		try {
 			workerd = await startWorkerd({
 				workerdPath,
