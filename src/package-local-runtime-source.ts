@@ -9,6 +9,7 @@ import {
 	kodyRuntimeStorageSymbolDescription,
 	localExecuteCompatibilityDate,
 	localExecuteCompatibilityFlags,
+	localGatewayFetchStreamRuntimeSource,
 	localWorkerModuleNames,
 	runSecretEnvVar,
 	runSecretHeader,
@@ -87,34 +88,10 @@ export function packageStorage() {
 	return `
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-let __kodyBridge = null;
-
-export function __kodyInstallLocalBridge(bridge) {
-	__kodyBridge = bridge;
-}
-
-function __kodyCall(path, args) {
-	if (__kodyBridge === null) {
-		throw new Error('kody:runtime is only available while a local package run is in progress.');
-	}
-	return __kodyBridge(path, args);
-}
-
-function __kodyNamespace(path) {
-	const label = '[KodyRuntime:' + path.join('.') + ']';
-	return new Proxy(function () {}, {
-		get(_target, property) {
-			if (typeof property === 'symbol' || property === 'then' || property === 'toJSON') {
-				return undefined;
-			}
-			if (property === 'toString' || property === 'inspect') return () => label;
-			return __kodyNamespace([...path, property]);
-		},
-		apply(_target, _thisArg, args) {
-			return __kodyCall(path, args);
-		},
-	});
-}
+${localGatewayFetchStreamRuntimeSource({
+	callUnavailableMessage:
+		'kody:runtime is only available while a local package run is in progress.',
+})}
 
 export const kody = __kodyNamespace(['kody']);
 
@@ -344,15 +321,26 @@ export default {
 		}
 		__kodyClaimed = true;
 		const { params } = await request.json();
-		__kodyInstallLocalBridge(async (path, args) => {
-			const response = await env.KODY_BRIDGE.fetch('http://kody-bridge/call', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json', [__kodyRunSecretHeader]: secret },
-				body: JSON.stringify({ path, args }),
-			});
-			const data = await response.json();
-			if (data.error) throw new Error(data.error);
-			return data.result;
+		__kodyInstallLocalBridge({
+			call: async (path, args) => {
+				const response = await env.KODY_BRIDGE.fetch('http://kody-bridge/call', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json', [__kodyRunSecretHeader]: secret },
+					body: JSON.stringify({ path, args }),
+				});
+				const data = await response.json();
+				if (data.error) throw new Error(data.error);
+				return data.result;
+			},
+			gatewayFetch: async (init) => {
+				const headers = new Headers(init?.headers);
+				headers.set(__kodyRunSecretHeader, secret);
+				return await env.KODY_BRIDGE.fetch('http://kody-bridge/gateway-fetch', {
+					...init,
+					method: 'POST',
+					headers,
+				});
+			},
 		});
 		const logs = [];
 		const nativeConsole = globalThis.console;
@@ -471,15 +459,26 @@ export default {
 		if (!secret || request.headers.get(__kodyRunSecretHeader) !== secret) {
 			return new Response('Forbidden', { status: 403 });
 		}
-		__kodyInstallLocalBridge(async (path, args) => {
-			const response = await env.KODY_BRIDGE.fetch('http://kody-bridge/call', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json', [__kodyRunSecretHeader]: secret },
-				body: JSON.stringify({ path, args }),
-			});
-			const data = await response.json();
-			if (data.error) throw new Error(data.error);
-			return data.result;
+		__kodyInstallLocalBridge({
+			call: async (path, args) => {
+				const response = await env.KODY_BRIDGE.fetch('http://kody-bridge/call', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json', [__kodyRunSecretHeader]: secret },
+					body: JSON.stringify({ path, args }),
+				});
+				const data = await response.json();
+				if (data.error) throw new Error(data.error);
+				return data.result;
+			},
+			gatewayFetch: async (init) => {
+				const headers = new Headers(init?.headers);
+				headers.set(__kodyRunSecretHeader, secret);
+				return await env.KODY_BRIDGE.fetch('http://kody-bridge/gateway-fetch', {
+					...init,
+					method: 'POST',
+					headers,
+				});
+			},
 		});
 		const url = new URL(request.url);
 		const tag = {

@@ -1,5 +1,6 @@
 import type { Agent as HttpAgent, IncomingMessage, request as httpRequest } from 'node:http'
 import type { Socket } from 'node:net'
+import { Readable } from 'node:stream'
 import {
 	apiTokenMintInstructions,
 	cliBootstrapInstructions,
@@ -43,6 +44,15 @@ import { readPackageVersion } from './package-info.js'
  */
 export const capabilityProxySessionPath = 'v1/capability-proxy/session'
 export const capabilityProxyCallPath = 'v1/capability-proxy/call'
+/** Streaming ambient/secret fetch hop (raw body; not JSON `/call`). */
+export const capabilityProxyGatewayFetchPath = 'v1/capability-proxy/gateway-fetch'
+
+/** Allowlisted metadata headers for {@link capabilityProxyGatewayFetchPath}. */
+export const gatewayFetchUrlHeaderName = 'X-Kody-Gateway-Url'
+export const gatewayFetchMethodHeaderName = 'X-Kody-Gateway-Method'
+export const gatewayFetchPackageIdHeaderName = 'X-Kody-Gateway-Package-Id'
+export const gatewayFetchHeadersHeaderName = 'X-Kody-Gateway-Headers'
+export const secretResolutionHeaderName = 'x-kody-secret-resolution'
 
 /**
  * Origin runs a placeholder `fetch` under a 5-minute deadline that starts only
@@ -369,6 +379,183 @@ export async function callCapabilityProxy(
 		throw new CapabilityProxyError(failure.message, { status: response.status, code: failure.code })
 	}
 	return isRecord(body) ? body.result : undefined
+}
+
+export type CapabilityProxyGatewayFetchStreamHeaders = {
+	url: string
+	method?: string
+	packageId?: string
+	/** Outbound header name → string (may include secret placeholders). */
+	headers?: Record<string, string>
+	/** Outbound `Content-Type` (set on the Open API request). */
+	contentType?: string | null
+	/** `on` | `headers-only` | `off`. */
+	secretResolution?: string | null
+}
+
+/**
+ * Streaming CapabilityProxy hop: `POST /v1/capability-proxy/gateway-fetch`.
+ * The Open API body is the outbound fetch body (no JSON/base64 wrapper).
+ * Returns the upstream `Response` (or an Open API JSON error envelope).
+ *
+ * Uses Node `http(s)` so duplex streaming works with the same 7-minute idle
+ * timeout as JSON CapabilityProxy calls (undici's global fetch caps at 300s).
+ */
+export async function callCapabilityProxyGatewayFetchStream(
+	input: CapabilityProxyClientInput & {
+		gateway: CapabilityProxyGatewayFetchStreamHeaders
+		/** Raw outbound body stream (may be empty for GET/HEAD). */
+		body: IncomingMessage | Readable | null
+		contentLength?: string | null
+	},
+): Promise<Response> {
+	assertTokenSafeApiUrl(input.apiUrl)
+	const url = withOrgQuery(
+		capabilityProxyUrl(input.apiUrl, capabilityProxyGatewayFetchPath),
+		input.org,
+	)
+	const timeoutMs = capabilityProxyHttpTimeoutMs
+	const connectTimeoutMs = capabilityProxyConnectTimeoutMs
+	const useEnvProxy = nodeUsesEnvProxy()
+	if (useEnvProxy && !nodeAgentHonorsEnvProxy()) {
+		throw new Error(
+			`Node ${process.version} cannot route CapabilityProxy requests through HTTP_PROXY / HTTPS_PROXY: env-proxy support needs Node 22.21 or 24.5 and later. Upgrade Node or unset NODE_USE_ENV_PROXY / --use-env-proxy.`,
+		)
+	}
+	const transports = await loadTransports(useEnvProxy)
+	const transport = transports[url.protocol as keyof Transports]
+	if (!transport) {
+		throw new TypeError(`Unsupported protocol for the Kody API: ${url.protocol}`)
+	}
+	const headers: Record<string, string | number | Array<string>> = {
+		accept: '*/*',
+		authorization: `Bearer ${input.token}`,
+		'user-agent': `${cliName}/${readPackageVersion()}`,
+		[gatewayFetchUrlHeaderName]: input.gateway.url,
+	}
+	if (input.gateway.method) {
+		headers[gatewayFetchMethodHeaderName] = input.gateway.method
+	}
+	if (input.gateway.packageId) {
+		headers[gatewayFetchPackageIdHeaderName] = input.gateway.packageId
+	}
+	if (input.gateway.headers && Object.keys(input.gateway.headers).length > 0) {
+		headers[gatewayFetchHeadersHeaderName] = JSON.stringify(input.gateway.headers)
+	}
+	if (input.gateway.secretResolution) {
+		headers[secretResolutionHeaderName] = input.gateway.secretResolution
+	}
+	if (input.gateway.contentType) {
+		headers['content-type'] = input.gateway.contentType
+	}
+	if (input.contentLength) {
+		headers['content-length'] = input.contentLength
+	}
+	const signal = input.signal
+	return await new Promise<Response>((resolve, reject) => {
+		const request = transport.request(
+			url,
+			{
+				agent: transport.agent,
+				method: 'POST',
+				headers,
+			},
+			(response) => {
+				clearTimeout(connectTimer)
+				resolve(nodeIncomingToWebResponse(response))
+			},
+		)
+		const connectTimer = setTimeout(() => {
+			request.destroy(
+				new Error(
+					`Kody API did not connect within ${connectTimeoutMs}ms (${url.pathname}).`,
+				),
+			)
+		}, connectTimeoutMs)
+		request.on('socket', (socket) => {
+			const clearConnectTimer = () => clearTimeout(connectTimer)
+			if (url.protocol === 'https:') {
+				if (tlsHandshakePending(socket) === false) {
+					clearConnectTimer()
+					return
+				}
+				socket.once('secureConnect', clearConnectTimer)
+				return
+			}
+			if (!socket.connecting) {
+				clearConnectTimer()
+				return
+			}
+			socket.once('connect', clearConnectTimer)
+		})
+		request.setTimeout(timeoutMs, () =>
+			request.destroy(
+				new Error(`Kody API sent nothing for ${timeoutMs}ms (${url.pathname}).`),
+			),
+		)
+		request.on('error', (error) => {
+			clearTimeout(connectTimer)
+			reject(
+				error instanceof CapabilityProxyError
+					? error
+					: new CapabilityProxyError(
+							`Could not reach the Kody API at ${url.origin} (${describeNetworkError(error)}). Check --api-url / KODY_API_URL and your network.`,
+						),
+			)
+		})
+		if (signal) {
+			const abort = () => {
+				clearTimeout(connectTimer)
+				request.destroy(abortError(signal.reason))
+			}
+			if (signal.aborted) {
+				abort()
+			} else {
+				signal.addEventListener('abort', abort, { once: true })
+				request.once('close', () => signal.removeEventListener('abort', abort))
+			}
+		}
+		if (input.body) {
+			input.body.pipe(request)
+			input.body.on('error', (error) => {
+				clearTimeout(connectTimer)
+				request.destroy(error)
+			})
+		} else {
+			request.end()
+		}
+	})
+}
+
+/** Convert a Node response into a streaming Web `Response`. */
+export function nodeIncomingToWebResponse(response: IncomingMessage): Response {
+	const headers = new Headers()
+	for (const [name, value] of Object.entries(response.headers)) {
+		if (Array.isArray(value)) {
+			for (const entry of value) headers.append(name, entry)
+		} else if (value !== undefined) {
+			headers.set(name, value)
+		}
+	}
+	const status = response.statusCode ?? 0
+	const bodyless =
+		status === 101 || status === 103 || status === 204 || status === 205 || status === 304
+	if (bodyless) {
+		response.resume()
+		return new Response(null, {
+			status,
+			statusText: response.statusMessage ?? '',
+			headers,
+		})
+	}
+	return new Response(
+		Readable.toWeb(response) as import('node:stream/web').ReadableStream,
+		{
+			status,
+			statusText: response.statusMessage ?? '',
+			headers,
+		},
+	)
 }
 
 /**

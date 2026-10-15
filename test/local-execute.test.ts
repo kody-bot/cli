@@ -72,21 +72,43 @@ let server: Server
 
 before(async () => {
 	server = createServer(async (request, response) => {
-		let raw = ''
-		for await (const chunk of request) raw += chunk
-		const body = raw ? JSON.parse(raw) : null
+		const send = (status: number, payload: unknown) => {
+			response.writeHead(status, { 'content-type': 'application/json' })
+			response.end(JSON.stringify(payload))
+		}
+		const isGatewayFetch = request.url === '/v1/capability-proxy/gateway-fetch'
+		const chunks: Array<Buffer> = []
+		for await (const chunk of request) {
+			chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+		}
+		const raw = Buffer.concat(chunks).toString('utf8')
+		const body = isGatewayFetch
+			? {
+					gatewayUrl: request.headers['x-kody-gateway-url'] ?? null,
+					gatewayMethod: request.headers['x-kody-gateway-method'] ?? null,
+					gatewayHeaders: request.headers['x-kody-gateway-headers'] ?? null,
+					contentType: request.headers['content-type'] ?? null,
+					rawBody: raw,
+				}
+			: raw
+				? JSON.parse(raw)
+				: null
 		proxyRequests.push({
 			method: request.method ?? '',
 			url: request.url ?? '',
 			authorization: request.headers.authorization ?? null,
 			body,
 		})
-		const send = (status: number, payload: unknown) => {
-			response.writeHead(status, { 'content-type': 'application/json' })
-			response.end(JSON.stringify(payload))
-		}
 		if (request.headers.authorization !== `Bearer ${goodToken}`) {
 			send(401, { error: { code: 'invalid_token', message: 'unknown token' } })
+			return
+		}
+		if (isGatewayFetch) {
+			response.writeHead(201, {
+				'content-type': 'text/plain',
+				'x-upstream': 'streamed',
+			})
+			response.end(`echo:${raw}`)
 			return
 		}
 		if (request.url === '/v1/capability-proxy/session') {
@@ -475,6 +497,85 @@ test('createLocalRuntimeModuleSource exports credential and credentials for ad h
 		/credential,\s*credentials,/s,
 	)
 })
+
+test('createLocalRuntimeModuleSource implements kody.gatewayFetchStream as a host method', () => {
+	const source = createLocalRuntimeModuleSource()
+	assert.match(source, /async function gatewayFetchStream/)
+	assert.match(source, /property === 'gatewayFetchStream'/)
+	assert.match(source, /X-Kody-Gateway-Url/)
+	assert.match(createLocalEntrySource(), /gateway-fetch/)
+})
+
+test(
+	'runLocalExecute kody.gatewayFetchStream hops POST /v1/capability-proxy/gateway-fetch and returns a Response',
+	{ timeout: 180_000 },
+	async () => {
+		reset()
+		const code = `
+import { kody } from 'kody:runtime'
+export default async function main() {
+	const response = await kody.gatewayFetchStream({
+		packageId: 'pkg-stream',
+		request: {
+			url: 'https://api.example.com/upload',
+			method: 'POST',
+			headers: {
+				authorization: 'Bearer {{secret:demoToken|scope=user}}',
+				'content-type': 'text/plain',
+			},
+			body: 'stream-body-bytes',
+		},
+	})
+	return {
+		status: response.status,
+		text: await response.text(),
+		upstream: response.headers.get('x-upstream'),
+		typeofGatewayFetchStream: typeof kody.gatewayFetchStream,
+	}
+}
+`
+		const result = await runLocalExecute({
+			code,
+			token: goodToken,
+			apiUrl,
+		})
+		assert.equal(result.isError, false, JSON.stringify(result))
+		const structured = result.structuredContent as {
+			result: {
+				status: number
+				text: string
+				upstream: string | null
+				typeofGatewayFetchStream: string
+			}
+		}
+		assert.equal(structured.result.typeofGatewayFetchStream, 'function')
+		assert.equal(structured.result.status, 201)
+		assert.equal(structured.result.text, 'echo:stream-body-bytes')
+		assert.equal(structured.result.upstream, 'streamed')
+		const hop = proxyRequests.find((entry) => entry.url === '/v1/capability-proxy/gateway-fetch')
+		assert.ok(hop)
+		assert.equal(hop?.authorization, `Bearer ${goodToken}`)
+		assert.deepEqual(hop?.body, {
+			gatewayUrl: 'https://api.example.com/upload',
+			gatewayMethod: 'POST',
+			gatewayHeaders: JSON.stringify({
+				authorization: 'Bearer {{secret:demoToken|scope=user}}',
+			}),
+			contentType: 'text/plain',
+			rawBody: 'stream-body-bytes',
+		})
+		assert.equal(
+			proxyRequests.some(
+				(entry) =>
+					entry.url === '/v1/capability-proxy/call' &&
+					(entry.body as { path?: Array<string> } | null)?.path?.join('.') ===
+						'kody.gatewayFetchStream',
+			),
+			false,
+			'gatewayFetchStream must not use the JSON /call hop',
+		)
+	},
+)
 
 test(
 	'runLocalExecute exposes credential() on kody:runtime and hops credentialClientOpen without secret values',

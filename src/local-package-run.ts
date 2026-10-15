@@ -7,13 +7,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { rmSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import {
-	createServer,
-	request as httpRequest,
-	type IncomingMessage,
-	type Server,
-} from 'node:http'
-import type { AddressInfo } from 'node:net'
+import { request as httpRequest, type IncomingMessage } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Readable } from 'node:stream'
@@ -24,11 +18,16 @@ import {
 } from './capability-proxy.js'
 import { apiTokenEnvVar } from './defaults.js'
 import { bundleLocalUserModule } from './local-bundle.js'
+import { forwardLocalGatewayFetchStream } from './local-gateway-fetch-forward.js'
 import {
 	localExecuteGatewayFetchShimModuleName,
 	resolveLocalPackageGraph,
 	writePackageModuleFiles,
 } from './local-package-graph.js'
+import {
+	startLocalRuntimeBridge,
+	type LocalRuntimeBridge,
+} from './local-runtime-bridge.js'
 import {
 	createRuntimeFlatAliasSource,
 	createWorkerdConfig,
@@ -84,7 +83,6 @@ export type LocalPackageRunInput = {
 }
 
 type SandboxResponse = { result?: unknown; error?: string; logs?: Array<string> }
-type Bridge = { port: number; close: () => Promise<void> }
 
 const workerdStartTimeoutMs = 30_000
 const workerdExitGraceMs = 1_000
@@ -111,7 +109,7 @@ export async function runLocalPackageModule(
 	const runSecret = randomBytes(32).toString('hex')
 	const workDir = await mkdtemp(join(tmpdir(), 'kody-pkg-'))
 	let child: ChildProcess | undefined
-	let bridge: Bridge | undefined
+	let bridge: LocalRuntimeBridge | undefined
 	const stopWorkerd = () => child?.kill('SIGKILL')
 	const releaseSignals = cleanupOnSignal(() => {
 		stopWorkerd()
@@ -171,9 +169,9 @@ export async function runLocalPackageModule(
 			...(input.packageRoot ? { packageRoot: input.packageRoot } : {}),
 			onStatus: input.onStatus,
 		})
-		bridge = await startBridge({
+		bridge = await startLocalRuntimeBridge({
 			runSecret,
-			forward: async (call, signal) => {
+			forwardCall: async (call, signal) => {
 				const mocked = tryHandleMockGatewayFetchCall({
 					gateway: mockFetchGateway,
 					path: call.path,
@@ -185,6 +183,15 @@ export async function runLocalPackageModule(
 					...client,
 					...call,
 					signal,
+				})
+			},
+			forwardGatewayFetchStream: async ({ request, response, signal }) => {
+				await forwardLocalGatewayFetchStream({
+					request,
+					response,
+					signal,
+					client,
+					...(mockFetchGateway ? { mockFetchGateway } : {}),
 				})
 			},
 		})
@@ -392,65 +399,6 @@ function postToWorkerd(input: {
 		request.on('error', reject)
 		request.end(input.body)
 	})
-}
-
-async function startBridge(input: {
-	runSecret: string
-	forward: (
-		call: { path: Array<string>; args: Array<unknown> },
-		signal: AbortSignal,
-	) => Promise<unknown>
-}): Promise<Bridge> {
-	const inFlight = new AbortController()
-	const server: Server = createServer(async (request, response) => {
-		const reply = (status: number, body: unknown) => {
-			response.writeHead(status, { 'content-type': 'application/json' })
-			response.end(JSON.stringify(body))
-		}
-		if (
-			request.method !== 'POST' ||
-			request.url !== '/call' ||
-			request.headers[runSecretHeader] !== input.runSecret
-		) {
-			reply(403, { error: 'Forbidden' })
-			return
-		}
-		try {
-			const call = parseBridgeCall(await readBody(request))
-			const result = await input.forward(call, inFlight.signal)
-			reply(200, { result })
-		} catch (error) {
-			reply(200, { error: redact(error instanceof Error ? error.message : String(error)) })
-		}
-	})
-	await new Promise<void>((resolve, reject) => {
-		server.once('error', reject)
-		server.listen(0, '127.0.0.1', () => resolve())
-	})
-	return {
-		port: (server.address() as AddressInfo).port,
-		close: () =>
-			new Promise<void>((resolve) => {
-				inFlight.abort()
-				server.closeAllConnections()
-				server.close(() => resolve())
-			}),
-	}
-}
-
-function parseBridgeCall(body: string): { path: Array<string>; args: Array<unknown> } {
-	const parsed = JSON.parse(body) as { path?: unknown; args?: unknown }
-	if (
-		!Array.isArray(parsed.path) ||
-		parsed.path.length === 0 ||
-		!parsed.path.every((segment) => typeof segment === 'string')
-	) {
-		throw new Error('Invalid kody:runtime call path.')
-	}
-	return {
-		path: parsed.path as Array<string>,
-		args: Array.isArray(parsed.args) ? parsed.args : [],
-	}
 }
 
 async function readBody(stream: IncomingMessage): Promise<string> {
