@@ -58,10 +58,18 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const apiUrl = `http://127.0.0.1:${server.address().port}`
 
 const executeFlags = ['execute', '--local', '--api-url', apiUrl, '--token', 'kody_at_bench']
+// Commands that need a login stop at the "not logged in" error, after loading
+// everything they would need for the real call.
+const noConfig = { XDG_CONFIG_HOME: '/nonexistent', KODY_API_TOKEN: '' }
 const scenarios = {
 	'node baseline': { command: process.execPath, args: ['-e', ''] },
 	'--version': { args: ['--version'] },
-	status: { args: ['status'], env: { XDG_CONFIG_HOME: '/nonexistent' } },
+	status: { args: ['status'], env: noConfig, exit: 1 },
+	help: { args: ['help'] },
+	whoami: { args: ['whoami'], env: noConfig, exit: 1 },
+	search: { args: ['search', 'kody'], env: noConfig, exit: 1 },
+	'git-credential get': { args: ['git-credential', 'get'], env: noConfig },
+	'dev (no app entry)': { args: ['dev'], env: noConfig, exit: 1 },
 	'execute --local empty': {
 		args: [...executeFlags, '--code', 'export default async function main() { return null }'],
 	},
@@ -110,7 +118,7 @@ for (const [name, scenario] of Object.entries(scenarios)) {
 		const started = performance.now()
 		const result = await run(command, args, env)
 		const elapsed = performance.now() - started
-		if (name !== 'status' && result.status !== 0) {
+		if (result.status !== (scenario.exit ?? 0)) {
 			throw new Error(`${name} exited ${result.status}: ${result.stderr}`)
 		}
 		samples.push(elapsed)

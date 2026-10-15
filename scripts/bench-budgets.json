@@ -1,6 +1,11 @@
 {
 	"--version": 60,
 	"status": 60,
+	"help": 60,
+	"whoami": 160,
+	"search": 160,
+	"git-credential get": 160,
+	"dev (no app entry)": 220,
 	"execute --local empty": 280,
 	"execute --local kody:@ import": 280,
 	"execute --local runtime call": 280
