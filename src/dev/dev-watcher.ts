@@ -77,18 +77,20 @@ export function createDevWatcher(input: {
 	const poll = async () => {
 		if (polling) return
 		polling = true
-		// Hold the map reference: after track() swaps `tracked`, keep writing
-		// only to this discarded map and never fire onChange against the new baseline.
+		// Hold map + generation: track() bumps generation before it finishes
+		// building the next baseline, so we abandon instead of comparing
+		// post-build fingerprints against the pre-track map and echoing onChange.
 		const map = tracked
+		const generation = trackGeneration
 		try {
 			for (const [path, previous] of [...map]) {
-				if (tracked !== map) return
+				if (tracked !== map || generation !== trackGeneration) return
 				const next = await fingerprint(path)
-				if (tracked !== map) return
+				if (tracked !== map || generation !== trackGeneration) return
 				if (!map.has(path)) continue
 				if (previous !== null && next !== previous) {
 					map.set(path, next)
-					if (tracked === map) input.onChange(path)
+					if (tracked === map && generation === trackGeneration) input.onChange(path)
 				} else if (previous === null) {
 					map.set(path, next)
 				}

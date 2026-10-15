@@ -4,8 +4,8 @@
  * against the local package), webhooks, schedules (job once), and subscriptions.
  */
 
-import { access, readFile, rm, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import {
 	detectCredentialedFetchInSource,
 	mocksSuggestionDetail,
@@ -150,52 +150,59 @@ export async function runDevServe(input: {
 		onError: (message) => input.io.stderr(`${message}\n`),
 		onEvent,
 	})
-	const status = server.status()
-	const statusUrl = `${server.hostedUrl}${devStatusPath}`
-	const ready = {
-		url: status.url,
-		port: server.port,
-		basePath: server.appBasePath,
-		pid: process.pid,
-		statusUrl,
-	}
-	await writeDevRegistration({
-		pid: process.pid,
-		origin: server.hostedUrl,
-		port: server.port,
-		basePath: server.appBasePath,
-		target: input.target,
-		root: manifest.root,
-	}).catch(() => {})
-	if (input.readyFile) {
-		await writeFile(input.readyFile, `${JSON.stringify(ready, null, 2)}\n`)
-	}
-	if (input.json) {
-		input.io.stdout(
-			`${JSON.stringify({
-				type: 'ready',
-				ts: new Date().toISOString(),
-				...ready,
-				target: input.target,
-				package: status.package,
-				buildId: status.buildId,
-				state: status.state,
-			})}\n`,
-		)
-	} else {
-		input.io.stdout(
-			`kody dev listening on ${status.url}\n` +
-				`target: ${input.target}\n` +
-				`package: ${manifest.name} (${manifest.kodyId})\n` +
-				`status: ${statusUrl}\n` +
-				`Agents: kody dev fetch /path | job <name> | webhook <name> --body file.json | emit <event> --body file.json | check\n`,
-		)
-	}
 	const shutdown = async () => {
 		await server.close()
 		await removeDevRegistration(manifest.root, process.pid, input.target).catch(() => {})
 		if (input.readyFile) await removeOwnedReadyFile(input.readyFile, process.pid)
 		await input.auth.closeMock?.()
+	}
+	try {
+		const status = server.status()
+		const statusUrl = `${server.hostedUrl}${devStatusPath}`
+		const ready = {
+			url: status.url,
+			port: server.port,
+			basePath: server.appBasePath,
+			pid: process.pid,
+			statusUrl,
+		}
+		await writeDevRegistration({
+			pid: process.pid,
+			origin: server.hostedUrl,
+			port: server.port,
+			basePath: server.appBasePath,
+			target: input.target,
+			root: manifest.root,
+		}).catch(() => {})
+		if (input.readyFile) {
+			await mkdir(dirname(input.readyFile), { recursive: true })
+			await writeFile(input.readyFile, `${JSON.stringify(ready, null, 2)}\n`)
+		}
+		if (input.json) {
+			input.io.stdout(
+				`${JSON.stringify({
+					type: 'ready',
+					ts: new Date().toISOString(),
+					...ready,
+					target: input.target,
+					package: status.package,
+					buildId: status.buildId,
+					state: status.state,
+				})}\n`,
+			)
+		} else {
+			input.io.stdout(
+				`kody dev listening on ${status.url}\n` +
+					`target: ${input.target}\n` +
+					`package: ${manifest.name} (${manifest.kodyId})\n` +
+					`status: ${statusUrl}\n` +
+					`Agents: kody dev fetch /path | job <name> | webhook <name> --body file.json | emit <event> --body file.json | check\n`,
+			)
+		}
+	} catch (error) {
+		// Ready-file / registration failures must not leave the listen handles up.
+		await shutdown().catch(() => {})
+		throw error
 	}
 	if (input.serveOnce) {
 		await shutdown()
