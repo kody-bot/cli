@@ -448,9 +448,12 @@ export async function startPackageAppDev(
 		}
 	}
 
+	let clearWatcherPending: (() => void) | null = null
+
 	async function runPrebuildStep(command: string): Promise<void> {
 		prebuildRunning = true
 		prebuildAbort = new AbortController()
+		let failed = false
 		try {
 			await runPrebuild({
 				command,
@@ -467,6 +470,9 @@ export async function startPackageAppDev(
 						request: null,
 					}),
 			})
+		} catch (error) {
+			failed = true
+			throw error
 		} finally {
 			prebuildAbort = undefined
 			prebuildRunning = false
@@ -474,6 +480,13 @@ export async function startPackageAppDev(
 			// Absorb writes even when prebuild fails — otherwise the 1s poll
 			// treats partial/failed output as new edits and loops rebuilds.
 			await watcher?.rebaseline()
+			if (failed) {
+				// Drop chokidar echoes of the failed prebuild / trigger burst so
+				// they cannot restart the loop after buildLoop clears.
+				changedFiles.clear()
+				rebuildAgain = false
+				clearWatcherPending?.()
+			}
 		}
 	}
 
@@ -831,6 +844,15 @@ export async function startPackageAppDev(
 			? null
 			: (() => {
 					const pending = new Set<string>()
+					clearWatcherPending = () => {
+						pending.clear()
+						clearTimeout(debounceTimer)
+						debouncePending = false
+						const resolve = resolveDebounceFlush
+						resolveDebounceFlush = null
+						debounceFlush = null
+						resolve?.()
+					}
 					return createDevWatcher({
 						root,
 						ignore: options.manifest.dev?.ignore,
