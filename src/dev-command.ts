@@ -194,7 +194,7 @@ export async function runDevServe(input: {
 	const shutdown = async () => {
 		await server.close()
 		await removeDevRegistration(manifest.root, process.pid).catch(() => {})
-		if (input.readyFile) await rm(input.readyFile, { force: true }).catch(() => {})
+		if (input.readyFile) await removeOwnedReadyFile(input.readyFile, process.pid)
 		await input.auth.closeMock?.()
 	}
 	if (input.serveOnce) {
@@ -778,6 +778,20 @@ export function parseDevSubcommand(positionals: Array<string>): {
 			throw new Error(
 				`Unknown kody dev subcommand ${JSON.stringify(raw)}. Use serve | fetch | job | webhook | emit | check.`,
 			)
+	}
+}
+
+/**
+ * Remove `--ready-file` only when it still names this process. A successor
+ * `kody dev` may have rewritten the same path before our shutdown finishes.
+ */
+export async function removeOwnedReadyFile(path: string, ownerPid: number): Promise<void> {
+	try {
+		const parsed = JSON.parse(await readFile(path, 'utf8')) as { pid?: unknown }
+		if (parsed.pid !== ownerPid) return
+		await rm(path, { force: true })
+	} catch {
+		// Missing or unreadable — nothing to clean up.
 	}
 }
 

@@ -5,7 +5,12 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { resolveDevAuth, runDevServe, tryAttachedDevFetch } from '../src/dev-command.js'
+import {
+	removeOwnedReadyFile,
+	resolveDevAuth,
+	runDevServe,
+	tryAttachedDevFetch,
+} from '../src/dev-command.js'
 import {
 	devRegistryPath,
 	findRunningDevServer,
@@ -118,6 +123,21 @@ test('kody dev --json emits NDJSON events and --ready-file is written before rea
 		else process.env.KODY_WORKERD_PATH = previousWorkerd
 		await rm(root, { recursive: true, force: true })
 		await rm(cache, { recursive: true, force: true })
+	}
+})
+
+test('removeOwnedReadyFile only deletes the ready file when the pid still matches', async () => {
+	const dir = await mkdtemp(join(tmpdir(), 'kody-ready-file-'))
+	try {
+		const path = join(dir, 'ready.json')
+		await writeFile(path, `${JSON.stringify({ url: 'http://127.0.0.1:1/', pid: 111 }, null, 2)}\n`)
+		await removeOwnedReadyFile(path, 222)
+		assert.equal(existsSync(path), true, 'leaves a successor process ready file alone')
+		await removeOwnedReadyFile(path, 111)
+		assert.equal(existsSync(path), false, 'removes the file this process wrote')
+		await removeOwnedReadyFile(path, 111)
+	} finally {
+		await rm(dir, { recursive: true, force: true })
 	}
 })
 
