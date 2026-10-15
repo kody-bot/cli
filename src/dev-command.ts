@@ -348,6 +348,12 @@ export async function runDevFetch(input: {
 		})
 	} catch (error) {
 		await input.auth.closeMock?.()
+		if (input.json) {
+			const message = error instanceof Error ? error.message : String(error)
+			input.io.stdout(
+				`${JSON.stringify({ type: 'build_error', message, ts: new Date().toISOString() }, null, 2)}\n`,
+			)
+		}
 		throw error
 	}
 	try {

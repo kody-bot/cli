@@ -248,6 +248,52 @@ test('kody dev fetch rejects on a bundle error, prints it once, and closes the m
 	}
 })
 
+test('kody dev fetch --json writes a build_error object to stdout on bundle failure', async () => {
+	const root = await mkdtemp(join(tmpdir(), 'kody-dev-broken-json-'))
+	try {
+		await writeFile(
+			join(root, 'package.json'),
+			JSON.stringify({
+				name: '@local/broken-dev-json-package',
+				type: 'module',
+				kody: { id: 'broken-dev-json-package', app: { entry: './app/entry.ts' } },
+			}),
+		)
+		await mkdir(join(root, 'app'))
+		await writeFile(
+			join(root, 'app/entry.ts'),
+			'export default { fetch() { return new Response("x" }\n',
+		)
+		let stdout = ''
+		await assert.rejects(
+			runDevFetch({
+				target: 'mock',
+				auth: {
+					token: 'mock',
+					apiUrl: 'http://127.0.0.1:9',
+					closeMock: async () => {},
+				},
+				path: '/',
+				cwd: root,
+				json: true,
+				io: {
+					stdout: (text) => {
+						stdout += text
+					},
+					stderr: () => {},
+				},
+			}),
+			/app\/entry\.ts:1:52/,
+		)
+		const event = JSON.parse(stdout) as { type: string; message: string; ts: string }
+		assert.equal(event.type, 'build_error')
+		assert.match(event.message, /app\/entry\.ts:1:52/)
+		assert.ok(typeof event.ts === 'string' && event.ts.length > 0)
+	} finally {
+		await rm(root, { recursive: true, force: true })
+	}
+})
+
 test('execute --target mock runs local code against the mock', async () => {
 	const cache = await mkdtemp(join(tmpdir(), 'kody-exec-mock-'))
 	const previous = process.env.KODY_CACHE_DIR
