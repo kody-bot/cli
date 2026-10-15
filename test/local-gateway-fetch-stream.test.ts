@@ -116,6 +116,78 @@ test('local runtime bridge streams gateway-fetch to the mock MSW gateway', async
 	}
 })
 
+test('bridge gateway-fetch failures return Open API error envelopes (no-store)', async () => {
+	const bridge = await startLocalRuntimeBridge({
+		runSecret: 'secret',
+		forwardCall: async () => null,
+		forwardGatewayFetchStream: async () => {
+			throw new Error('upstream blew up')
+		},
+	})
+	try {
+		const response = await fetch(
+			`http://127.0.0.1:${bridge.port}${localBridgeGatewayFetchPath}`,
+			{
+				method: 'POST',
+				headers: {
+					[runSecretHeader]: 'secret',
+					[gatewayFetchUrlHeaderName]: 'https://api.example.com/upload',
+				},
+				body: 'x',
+				duplex: 'half',
+			} as RequestInit,
+		)
+		assert.equal(response.status, 502)
+		assert.match(response.headers.get('cache-control') ?? '', /no-store/)
+		assert.deepEqual(await response.json(), {
+			error: { code: 'gateway_fetch_failed', message: 'upstream blew up' },
+		})
+	} finally {
+		await bridge.close()
+	}
+})
+
+test('mock gateway-fetch null-body statuses do not throw', async () => {
+	const gateway = createMockFetchGateway({
+		handlers: [],
+		passthroughAll: true,
+		fetchFn: (async () =>
+			new Response(null, { status: 204, statusText: 'No Content' })) as typeof fetch,
+	})
+	const bridge = await startLocalRuntimeBridge({
+		runSecret: 'secret',
+		forwardCall: async () => null,
+		forwardGatewayFetchStream: async ({ request, response, signal }) => {
+			await forwardLocalGatewayFetchStream({
+				request,
+				response,
+				signal,
+				client: { apiUrl: 'http://127.0.0.1:9', token: 'kody_at_unused' },
+				mockFetchGateway: gateway,
+			})
+		},
+	})
+	try {
+		const response = await fetch(
+			`http://127.0.0.1:${bridge.port}${localBridgeGatewayFetchPath}`,
+			{
+				method: 'POST',
+				headers: {
+					[runSecretHeader]: 'secret',
+					[gatewayFetchUrlHeaderName]: 'https://api.example.com/empty',
+					[gatewayFetchMethodHeaderName]: 'POST',
+				},
+				body: '',
+				duplex: 'half',
+			} as RequestInit,
+		)
+		assert.equal(response.status, 204)
+		assert.equal(await response.text(), '')
+	} finally {
+		await bridge.close()
+	}
+})
+
 test('writeWebResponse pipes status, headers, and body', async () => {
 	const server = createServer(async (_request, response) => {
 		await writeWebResponse(

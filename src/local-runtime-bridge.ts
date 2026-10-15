@@ -51,9 +51,24 @@ export async function startLocalRuntimeBridge(
 ): Promise<LocalRuntimeBridge> {
 	const inFlight = new AbortController()
 	const server: Server = createServer(async (request, response) => {
-		const replyJson = (status: number, body: unknown) => {
-			response.writeHead(status, { 'content-type': 'application/json' })
+		const replyJson = (
+			status: number,
+			body: unknown,
+			headers: Record<string, string> = {},
+		) => {
+			response.writeHead(status, {
+				'content-type': 'application/json',
+				...headers,
+			})
 			response.end(JSON.stringify(body))
+		}
+		/** Open API-shaped error so workerd `gatewayFetchStream` throws (needs no-store). */
+		const replyGatewayFetchError = (status: number, message: string, code: string) => {
+			replyJson(
+				status,
+				{ error: { code, message } },
+				{ 'Cache-Control': 'no-store' },
+			)
 		}
 		if (request.headers[runSecretHeader] !== input.runSecret) {
 			replyJson(403, { error: 'Forbidden' })
@@ -85,9 +100,11 @@ export async function startLocalRuntimeBridge(
 					)
 					return
 				}
-				replyJson(200, {
-					error: redact(error instanceof Error ? error.message : String(error)),
-				})
+				replyGatewayFetchError(
+					502,
+					redact(error instanceof Error ? error.message : String(error)),
+					'gateway_fetch_failed',
+				)
 			}
 			return
 		}

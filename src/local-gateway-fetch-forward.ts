@@ -127,10 +127,16 @@ export async function forwardLocalGatewayFetchStream(input: {
 			},
 			input.signal,
 		)
+		const nullBody =
+			result.status === 101 ||
+			result.status === 103 ||
+			result.status === 204 ||
+			result.status === 205 ||
+			result.status === 304
 		const bytes = Buffer.from(result.bodyBase64 ?? '', 'base64')
 		await writeWebResponse(
 			input.response,
-			new Response(bytes, {
+			new Response(nullBody ? null : bytes, {
 				status: result.status,
 				statusText: result.statusText,
 				headers: result.headers,
