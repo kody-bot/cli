@@ -188,16 +188,35 @@ function parseApp(raw: unknown, where: string): PackageAppManifest | undefined {
 			fix: 'Set `"kody": { "app": { "entry": "./app/router.ts" } }` in package.json.',
 		})
 	}
-	const clientRecord = asRecord(record.client)
-	const client =
-		typeof record.client === 'string'
-			? record.client
-			: typeof clientRecord?.entry === 'string'
-				? clientRecord.entry
+	let client: string | undefined
+	let clientExternals: Array<string> | undefined
+	if (record.client !== undefined && record.client !== null) {
+		if (typeof record.client === 'string') {
+			if (!record.client.trim()) {
+				throw new StructuredCliError({
+					code: 'package_manifest_invalid',
+					message: 'kody.app.client must be a non-empty string path or { entry, externals? }.',
+					where,
+					fix: 'Set `"client": "./app/client.ts"` or `"client": { "entry": "./app/client.ts" }`.',
+				})
+			}
+			client = record.client
+		} else {
+			const clientRecord = asRecord(record.client)
+			if (!clientRecord || typeof clientRecord.entry !== 'string' || !clientRecord.entry.trim()) {
+				throw new StructuredCliError({
+					code: 'package_manifest_invalid',
+					message: 'kody.app.client.entry must be a non-empty string path.',
+					where,
+					fix: 'Set `"client": { "entry": "./app/client.ts", "externals": ["preact"] }`.',
+				})
+			}
+			client = clientRecord.entry
+			clientExternals = Array.isArray(clientRecord.externals)
+				? clientRecord.externals.filter((item): item is string => typeof item === 'string')
 				: undefined
-	const clientExternals = Array.isArray(clientRecord?.externals)
-		? clientRecord.externals.filter((item): item is string => typeof item === 'string')
-		: undefined
+		}
+	}
 	return {
 		entry: record.entry,
 		client,

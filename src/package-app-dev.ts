@@ -333,6 +333,7 @@ export async function startPackageAppDev(
 	const prebuild = options.manifest.dev?.prebuild
 	let prebuildRunning = false
 	let prebuildSettledAt = 0
+	let prebuildAbort: AbortController | undefined
 	const workerdEnv: NodeJS.ProcessEnv = { ...process.env, [runSecretEnvVar]: runSecret }
 	delete workerdEnv[apiTokenEnvVar]
 
@@ -432,10 +433,12 @@ export async function startPackageAppDev(
 
 	async function runPrebuildStep(command: string): Promise<void> {
 		prebuildRunning = true
+		prebuildAbort = new AbortController()
 		try {
 			await runPrebuild({
 				command,
 				cwd: root,
+				signal: prebuildAbort.signal,
 				onSpawn: (pid) => reaper.track(pid),
 				onExit: (pid) => reaper.untrack(pid),
 				onLine: (line, stream) =>
@@ -448,6 +451,7 @@ export async function startPackageAppDev(
 					}),
 			})
 		} finally {
+			prebuildAbort = undefined
 			prebuildRunning = false
 			prebuildSettledAt = performance.now()
 		}
@@ -868,6 +872,7 @@ export async function startPackageAppDev(
 		resolveDebounceFlush = null
 		debounceFlush = null
 		resolve?.()
+		prebuildAbort?.abort()
 		await watcher?.close()
 		await buildLoop?.catch(() => {})
 		await bundler.dispose()

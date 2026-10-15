@@ -18,6 +18,7 @@ import {
 	parseDevPort,
 } from '../src/dev/dev-port.js'
 import { writeDevRegistration } from '../src/dev/dev-registry.js'
+import { PrebuildError, runPrebuild } from '../src/dev/prebuild.js'
 import { loadPackageManifest } from '../src/package-manifest.js'
 import { StructuredCliError } from '../src/structured-error.js'
 import { waitFor, withDevServer } from './dev-server-harness.js'
@@ -145,6 +146,15 @@ test('loadPackageManifest reads kody.dev and the object form of kody.app.client'
 			JSON.stringify({ name: 'm', kody: { id: 'm', dev: { ignore: 'public' } } }),
 		)
 		await assert.rejects(loadPackageManifest(root), /kody\.dev\.ignore must be an array/)
+
+		await writeFile(
+			join(root, 'package.json'),
+			JSON.stringify({
+				name: 'm',
+				kody: { id: 'm', app: { entry: './app/entry.ts', client: { file: './app/client.ts' } } },
+			}),
+		)
+		await assert.rejects(loadPackageManifest(root), /kody\.app\.client\.entry must be a non-empty string/)
 	} finally {
 		await rm(root, { recursive: true, force: true })
 	}
@@ -284,6 +294,29 @@ test('kody.dev.prebuild runs before every build, without retriggering itself', a
 			},
 		},
 	)
+})
+
+test('runPrebuild keeps a final incomplete stderr line and aborts on signal', async () => {
+	const root = await mkdtemp(join(tmpdir(), 'kody-prebuild-unit-'))
+	try {
+		await writeFile(join(root, 'partial.sh'), 'printf "no-newline-error" >&2\nexit 2\n')
+		await assert.rejects(
+			runPrebuild({ command: 'sh partial.sh', cwd: root }),
+			(error: unknown) => {
+				assert.ok(error instanceof PrebuildError)
+				assert.match(error.message, /no-newline-error/)
+				return true
+			},
+		)
+
+		await writeFile(join(root, 'slow.sh'), 'sleep 30\n')
+		const abort = new AbortController()
+		const pending = runPrebuild({ command: 'sh slow.sh', cwd: root, signal: abort.signal })
+		abort.abort()
+		await assert.rejects(pending, /kody\.dev\.prebuild aborted/)
+	} finally {
+		await rm(root, { recursive: true, force: true })
+	}
 })
 
 test('kody dev refuses to start a second server for the same package unless --port is passed', async () => {
