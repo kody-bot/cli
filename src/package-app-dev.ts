@@ -836,22 +836,16 @@ export async function startPackageAppDev(
 						ignore: options.manifest.dev?.ignore,
 						onChange: (path) => {
 							if (closed) return
-<<<<<<< HEAD
-							// Fold mid-build watcher events into the active loop
-							// (including another save of a file already building).
-							// Debouncing them instead schedules a second rebuild
-							// after buildLoop clears (often a no-op echo).
-=======
 							if (
 								prebuildRunning ||
 								performance.now() - prebuildSettledAt < prebuildSettleMs
 							) {
 								return
 							}
-							// Fold mid-build chokidar echoes into the active
-							// loop. Debouncing them instead schedules a second
-							// rebuild after buildLoop clears (often a no-op).
->>>>>>> a65008c (feat(dev): stable per-package ports, client bundle + /_assets, kody.dev.prebuild, faster rebuilds)
+							// Fold mid-build watcher events into the active loop
+							// (including another save of a file already building).
+							// Debouncing them instead schedules a second rebuild
+							// after buildLoop clears (often a no-op echo).
 							if (buildLoop) {
 								changedFiles.add(path)
 								rebuildAgain = true
