@@ -9,7 +9,9 @@ import {
 	localExecuteGatewayFetchShimModuleName,
 	localPackageGraphPath,
 	localPackageGraphPlatformIssueUrl,
+	packageGraphInlineCodePreferImportsChars,
 	resolveLocalPackageGraph,
+	synthesizePackageGraphEntry,
 } from '../src/local-package-graph.js'
 
 const goodToken = 'kody_tok_pkg'
@@ -180,6 +182,52 @@ export default async function main(params) { return greet(params.name) }`
 			},
 		],
 	})
+})
+
+test('synthesizePackageGraphEntry builds a tiny scannable stub', () => {
+	assert.equal(synthesizePackageGraphEntry([]), 'export default async function main() {}\n')
+	assert.equal(
+		synthesizePackageGraphEntry(['kody:@b/pkg/x', 'kody:@a/pkg/x', 'kody:@b/pkg/x']),
+		`import "kody:@a/pkg/x"\nimport "kody:@b/pkg/x"\nexport default async function main() {}\n`,
+	)
+})
+
+test('fetchLocalPackageGraph posts a synthetic entry for multi-megabyte bundles', async () => {
+	const importLine = `import { greet } from 'kody:@test/pkg/hello'\n`
+	const padding = 'x'.repeat(packageGraphInlineCodePreferImportsChars)
+	const code = `${importLine}//${padding}\nexport default async function main(params) { return greet(params.name) }`
+	assert.ok(code.length > packageGraphInlineCodePreferImportsChars)
+	const requests: Array<{ body: unknown }> = []
+	const result = await fetchLocalPackageGraph({
+		apiUrl: 'https://api.kody.codes',
+		token: goodToken,
+		code,
+		fetchFn: async (_input, init) => {
+			requests.push({ body: init?.body ? JSON.parse(String(init.body)) : null })
+			return new Response(
+				JSON.stringify({
+					imports: ['kody:@test/pkg/hello'],
+					modules: [
+						{
+							name: 'kody:@test/pkg/hello',
+							esModule: 'export function greet(name) { return "hi " + name }\n',
+						},
+					],
+				}),
+				{ status: 200, headers: { 'content-type': 'application/json' } },
+			)
+		},
+	})
+	assert.equal(requests.length, 1)
+	assert.deepEqual(requests[0]!.body, {
+		code: synthesizePackageGraphEntry(['kody:@test/pkg/hello']),
+		imports: ['kody:@test/pkg/hello'],
+	})
+	assert.ok(
+		typeof (requests[0]!.body as { code: string }).code === 'string' &&
+			(requests[0]!.body as { code: string }).code.length < 500,
+	)
+	assert.equal(result.modules[0]?.name, 'kody:@test/pkg/hello')
 })
 
 test('fetchLocalPackageGraph fails clearly when the platform endpoint is missing', async () => {
