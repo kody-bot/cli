@@ -34,6 +34,11 @@ import {
 	type DevClientBundle,
 	type DevClientBundler,
 } from './dev/dev-assets.js'
+import { forwardLocalGatewayFetchStream } from './local-gateway-fetch-forward.js'
+import {
+	startLocalRuntimeBridge,
+	type LocalRuntimeBridge,
+} from './local-runtime-bridge.js'
 import { createDevBundler, type DevBundle } from './dev/dev-bundler.js'
 import { parseWorkerdStdoutLine, type DevEvent, type DevRequestTag } from './dev/dev-events.js'
 import { devErrorHeader, devRequestIdHeader } from './dev/dev-protocol.js'
@@ -170,8 +175,6 @@ export type PackageAppDevServer = {
 	status: () => DevServerStatus
 	close: () => Promise<void>
 }
-
-type Bridge = { port: number; close: () => Promise<void> }
 
 type Generation = {
 	id: number
@@ -329,9 +332,9 @@ export async function startPackageAppDev(
 		onStatus: options.onStatus,
 	})
 
-	const bridge: Bridge = await startBridge({
+	const bridge: LocalRuntimeBridge = await startLocalRuntimeBridge({
 		runSecret,
-		forward: async (call, signal) => {
+		forwardCall: async (call, signal) => {
 			const mocked = tryHandleMockGatewayFetchCall({
 				gateway: mockFetchGateway,
 				path: call.path,
@@ -343,6 +346,15 @@ export async function startPackageAppDev(
 				...client,
 				...call,
 				signal,
+			})
+		},
+		forwardGatewayFetchStream: async ({ request, response, signal }) => {
+			await forwardLocalGatewayFetchStream({
+				request,
+				response,
+				signal,
+				client,
+				...(mockFetchGateway ? { mockFetchGateway } : {}),
 			})
 		},
 	})
@@ -1109,72 +1121,4 @@ function joinUrlPath(base: string, path: string): string {
 	const rest = path.startsWith('/') ? path : `/${path}`
 	if (!base) return rest
 	return `${base}${rest === '/' ? '' : rest}` || base
-}
-
-async function startBridge(input: {
-	runSecret: string
-	forward: (
-		call: { path: Array<string>; args: Array<unknown> },
-		signal: AbortSignal,
-	) => Promise<unknown>
-}): Promise<Bridge> {
-	const inFlight = new AbortController()
-	const server: Server = createServer(async (request, response) => {
-		const reply = (status: number, body: unknown) => {
-			response.writeHead(status, { 'content-type': 'application/json' })
-			response.end(JSON.stringify(body))
-		}
-		if (
-			request.method !== 'POST' ||
-			request.url !== '/call' ||
-			request.headers[runSecretHeader] !== input.runSecret
-		) {
-			reply(403, { error: 'Forbidden' })
-			return
-		}
-		try {
-			const parsed = JSON.parse(await readBody(request)) as {
-				path?: unknown
-				args?: unknown
-			}
-			if (
-				!Array.isArray(parsed.path) ||
-				parsed.path.length === 0 ||
-				!parsed.path.every((segment) => typeof segment === 'string')
-			) {
-				throw new Error('Invalid kody:runtime call path.')
-			}
-			const result = await input.forward(
-				{
-					path: parsed.path as Array<string>,
-					args: Array.isArray(parsed.args) ? parsed.args : [],
-				},
-				inFlight.signal,
-			)
-			reply(200, { result })
-		} catch (error) {
-			reply(200, { error: redact(error instanceof Error ? error.message : String(error)) })
-		}
-	})
-	await new Promise<void>((resolve, reject) => {
-		server.once('error', reject)
-		server.listen(0, '127.0.0.1', () => resolve())
-	})
-	return {
-		port: (server.address() as AddressInfo).port,
-		close: () =>
-			new Promise<void>((resolve) => {
-				inFlight.abort()
-				server.closeAllConnections()
-				server.close(() => resolve())
-			}),
-	}
-}
-
-async function readBody(stream: IncomingMessage): Promise<string> {
-	const chunks: Array<Buffer> = []
-	for await (const chunk of stream) {
-		chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-	}
-	return Buffer.concat(chunks).toString('utf8')
 }

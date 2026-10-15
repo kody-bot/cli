@@ -519,9 +519,34 @@ function readErrorBody(body: unknown): { code: string | null; message: string } 
 		const code = typeof error.code === 'string' ? error.code : null
 		const message =
 			typeof error.message === 'string' ? error.message : (code ?? JSON.stringify(error))
-		return { code, message }
+		return { code, message: preferActionableInvalidParametersMessage(error, message) }
 	}
 	return { code: null, message: String(error) }
+}
+
+/**
+ * Older origins buried oversized-`code` details under Zod `issues` and left
+ * `error.message` as "Invalid parameters." — which `kody dev` showed as a bare
+ * "Build failed: Invalid parameters." Prefer the size/limit issue text (or any
+ * issue message) so CLI output names the actual size and the maximum.
+ */
+function preferActionableInvalidParametersMessage(
+	error: Record<string, unknown>,
+	message: string,
+): string {
+	if (message !== 'Invalid parameters.') return message
+	const details = error.details
+	const issues = isRecord(details) && Array.isArray(details.issues) ? details.issues : null
+	if (issues === null || issues.length === 0) return message
+	const issueMessages = issues
+		.filter(isRecord)
+		.map((issue) => (typeof issue.message === 'string' ? issue.message.trim() : ''))
+		.filter((text) => text.length > 0)
+	if (issueMessages.length === 0) return message
+	const sizeIssue = issueMessages.find((text) =>
+		/UTF-8 bytes|the maximum is|too large|maxLength|maximum/i.test(text),
+	)
+	return sizeIssue ?? issueMessages.join('; ')
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

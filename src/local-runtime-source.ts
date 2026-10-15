@@ -49,21 +49,139 @@ export function createRuntimeFlatAliasSource(): string {
 	return `export * from ${runtime};\nexport { default } from ${runtime};\n`
 }
 
-export function createLocalRuntimeModuleSource(): string {
+/** Workerd-side `kody.gatewayFetchStream` + bridge install helpers (shared shape). */
+export function localGatewayFetchStreamRuntimeSource(options: {
+	/** Error when the JSON/call bridge is missing. */
+	callUnavailableMessage: string
+}): string {
 	return `
-import { AsyncLocalStorage } from 'node:async_hooks';
-
 let __kodyBridge = null;
 
 export function __kodyInstallLocalBridge(bridge) {
-	__kodyBridge = bridge;
+	// Object form: { call, gatewayFetch }. Legacy function form still works for /call.
+	__kodyBridge =
+		typeof bridge === 'function' ? { call: bridge, gatewayFetch: null } : bridge;
 }
 
 function __kodyCall(path, args) {
-	if (__kodyBridge === null) {
-		throw new Error('kody:runtime is only available while an execute --local run is in progress.');
+	if (__kodyBridge === null || typeof __kodyBridge.call !== 'function') {
+		throw new Error(${JSON.stringify(options.callUnavailableMessage)});
 	}
-	return __kodyBridge(path, args);
+	return __kodyBridge.call(path, args);
+}
+
+const __kodyGatewayNullBodyStatuses = new Set([101, 103, 204, 205, 304]);
+const __kodySecretResolutionHeader = 'x-kody-secret-resolution';
+
+/**
+ * Streaming CapabilityProxy hop (POST /v1/capability-proxy/gateway-fetch via the
+ * loopback bridge). Returns a real Response — not the JSON gatewayFetch envelope.
+ * See kentcdodds/kody docs/contributing/contracts/cli-streaming-gateway-fetch.md.
+ */
+async function gatewayFetchStream(input) {
+	if (__kodyBridge === null || typeof __kodyBridge.gatewayFetch !== 'function') {
+		throw new Error(
+			'Local execute needs kody.gatewayFetchStream on the host runtime to stream a secret-aware fetch body (multipart, large, or ReadableStream). Upgrade @kodycodes/cli, or buffer the body under 4 MiB for the JSON gatewayFetch hop.',
+		);
+	}
+	const record = input != null && typeof input === 'object' && !Array.isArray(input) ? input : null;
+	if (!record) {
+		throw new Error('gatewayFetchStream requires a single object argument: { request, packageId? }.');
+	}
+	const requestValue = record.request;
+	if (requestValue == null || typeof requestValue !== 'object' || Array.isArray(requestValue)) {
+		throw new Error('gatewayFetchStream requires request: { url, method?, headers?, body? }.');
+	}
+	const url = typeof requestValue.url === 'string' ? requestValue.url.trim() : '';
+	if (!url) {
+		throw new Error('gatewayFetchStream request.url must be a non-empty absolute URL.');
+	}
+	const method =
+		typeof requestValue.method === 'string' && requestValue.method.trim()
+			? requestValue.method.trim()
+			: 'GET';
+	const packageId =
+		typeof record.packageId === 'string' && record.packageId.trim()
+			? record.packageId.trim()
+			: undefined;
+	const rawHeaders =
+		requestValue.headers != null &&
+		typeof requestValue.headers === 'object' &&
+		!Array.isArray(requestValue.headers)
+			? { ...requestValue.headers }
+			: {};
+	const outboundHeaders = {};
+	let contentType = null;
+	let secretResolution = null;
+	for (const [key, value] of Object.entries(rawHeaders)) {
+		if (typeof value !== 'string') continue;
+		const lower = key.toLowerCase();
+		if (lower === 'content-type') {
+			contentType = value;
+			continue;
+		}
+		if (lower === __kodySecretResolutionHeader) {
+			secretResolution = value;
+			continue;
+		}
+		outboundHeaders[key] = value;
+	}
+	const headers = {
+		'X-Kody-Gateway-Url': url,
+		'X-Kody-Gateway-Method': method,
+	};
+	if (packageId) headers['X-Kody-Gateway-Package-Id'] = packageId;
+	if (Object.keys(outboundHeaders).length > 0) {
+		headers['X-Kody-Gateway-Headers'] = JSON.stringify(outboundHeaders);
+	}
+	if (contentType) headers['Content-Type'] = contentType;
+	if (secretResolution) headers[__kodySecretResolutionHeader] = secretResolution;
+	const body = Object.hasOwn(requestValue, 'body') ? requestValue.body : null;
+	const init = {
+		method: 'POST',
+		headers,
+	};
+	const upper = method.toUpperCase();
+	if (body != null && upper !== 'GET' && upper !== 'HEAD') {
+		init.body = body;
+		init.duplex = 'half';
+	}
+	if (requestValue.signal != null) init.signal = requestValue.signal;
+	if (requestValue.redirect != null) init.redirect = requestValue.redirect;
+	const response = await __kodyBridge.gatewayFetch(init);
+	const cacheControl = response.headers.get('cache-control') ?? '';
+	const contentTypeHeader = response.headers.get('content-type') ?? '';
+	if (response.status === 413 && !contentTypeHeader.includes('application/json')) {
+		throw new Error(
+			'Request body exceeds the Worker upload limit of 104857600 bytes (100 MiB).',
+		);
+	}
+	if (cacheControl.includes('no-store') && contentTypeHeader.includes('application/json')) {
+		const text = await response.clone().text();
+		try {
+			const parsed = JSON.parse(text);
+			if (parsed != null && typeof parsed === 'object' && parsed.error != null) {
+				const err = parsed.error;
+				const message =
+					typeof err === 'string'
+						? err
+						: typeof err?.message === 'string'
+							? err.message
+							: 'gatewayFetchStream failed.';
+				throw new Error(message);
+			}
+		} catch (error) {
+			if (!(error instanceof SyntaxError)) throw error;
+		}
+	}
+	if (__kodyGatewayNullBodyStatuses.has(response.status)) {
+		return new Response(null, {
+			status: response.status,
+			statusText: response.statusText,
+			headers: response.headers,
+		});
+	}
+	return response;
 }
 
 function __kodyNamespace(path) {
@@ -74,6 +192,13 @@ function __kodyNamespace(path) {
 				return undefined;
 			}
 			if (property === 'toString' || property === 'inspect') return () => label;
+			if (
+				path.length === 1 &&
+				path[0] === 'kody' &&
+				property === 'gatewayFetchStream'
+			) {
+				return gatewayFetchStream;
+			}
 			return __kodyNamespace([...path, property]);
 		},
 		apply(_target, _thisArg, args) {
@@ -81,6 +206,17 @@ function __kodyNamespace(path) {
 		},
 	});
 }
+`.trimStart()
+}
+
+export function createLocalRuntimeModuleSource(): string {
+	return `
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+${localGatewayFetchStreamRuntimeSource({
+	callUnavailableMessage:
+		'kody:runtime is only available while an execute --local run is in progress.',
+})}
 
 export const kody = __kodyNamespace(['kody']);
 
@@ -313,15 +449,26 @@ export default {
 		}
 		__kodyClaimed = true;
 		const { params } = await request.json();
-		__kodyInstallLocalBridge(async (path, args) => {
-			const response = await env.KODY_BRIDGE.fetch('http://kody-bridge/call', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json', [__kodyRunSecretHeader]: secret },
-				body: JSON.stringify({ path, args }),
-			});
-			const data = await response.json();
-			if (data.error) throw new Error(data.error);
-			return data.result;
+		__kodyInstallLocalBridge({
+			call: async (path, args) => {
+				const response = await env.KODY_BRIDGE.fetch('http://kody-bridge/call', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json', [__kodyRunSecretHeader]: secret },
+					body: JSON.stringify({ path, args }),
+				});
+				const data = await response.json();
+				if (data.error) throw new Error(data.error);
+				return data.result;
+			},
+			gatewayFetch: async (init) => {
+				const headers = new Headers(init?.headers);
+				headers.set(__kodyRunSecretHeader, secret);
+				return await env.KODY_BRIDGE.fetch('http://kody-bridge/gateway-fetch', {
+					...init,
+					method: 'POST',
+					headers,
+				});
+			},
 		});
 		const logs = [];
 		const nativeConsole = globalThis.console;
