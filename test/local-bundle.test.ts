@@ -65,6 +65,25 @@ export default async () => path.join('a', await readFile('x', 'utf8'))
 	assert.match(source, /from\s+["']node:path["']/)
 })
 
+test('bundleLocalUserModule keeps bare Node builtins external, like hosted publish', async () => {
+	const dir = writeFixture({
+		'entry.mjs': `import { Readable } from 'stream'
+import { readFile } from 'fs/promises'
+import { cjs } from 'cjs-dep'
+export default async () => [Readable.name, await readFile('x', 'utf8'), cjs]
+`,
+		'node_modules/cjs-dep/package.json': `{"name":"cjs-dep","main":"index.js"}
+`,
+		'node_modules/cjs-dep/index.js': `const util = require('util')
+exports.cjs = typeof util.inspect
+`,
+	})
+	const source = await bundleLocalUserModule(join(dir, 'entry.mjs'))
+	assert.match(source, /from\s+["']stream["']/)
+	assert.match(source, /from\s+["']fs\/promises["']/)
+	assert.match(source, /require\(["']util["']\)/)
+})
+
 test('bundleLocalUserModule bundles bare npm imports from node_modules', async () => {
 	const dir = writeFixture({
 		'entry.mjs': `import { label } from 'tiny-dep'

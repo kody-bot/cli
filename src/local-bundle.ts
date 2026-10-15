@@ -23,9 +23,70 @@ export class BundleError extends Error {
 }
 
 /**
+ * Node builtins workerd resolves under `nodejs_compat` without the `node:`
+ * prefix. Must match the hosted publish list
+ * (`nodeBuiltinPackageNames` in the worker's bare-package-import-declarations),
+ * so a dependency that does `require('stream')` bundles locally exactly when it
+ * publishes.
+ */
+export const nodeBuiltinModuleNames = [
+	'_http_agent',
+	'_http_client',
+	'_http_common',
+	'_http_incoming',
+	'_http_outgoing',
+	'_http_server',
+	'_tls_common',
+	'_tls_wrap',
+	'assert',
+	'async_hooks',
+	'buffer',
+	'child_process',
+	'cluster',
+	'console',
+	'constants',
+	'crypto',
+	'dgram',
+	'diagnostics_channel',
+	'dns',
+	'domain',
+	'events',
+	'fs',
+	'http',
+	'http2',
+	'https',
+	'inspector',
+	'module',
+	'net',
+	'os',
+	'path',
+	'perf_hooks',
+	'process',
+	'punycode',
+	'querystring',
+	'readline',
+	'repl',
+	'stream',
+	'string_decoder',
+	'sys',
+	'timers',
+	'tls',
+	'trace_events',
+	'tty',
+	'url',
+	'util',
+	'v8',
+	'vm',
+	'wasi',
+	'worker_threads',
+	'zlib',
+] as const
+
+/**
  * esbuild options shared by one-shot bundles and `kody dev` rebuilds: follow
  * relative imports and npm packages, keep `kody:*` external for package-graph
- * + runtime binding, and leave `node:*` external for workerd `nodejs_compat`.
+ * + runtime binding, and leave Node builtins (`node:*` and bare `stream`,
+ * `fs/promises`, …) external for workerd `nodejs_compat`.
  */
 export function localBundleOptions(entry: string) {
 	return {
@@ -38,7 +99,11 @@ export function localBundleOptions(entry: string) {
 		target: 'esnext',
 		logLevel: 'silent',
 		packages: 'bundle',
-		external: ['kody:*', 'node:*'],
+		external: [
+			'kody:*',
+			'node:*',
+			...nodeBuiltinModuleNames.flatMap((name) => [name, `${name}/*`]),
+		],
 	} satisfies esbuild.BuildOptions
 }
 
