@@ -1,5 +1,10 @@
 # @kodycodes/cli
 
+> **Archived.** `@kodycodes/cli` 1.27.0 and later are published from
+> [kentcdodds/kody](https://github.com/kentcdodds/kody) (`packages/cli`).
+> Versions through 1.26.3 published from this repository keep working and
+> still talk to Kody over MCP. New CLI work belongs in the monorepo.
+
 Install [Kody](https://kody.codes) as a remote MCP server in local agents.
 Talks MCP `2026-07-28` (Kody's stateless `/mcp` lane) and logs in with Client
 ID Metadata Documents (SEP-991).
